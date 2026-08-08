@@ -351,7 +351,17 @@ class TestPFRBridgeLoad:
             producer_time=2.0,
         )
 
-        assert pfr_bridge.load_pfr_records(db, private_root=tmp_path) == []
+        status_counts: dict[str, int] = {}
+        assert pfr_bridge.load_pfr_records(
+            db,
+            private_root=tmp_path,
+            status_counts=status_counts,
+        ) == []
+        assert status_counts == {
+            "pfr_generation:ready_empty": 1,
+            "pfr_generation_active_candidates": 0,
+            "pfr_generation_authorized_candidates": 0,
+        }
         with pytest.raises(TypeError, match="private_root"):
             pfr_bridge.load_pfr_records(db)
 
@@ -431,13 +441,21 @@ class TestPFRBridgeLoad:
             producer_time=2.0,
         )
 
-        records = pfr_bridge.load_pfr_records(db, private_root=tmp_path)
+        status_counts: dict[str, int] = {}
+        records = pfr_bridge.load_pfr_records(
+            db,
+            private_root=tmp_path,
+            status_counts=status_counts,
+        )
 
         assert len(records) == 1
         assert records[0]["candidate_id"] == validation_id
         assert records[0]["source_candidate_id"] == "C1"
         assert records[0]["setup_id"] == f"setup-{validation_id}"
         assert records[0]["validation_generation_id"].startswith("hvg_")
+        assert status_counts["pfr_generation:ready"] == 1
+        assert status_counts["pfr_generation_active_candidates"] == 1
+        assert status_counts["pfr_generation_authorized_candidates"] == 1
         assert records[0]["search_family_id"] == "sfd_current"
         assert records[0]["search_trial_id"] == "stept_current"
         assert records[0]["effective_n_trials"] == 7

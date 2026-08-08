@@ -25,10 +25,8 @@ from src.research_lab.paper_signals.lane import (
     fingerprint,
 )
 from src.research_lab.validation_generation import (
-    current_candidate_ids,
-    load_current_generation,
-    read_current_setup_card_for_candidate,
-    read_current_validation_artifact,
+    CurrentGenerationSnapshot,
+    load_current_generation_snapshot,
 )
 from src.research_lab.strategies._helpers import window_high, window_low
 from src.research_lab.strategies.detectors import (
@@ -95,27 +93,24 @@ def _ready_strategy_id(row: dict[str, Any]) -> str:
 
 def _current_pfr_authorizations(
     private_root: Path,
-) -> dict[tuple[str, str], dict[str, Any]] | None:
+    *,
+    generation: CurrentGenerationSnapshot | None = None,
+) -> tuple[dict[tuple[str, str], dict[str, Any]] | None, CurrentGenerationSnapshot]:
     """Map source DB identity to a fully verified current validation chain.
 
     ``None`` means the explicit pre-manifest legacy state.  Any present but
     pending, malformed, code-stale, or empty generation yields an empty map.
     """
-    manifest = load_current_generation(private_root)
-    if manifest is None:
-        return None
-    candidate_ids = current_candidate_ids(private_root)
-    if not candidate_ids:
-        return {}
+    generation = generation or load_current_generation_snapshot(private_root)
+    if generation.status == "legacy_absent":
+        return None, generation
+    if not generation.usable or not generation.payloads:
+        return {}, generation
     authorized: dict[tuple[str, str], dict[str, Any]] = {}
     ambiguous: set[tuple[str, str]] = set()
-    for validation_id in sorted(candidate_ids):
-        request = read_current_validation_artifact(
-            private_root, validation_id, "request"
-        )
-        card = read_current_setup_card_for_candidate(private_root, validation_id)
-        if request is None or card is None:
-            continue
+    for validation_id, payloads in sorted(generation.payloads.items()):
+        request = payloads["request"][1]
+        card = payloads["setup_card"][1]
         metrics = (
             raw_metrics
             if isinstance(raw_metrics := request.get("metrics"), dict)
@@ -146,16 +141,17 @@ def _current_pfr_authorizations(
             continue
         authorized[key] = {
             "validation_id": validation_id,
-            "generation_id": str(manifest.get("generation_id") or ""),
+            "generation_id": generation.generation_id,
             "card": card,
         }
-    return authorized
+    return authorized, generation
 
 
 def load_pfr_records(
     db_path: Path | str,
     *,
     private_root: Path,
+    status_counts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Load all PAPER_FORWARD_READY records from strategy_lab.sqlite.
 
@@ -165,7 +161,13 @@ def load_pfr_records(
     db = Path(db_path)
     if not db.exists():
         return []
-    authorizations = _current_pfr_authorizations(Path(private_root))
+    authorizations, generation = _current_pfr_authorizations(Path(private_root))
+    if status_counts is not None:
+        status_counts[f"pfr_generation:{generation.status}"] = 1
+        status_counts["pfr_generation_active_candidates"] = generation.active_candidates
+        status_counts["pfr_generation_authorized_candidates"] = len(
+            authorizations or {}
+        )
     if authorizations == {}:
         return []
     conn = sqlite3.connect(str(db))

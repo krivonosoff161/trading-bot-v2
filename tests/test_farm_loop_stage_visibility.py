@@ -332,6 +332,81 @@ def test_validation_maintenance_binds_real_milestones_to_process_lease(
     ]
 
 
+def test_paper_runtime_binds_completed_chunks_to_process_lease(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import paper_runtime
+
+    stages: list[str] = []
+    supervisor = SimpleNamespace(record_progress=stages.append)
+    ownership_path = tmp_path / "state" / "ownership.sqlite"
+    farm_loop._LOOP_STATUS_PUBLISHERS.clear()
+    farm_loop._PROCESS_LEASE_SUPERVISORS[ownership_path] = supervisor
+
+    def fake_cycle(*_args, **kwargs):
+        kwargs["progress"]("generation_candidate_verified", 1, 1)
+        kwargs["progress"]("signal_history_chunk_completed", 250, 250)
+        return {"counters": {"cards": 1}, "readiness": {}, "results": []}
+
+    monkeypatch.setattr(paper_runtime, "run_paper_cycle", fake_cycle)
+    monkeypatch.setattr(farm_loop.time, "time", lambda: 1_000.0)
+    try:
+        result = farm_loop._run_paper_runtime(
+            Namespace(
+                stop_file="",
+                task_claim_failure_signal=None,
+                max_paper_cards=1,
+            ),
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=1.0,
+        )
+    finally:
+        farm_loop._PROCESS_LEASE_SUPERVISORS.pop(ownership_path, None)
+
+    assert result["counters"]["cards"] == 1
+    assert stages == [
+        "paper_runtime:generation_candidate_verified",
+        "paper_runtime:signal_history_chunk_completed",
+    ]
+
+
+def test_paper_runtime_owner_failure_is_visible_before_next_chunk(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import paper_runtime
+
+    class FailureSignal:
+        checks = 0
+
+        def raise_if_failed(self):
+            self.checks += 1
+            if self.checks >= 3:
+                raise RuntimeError("paper owner lost")
+
+    def fake_cycle(*_args, **kwargs):
+        kwargs["progress"]("generation_candidate_verified", 1, 2)
+        raise AssertionError("owner failure must interrupt the foreground callback")
+
+    monkeypatch.setattr(paper_runtime, "run_paper_cycle", fake_cycle)
+
+    with pytest.raises(RuntimeError, match="paper owner lost"):
+        farm_loop._run_paper_runtime(
+            Namespace(
+                stop_file="",
+                task_claim_failure_signal=FailureSignal(),
+                max_paper_cards=1,
+            ),
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=1.0,
+        )
+
+
 def test_validation_maintenance_propagates_owner_failure_before_work(
     monkeypatch,
     tmp_path: Path,
@@ -590,7 +665,7 @@ class TestPrintWarning:
         monkeypatch.setattr(
             paper_runtime,
             "run_paper_cycle",
-            lambda root, apply, limit: {"counters": {"cards": 1}, "readiness": {}, "results": []},
+            lambda root, apply, limit, **kwargs: {"counters": {"cards": 1}, "readiness": {}, "results": []},
         )
 
         def fake_refresh(args, private_root, *, tasks, apply, loop, cycle_started_at, out, provider=None):
@@ -654,7 +729,7 @@ class TestPrintWarning:
         monkeypatch.setattr(
             paper_runtime,
             "run_paper_cycle",
-            lambda root, apply, limit: {"counters": {"cards": 1}, "readiness": {}, "results": []},
+            lambda root, apply, limit, **kwargs: {"counters": {"cards": 1}, "readiness": {}, "results": []},
         )
 
         def fake_refresh(*args, **kwargs):

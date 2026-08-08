@@ -33,6 +33,12 @@ dependency, not by a route to live trading.
   retry budget terminally classifies repeated no-verdict work. A batch with no
   exportable candidate preserves the prior generation and does not rescan the
   full historical validation corpus.
+- Paper runtime consumers share one content-verified current-generation
+  snapshot per cycle, load only manifest-named active cards, and expose explicit
+  pending/stale/empty/invalid availability states. Signal evaluation retains the
+  prefix no-lookahead contract inside a bounded recent horizon derived from the
+  strategy history requirement and paper hold window; completed chunks advance
+  process-lease liveness and recheck fail-closed cancellation.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies
