@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.paper_evidence_store import PaperEvidenceStore
+from src.research_lab.paper_signals import outcome_evidence
 
 TRUSTED_TRAINING_LIFECYCLE_SCHEMA = "PaperSignalLifecycle.v2"
 
@@ -168,7 +169,9 @@ def select_current_terminal_training_rows(
         signal_id = str(row.get("paper_signal_id") or row.get("signal_id") or "")
         subject_generation_id = str(row.get("paper_subject_generation_id") or "")
         projection = projection_by_signal.get(signal_id)
-        if row.get("paper_only") is not True or row.get("execution_allowed") is not False:
+        if not outcome_evidence.is_market_outcome(row):
+            reason = "operational_incident_not_training_evidence"
+        elif row.get("paper_only") is not True or row.get("execution_allowed") is not False:
             reason = "paper_boundary_mismatch"
         elif (
             str(row.get("lifecycle_schema") or "")

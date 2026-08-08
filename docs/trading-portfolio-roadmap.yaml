@@ -200,10 +200,12 @@ modules:
       - src/research_lab/paper_runtime.py
       - src/research_lab/paper_readiness.py
       - src/research_lab/paper_signals/cycle.py
+      - src/research_lab/paper_signals/outcome_evidence.py
       - tests/test_paper_runtime.py
       - tests/test_pfr_bridge.py
-    missing_evidence: a completed acceptance window demonstrating stable data continuity
-    next_gate: complete paper observation and audit outcome continuity without execution
+      - tests/test_paper_data_outcome_censor.py
+    missing_evidence: a completed acceptance window demonstrating real outage recovery and zero technical outcome leakage into learning inputs
+    next_gate: prove the provider-error/data-gap/genuine-no-market-data taxonomy and incident recovery during the paper-only canary without execution
     authority: paper_only
     public_private_boundary: lifecycle code is public; observations, outcomes, and accounting are private
   - module_id: research_control_center

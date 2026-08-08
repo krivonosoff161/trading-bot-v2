@@ -117,7 +117,7 @@ def test_export_training_rows_uses_latest_terminal_state(tmp_path):
 
     assert summary["rows"] == 1
     assert summary["row_schema"] == "TrainingRow.v2"
-    assert summary["row_fields_version"] == "lifecycle_cursor.v2"
+    assert summary["row_fields_version"] == "outcome_evidence_taxonomy.v3"
     assert summary["execution_allowed"] is False
     assert rows[0]["status"] == "reviewed"
     assert rows[0]["result"] == "stop"
@@ -139,7 +139,7 @@ def test_export_training_rows_rebuilds_when_field_version_missing(tmp_path):
     second = export_training_rows(tmp_path)
 
     assert second["skipped"] is False
-    assert second["row_fields_version"] == "lifecycle_cursor.v2"
+    assert second["row_fields_version"] == "outcome_evidence_taxonomy.v3"
 
 
 def test_export_training_rows_links_telegram_preview(tmp_path):

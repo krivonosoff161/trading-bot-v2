@@ -142,7 +142,20 @@ class FakeProvider:
         self._candles = candles
 
     def fetch_ohlcv(self, symbol: str, tf: str, start_ts: int, end_ts: int) -> list[dict]:
-        return self._candles
+        step = {
+            "15m": 900_000,
+            "1h": 3_600_000,
+            "4h": 14_400_000,
+            "1d": 86_400_000,
+        }.get(tf, 900_000)
+        count = len(self._candles)
+        return [
+            {
+                **row,
+                "ts": int(end_ts) - (count - 1 - index) * step,
+            }
+            for index, row in enumerate(self._candles)
+        ]
 
 
 class CountingProvider(FakeProvider):

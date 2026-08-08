@@ -13,6 +13,7 @@ mixed with true-forward. No order/.env/live path anywhere.
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -27,6 +28,7 @@ from src.research_lab.lineage_contract import scanner_event_from_mover, write_cy
 from src.research_lab.market_data_packet import build_market_data_packet, write_market_data_packet
 from src.research_lab.paper_signals import families, lane, pfr_bridge, store
 from src.research_lab.paper_signals.contract import PaperActionSignal
+from src.research_lab.paper_signals import outcome_evidence
 from src.research_lab.pipeline_policy import add_reason, default_caps, new_stage_counts
 from src.research_lab.research_envelope import (
     build_decision_envelope,
@@ -42,6 +44,10 @@ ACTIVE = ("candidate", "armed", "opened_paper")
 
 def _memory_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_signal_memory.jsonl"
+
+
+def _incident_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "incidents" / "paper_market_data_incidents.jsonl"
 
 
 def _status_path(private_root: Path) -> Path:
@@ -122,17 +128,23 @@ def prioritize_pfr_records_by_gap_memory(
     return sorted(records, key=sort_key)
 
 
-def record_memory(private_root: Path, sig: PaperActionSignal) -> None:
-    """Append a terminal outcome as a learning row (research-only knowledge, not edge)."""
+def record_memory(private_root: Path, sig: PaperActionSignal) -> bool:
+    """Append one market outcome; operational incidents remain in their own ledger."""
+    outcome = sig.outcome or {}
+    combined = {**outcome, "diagnosis": (sig.review or {}).get("diagnosis")}
+    if not outcome_evidence.is_market_outcome(combined):
+        return False
     row = {"ts": round(sig.created_at, 1), "dedup_key": sig.dedup_key, "symbol": sig.symbol,
            "timeframe": sig.timeframe, "family": sig.setup_family, "side": sig.side,
            "data_fingerprint": sig.data_fingerprint, "mode": sig.mode,
-           "result": (sig.outcome or {}).get("result"), "net_pct": (sig.outcome or {}).get("net_pct"),
+           "result": outcome.get("result"), "net_pct": outcome.get("net_pct"),
+           "outcome_evidence_kind": outcome_evidence.EVIDENCE_MARKET_OUTCOME,
            "net_r": (sig.review or {}).get("net_r"), "diagnosis": (sig.review or {}).get("diagnosis")}
     path = _memory_path(private_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    return True
 
 
 def load_memory(private_root: Path) -> list[dict[str, Any]]:
@@ -144,7 +156,9 @@ def load_memory(private_root: Path) -> list[dict[str, Any]]:
         line = line.strip()
         if line:
             try:
-                out.append(json.loads(line))
+                row = json.loads(line)
+                if outcome_evidence.is_market_outcome(row):
+                    out.append(row)
             except json.JSONDecodeError:
                 pass
     return out
@@ -199,12 +213,147 @@ def _current_calibration_for_memory(
     return candidate
 
 
-def _fetch(provider, symbol: str, tf: str, now_ms: int) -> list[dict[str, Any]]:
+def _fetch(
+    provider: Any,
+    symbol: str,
+    tf: str,
+    now_ms: int,
+) -> outcome_evidence.MarketDataObservation:
     bars_ms = {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}.get(tf, 900_000)
     try:
-        return provider.fetch_ohlcv(symbol, tf, now_ms - FETCH_WINDOW_BARS * bars_ms, now_ms)
-    except Exception:  # noqa: BLE001 - network must not crash a cycle
-        return []
+        rows = provider.fetch_ohlcv(
+            symbol,
+            tf,
+            now_ms - FETCH_WINDOW_BARS * bars_ms,
+            now_ms,
+        )
+    except Exception as exc:  # noqa: BLE001 - classify without leaking provider detail
+        return outcome_evidence.provider_failure(f"provider:{type(exc).__name__}")
+    return outcome_evidence.classify_market_data_rows(rows, timeframe_ms=bars_ms)
+
+
+def _stable_incident_id(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return "paper_data_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _append_incident_once(private_root: Path, row: dict[str, Any]) -> None:
+    path = _incident_path(private_root)
+    incident_id = str(row.get("incident_id") or "")
+    if path.exists() and incident_id:
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                existing = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if str(existing.get("incident_id") or "") == incident_id:
+                return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _record_data_unavailable(
+    private_root: Path,
+    sig: PaperActionSignal,
+    observation: outcome_evidence.MarketDataObservation,
+    *,
+    now: float,
+    apply: bool,
+) -> None:
+    previous = dict(sig.outcome or {})
+    same_incident = (
+        str(previous.get("market_data_status") or "") == observation.status
+        and str(previous.get("market_data_incident_id") or "")
+    )
+    first_seen = float(previous.get("market_data_incident_started_at") or now) if same_incident else now
+    incident_sequence = (
+        int(previous.get("market_data_incident_sequence") or 1)
+        if same_incident
+        else int(previous.get("market_data_incident_sequence") or 0) + 1
+    )
+    incident_id = (
+        str(previous.get("market_data_incident_id"))
+        if same_incident
+        else _stable_incident_id(
+            {
+                "signal_id": sig.signal_id,
+                "status": observation.status,
+                "sequence": incident_sequence,
+            }
+        )
+    )
+    sig.outcome = {
+        **previous,
+        "market_data_status": observation.status,
+        "market_data_reason": observation.reason,
+        "market_data_incident_id": incident_id,
+        "market_data_incident_sequence": incident_sequence,
+        "market_data_incident_started_at": first_seen,
+        "market_data_last_checked_at": now,
+        "market_data_failure_count": int(previous.get("market_data_failure_count") or 0) + 1,
+    }
+    if not apply:
+        return
+    _append_incident_once(
+        private_root,
+        {
+            "schema": "PaperMarketDataIncident.v1",
+            "incident_id": incident_id,
+            "signal_id": sig.signal_id,
+            "symbol": sig.symbol,
+            "timeframe": sig.timeframe,
+            "status": observation.status,
+            "reason": observation.reason,
+            "incident_sequence": incident_sequence,
+            "started_at": first_seen,
+            "outcome_evidence_kind": outcome_evidence.EVIDENCE_OPERATIONAL_INCIDENT,
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    )
+
+
+def _record_data_recovery(
+    private_root: Path,
+    sig: PaperActionSignal,
+    *,
+    now: float,
+    apply: bool,
+) -> None:
+    previous = dict(sig.outcome or {})
+    incident_id = str(previous.get("market_data_incident_id") or "")
+    previous_status = str(previous.get("market_data_status") or "")
+    if not incident_id or previous_status == outcome_evidence.STATUS_USABLE:
+        return
+    recovered = dict(previous)
+    recovered["market_data_status"] = outcome_evidence.STATUS_USABLE
+    recovered["market_data_recovered_at"] = now
+    recovered["market_data_last_incident_id"] = incident_id
+    recovered.pop("market_data_incident_id", None)
+    sig.outcome = recovered
+    if not apply:
+        return
+    recovery_id = _stable_incident_id(
+        {"incident_id": incident_id, "event": "recovered"}
+    )
+    _append_incident_once(
+        private_root,
+        {
+            "schema": "PaperMarketDataIncident.v1",
+            "incident_id": recovery_id,
+            "recovers_incident_id": incident_id,
+            "signal_id": sig.signal_id,
+            "symbol": sig.symbol,
+            "timeframe": sig.timeframe,
+            "status": "recovered",
+            "previous_status": previous_status,
+            "recovered_at": now,
+            "outcome_evidence_kind": outcome_evidence.EVIDENCE_OPERATIONAL_INCIDENT,
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    )
 
 
 def _attach_lineage(
@@ -633,10 +782,13 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     network_fetches = 0
     network_limit = None if max_network_fetches is None else max(0, int(max_network_fetches))
 
-    def fetch_with_budget(symbol: str, tf: str) -> tuple[list[dict[str, Any]], bool]:
+    def fetch_with_budget(
+        symbol: str,
+        tf: str,
+    ) -> tuple[outcome_evidence.MarketDataObservation, bool]:
         nonlocal network_fetches
         if network_limit is not None and network_fetches >= network_limit:
-            return [], False
+            return outcome_evidence.provider_failure("network_fetch_budget_exhausted"), False
         network_fetches += 1
         return _fetch(provider, symbol, tf, now_ms), True
 
@@ -654,24 +806,27 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             gate_counts["observe_scan_limit_reached"] = gate_counts.get("observe_scan_limit_reached", 0) + 1
             break
         active_seen += 1
-        candles, fetch_attempted = fetch_with_budget(s.symbol, s.timeframe)
+        observation, fetch_attempted = fetch_with_budget(s.symbol, s.timeframe)
         if not fetch_attempted:
             gate_counts["observe_network_fetch_limit_reached"] = (
                 gate_counts.get("observe_network_fetch_limit_reached", 0) + 1
             )
             break
-        if not candles:
-            s.outcome = {**(s.outcome or {}), "result": "no_data",
-                         "no_data_count": int((s.outcome or {}).get("no_data_count") or 0) + 1}
-            aged = lane.age_out(s, now)
-            if aged:
-                s = lane.review(s)
-                closed += 1
+        if not observation.usable:
+            _record_data_unavailable(
+                private_root,
+                s,
+                observation,
+                now=now,
+                apply=apply,
+            )
+            gate_key = f"observe_{observation.status}"
+            gate_counts[gate_key] = gate_counts.get(gate_key, 0) + 1
             if apply:
                 store.update_signal(private_root, s)
-                if aged:
-                    record_memory(private_root, s)
             continue
+        candles = list(observation.rows)
+        _record_data_recovery(private_root, s, now=now, apply=apply)
         before = s.status
         s = lane.observe(s, candles)
         if s.status not in TERMINAL:
@@ -793,15 +948,16 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                 gate_counts["live_fetch_limit_reached"] = gate_counts.get("live_fetch_limit_reached", 0) + 1
                 live_fetch_limit_reached = True
                 break
-            candles, fetch_attempted = fetch_with_budget(symbol, tf)
+            observation, fetch_attempted = fetch_with_budget(symbol, tf)
             if not fetch_attempted:
                 gate_counts["network_fetch_limit_reached"] = gate_counts.get("network_fetch_limit_reached", 0) + 1
                 live_fetch_limit_reached = True
                 break
             live_fetches += 1
-            if not candles:
-                gate_counts["no_data"] = gate_counts.get("no_data", 0) + 1
+            if not observation.usable:
+                gate_counts[observation.status] = gate_counts.get(observation.status, 0) + 1
                 continue
+            candles = list(observation.rows)
             g = lane.gate_candidate({**mv, "_tf": tf}, candles, now_ms=now_ms, known_bad=known_bad)
             gate_counts[g] = gate_counts.get(g, 0) + 1
             if g != "ok":

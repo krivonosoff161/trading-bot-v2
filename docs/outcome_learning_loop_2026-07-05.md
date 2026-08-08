@@ -84,6 +84,16 @@ stale, incomplete, display-only, or mismatched rows remain available for
 forensic reporting but cannot reach the outcome reviewer, System Analyst,
 retest catalog, promotion gate, or retest-result materialization.
 
+Market-data availability is also not outcome authority. The paper observer
+classifies a failed provider call as `provider_error`, a non-contiguous candle
+window as `data_gap`, and a successful empty response as
+`genuine_no_market_data`. None of these states closes an active observation or
+becomes a win, loss, missed entry, family-ranking input, training row, setup
+memory fact, recommendation, or LLM review. The observer retains a deduplicated
+operational incident and a linked recovery event under the private incident
+surface. Legacy `no_data`/`data_issue` rows are censored at read boundaries so
+old technical artifacts cannot regain learning authority.
+
 An `OutcomeRetestSpec` carries those four immutable generation bindings. The
 farm revalidates them against current evidence when the queued retest is
 claimed, then propagates them into the materialized sweep context. Completed

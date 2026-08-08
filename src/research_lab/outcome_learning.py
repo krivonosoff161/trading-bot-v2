@@ -17,6 +17,7 @@ from src.research_lab.paper_projection_reader import (
     read_projection_view,
     select_current_terminal_training_rows,
 )
+from src.research_lab.paper_signals import outcome_evidence
 
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab import feedback_reader as fr
@@ -437,6 +438,9 @@ def peer_stats(row: dict[str, Any], rows: Iterable[dict[str, Any]]) -> dict[str,
 def build_outcome_learning_case(
     row: dict[str, Any], *, peers: Iterable[dict[str, Any]] = ()
 ) -> OutcomeLearningCase:
+    if not outcome_evidence.is_market_outcome(row):
+        raise ValueError("operational incident is not outcome-learning evidence")
+    peers = [peer for peer in peers if outcome_evidence.is_market_outcome(peer)]
     outcome_bucket = _bucket(row)
     source_ref = str(
         row.get("training_row_id")
@@ -541,7 +545,8 @@ def build_outcome_review_pack(
 
 
 def learning_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    items = list(rows)
+    source_items = list(rows)
+    items = [row for row in source_items if outcome_evidence.is_market_outcome(row)]
     by_kind: dict[str, int] = {}
     by_bucket: dict[str, int] = {}
     by_actionability: dict[str, int] = {}
@@ -555,6 +560,8 @@ def learning_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     return {
         "schema": "OutcomeLearningSummary.v1",
         "rows": len(items),
+        "source_rows": len(source_items),
+        "operational_incidents_censored": len(source_items) - len(items),
         "by_review_kind": by_kind,
         "by_outcome_bucket": by_bucket,
         "by_actionability": by_actionability,

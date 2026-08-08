@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import stable_id, write_cycle_link
+from src.research_lab.paper_signals import outcome_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE_LOG = ROOT / "logs" / "signals" / "signal_events.jsonl"
@@ -114,6 +115,7 @@ def product_training_row(event: dict[str, Any]) -> dict[str, Any]:
         "category": str(extra.get("category") or ""),
         "provider_scope": str(extra.get("provider_scope") or ""),
         "source_schema": str(event.get("schema") or ""),
+        "outcome_evidence_kind": outcome_evidence.EVIDENCE_MARKET_OUTCOME,
         "paper_only": True,
         "execution_allowed": False,
     }
@@ -129,9 +131,12 @@ def export_product_signal_training(
     private_root = Path(private_root)
     source_log = Path(source_log)
     events, invalid, read_error = _read_events(source_log)
+    eligible_events = [
+        event for event in events if outcome_evidence.is_market_outcome(event)
+    ]
     rows = [
         product_training_row(event)
-        for event in events
+        for event in eligible_events
         if event.get("schema") == "signal_event.v1"
     ]
     out_jsonl = private_root / "state" / "derived" / "product_signal_training.jsonl"
@@ -175,6 +180,7 @@ def export_product_signal_training(
         "row_schema": SCHEMA,
         "rows": len(rows),
         "source_rows": len(events),
+        "operational_incidents_censored": len(events) - len(eligible_events),
         "source_invalid_json": invalid,
         "source_read_error": read_error,
         "source_exists": source_log.exists(),

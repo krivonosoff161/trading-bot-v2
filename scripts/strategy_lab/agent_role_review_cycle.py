@@ -40,6 +40,7 @@ from src.research_lab.outcome_learning import (  # noqa: E402
     load_current_training_evidence,
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.paper_signals import outcome_evidence  # noqa: E402
 
 
 MAX_REVIEW_ATTEMPTS = 3
@@ -144,6 +145,8 @@ def _unreviewed_training_rows(
     )
     missing = []
     for row in rows:
+        if not outcome_evidence.is_market_outcome(row):
+            continue
         source_ref = str(
             row.get("training_row_id")
             or row.get("paper_signal_id")
