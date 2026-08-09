@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-03
-- Verified against: `21601895118b642ea514a21607214e8de85f844c`
+- Verified: 2026-08-09
+- Verified against: `5c9ee576c3625955764da042e81c117b4ef43d3f`
 - Scope: supported paper/research entrypoints, effects, and incompatible owners
 - Evidence: [public documentation guard](../scripts/ci/check_public_docs.py) and
   [Research Control Center tests](../tests/test_research_control_center.py)
@@ -53,6 +53,21 @@ fail.
 | Bounded acceptance collection | `bat\paper_acceptance_headless_loop.bat` | Paper-only acceptance evidence; no dashboard or delivery. |
 | Canonical farm core | `bat\strategy_lab_farm_full_cycle_loop.bat` | Farm/worker/validation/paper lifecycle; one owner only. |
 | Visible farm control room | `bat\strategy_lab_control_room.bat` | Canonical farm plus local status views; never beside another farm owner. |
+
+Every canonical farm wrapper requires an already active, digest-valid Paper
+Evidence v2 cutover marker. It does not create or migrate that authority during
+startup. Missing, rolled-back, corrupt, path-mismatched, or account-mismatched
+cutover state blocks the farm before paper materialization.
+
+## Paper Evidence v2 Cutover
+
+| Goal | Command | Effects and limits |
+|---|---|---|
+| Inspect cutover marker | `python -m scripts.strategy_lab.paper_generation_cutover --private-root <exact-root> status` | Reads only the public-safe cutover identity and state; no process or provider action. |
+| Compare shadow projection | `python -m scripts.strategy_lab.paper_generation_cutover --private-root <shadow-root> shadow-parity --legacy-projection <shadow-json> --v2-database <shadow-db>` | Content-normalized parity over a synthetic/private shadow root; grants no authority. |
+| Build forward shadow replay | `python -m scripts.strategy_lab.paper_generation_cutover --private-root <exact-source-root> shadow-replay --shadow-root <new-shadow-root> --code-identity <exact-revision> --now-ms <bounded-time>` | Copies only the authenticated paper-signal ledger into a distinct root, runs one bounded public-data v2 generation, and reports content parity. It never copies configuration, delivery state, recipients, or credentials. |
+| Activate after operational gate | `python -m scripts.strategy_lab.paper_generation_cutover --private-root <exact-root> activate --code-identity <exact-revision> --confirm-quiescent` | Creates/opens only the canonical v2 database, creates immutable paper-account genesis, integrity-checks it, then publishes the active digest-bound marker. Requires external zero-owner, backup/restore, parity and revision proof. |
+| Roll back before runtime | `python -m scripts.strategy_lab.paper_generation_cutover --private-root <exact-root> rollback` | Marks the cutover `rolled_back` without deleting database/evidence. Idempotent; does not restore legacy writer authority. |
 
 Direct paper/farm launchers are supported contracts, but the canonical RCC is
 the preferred multi-contour supervisor. Never run two launchers that compete

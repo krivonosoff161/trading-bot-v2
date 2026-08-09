@@ -98,6 +98,26 @@ def _task_spec(
         "parent_family_id": str(source_row.get("search_family_id") or ""),
         "parent_trial_id": str(source_row.get("search_trial_id") or ""),
         "parent_effective_n_trials": int(source_row.get("effective_n_trials") or 0),
+        "paper_generation_run_id": str(
+            source_row.get("paper_generation_run_id")
+            or prior_spec.get("paper_generation_run_id")
+            or ""
+        ),
+        "paper_subject_generation_id": str(
+            source_row.get("paper_subject_generation_id")
+            or prior_spec.get("paper_subject_generation_id")
+            or ""
+        ),
+        "terminal_lifecycle_event_id": str(
+            source_row.get("terminal_lifecycle_event_id")
+            or prior_spec.get("terminal_lifecycle_event_id")
+            or ""
+        ),
+        "account_generation_id": str(
+            source_row.get("account_generation_id")
+            or prior_spec.get("account_generation_id")
+            or ""
+        ),
         "cumulative_family_policy": (
             "cumulative"
             if source_row.get("search_family_id") and source_row.get("search_trial_id")
@@ -275,6 +295,7 @@ def feedback_payloads_from_system_results(
     draft_rows: Iterable[dict[str, Any]],
     *,
     max_generation: int = 2,
+    expected_generation_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     results = {str(row.get("result_id") or ""): row for row in result_rows}
     payloads: list[dict[str, Any]] = []
@@ -292,6 +313,10 @@ def feedback_payloads_from_system_results(
             if isinstance(raw_prior_spec := result.get("task_spec"), dict)
             else {}
         )
+        if expected_generation_run_id and str(
+            prior_spec.get("paper_generation_run_id") or ""
+        ) != str(expected_generation_run_id):
+            continue
         if int(prior_spec.get("generation", 0)) >= max_generation:
             continue
         draft_payload = (
@@ -399,10 +424,19 @@ def run_system_analyst_cycle(
     apply: bool,
     now: str | None = None,
     max_feedback: int = DEFAULT_MAX_FEEDBACK_PER_CYCLE,
+    expected_generation_run_id: str | None = None,
 ) -> dict[str, Any]:
     if max_feedback < 1:
         raise ValueError("max_feedback must be positive")
     training_evidence = load_current_training_evidence(private_root)
+    actual_generation_run_id = str(
+        training_evidence.get("paper_generation_run_id") or ""
+    )
+    if expected_generation_run_id and (
+        training_evidence.get("current_generation_compatible") is not True
+        or actual_generation_run_id != str(expected_generation_run_id)
+    ):
+        raise ValueError("system analyst training evidence generation mismatch")
     all_payloads = feedback_payloads_from_outcomes(
         training_evidence["items"], load_outcome_reviews(private_root)
     )
@@ -420,6 +454,7 @@ def run_system_analyst_cycle(
                 / "llm_advice"
                 / "system_analyst_drafts.jsonl"
             ),
+            expected_generation_run_id=expected_generation_run_id,
         )
     )
     payloads = sorted(
@@ -440,10 +475,12 @@ def run_system_analyst_cycle(
         "role_environment_candidates": {},
         "accepted_role_requests": {},
         "training_evidence": {
-            key: value
-            for key, value in training_evidence.items()
-            if key != "items"
+            key: value for key, value in training_evidence.items() if key != "items"
         },
+        "paper_generation_run_id": actual_generation_run_id,
+        "current_generation_compatible": bool(
+            training_evidence.get("current_generation_compatible")
+        ),
         "paper_only": True,
         "execution_allowed": False,
         "apply": bool(apply),

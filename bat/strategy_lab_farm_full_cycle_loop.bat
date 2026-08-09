@@ -7,7 +7,8 @@ set "PYTHONWARNINGS=ignore:CUDA path could not be detected:UserWarning"
 
 rem Canonical Strategy Lab farm cycle:
 rem scanner/watch intake -> farm lifecycle -> compute worker -> hard validation -> paper runtime
-rem -> operational paper-signal watch lane.
+rem -> operational paper-signal watch lane through the explicitly activated
+rem Paper Evidence v2 generation authority.
 rem Paper/research only: public OKX market data, no AUTO_TRADE, no orders,
 rem no private exchange endpoints. Telegram paper delivery is opt-in via
 rem STRATEGY_LAB_PAPER_TELEGRAM_SEND=1 and goes only to active bot subscribers.
@@ -30,6 +31,7 @@ if "%STRATEGY_LAB_VALIDATION_BACKLOG_SLO_SECONDS%"=="" set "STRATEGY_LAB_VALIDAT
 if "%STRATEGY_LAB_FARM_MAX_PAPER_CARDS%"=="" set "STRATEGY_LAB_FARM_MAX_PAPER_CARDS=20"
 if "%STRATEGY_LAB_FARM_BACKEND%"=="" set "STRATEGY_LAB_FARM_BACKEND=auto"
 if "%STRATEGY_LAB_FARM_PROVIDER%"=="" set "STRATEGY_LAB_FARM_PROVIDER=okx-public"
+set "STRATEGY_LAB_PAPER_EVIDENCE_V2_REQUIRED=1"
 if "%STRATEGY_LAB_PFR_DB_PATH%"=="" set "STRATEGY_LAB_PFR_DB_PATH=%TRADING_BOT_RESEARCH_ROOT%\state\strategy_lab.sqlite"
 if "%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%"=="" set "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20"
 if "%STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES%"=="" set "STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES=12"

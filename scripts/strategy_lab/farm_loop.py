@@ -401,6 +401,245 @@ def _run_main_paper_derived_chain(
     Telegram delivery. Network market data is used only by the bounded runtime observer
     through the explicit public provider already selected for the farm cycle.
     """
+    paper_generation_runtime = getattr(args, "paper_generation_runtime", None)
+    if paper_generation_runtime is not None:
+        _run_v2_main_paper_derived_chain(
+            args,
+            private_root,
+            tasks=tasks,
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            out=out,
+            provider=provider,
+        )
+        return
+    if apply and getattr(args, "paper_evidence_v2_required", False):
+        raise RuntimeError("required Paper Evidence v2 runtime is unavailable")
+    _run_legacy_main_paper_derived_chain(
+        args,
+        private_root,
+        tasks=tasks,
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        out=out,
+        provider=provider,
+    )
+
+
+def _run_v2_main_paper_derived_chain(
+    args,
+    private_root: Path,
+    *,
+    tasks: FarmTasksDB,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+    out: dict,
+    provider=None,
+) -> None:
+    """Publish one atomic v2 generation, then rebuild only bound consumers.
+
+    Unlike the legacy compatibility path above, any failure is propagated to the
+    canonical farm owner.  That prevents a stale preview, training export or delivery
+    file from surviving as if it belonged to the new generation.
+    """
+    if not apply or provider is None:
+        raise RuntimeError(
+            "Paper Evidence v2 requires apply mode and an explicit provider"
+        )
+    runtime = args.paper_generation_runtime
+    runtime.raise_if_failed()
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={"milestone": "generation_started"},
+    )
+    generation = runtime.run(provider=provider, now_ms=int(time.time() * 1000))
+    run_id = str(generation["run_id"])
+
+    def require_current_generation(
+        stage: str,
+        payload: dict,
+        *,
+        nested: str | None = None,
+    ) -> None:
+        evidence = payload.get(nested) if nested else payload
+        evidence = evidence if isinstance(evidence, dict) else {}
+        if (
+            evidence.get("current_generation_compatible") is not True
+            or str(evidence.get("paper_generation_run_id") or "") != run_id
+        ):
+            raise RuntimeError(f"{stage} is not bound to current v2 generation")
+
+    evidence_database_path = runtime.database_path
+    args.paper_generation_run_id = run_id
+    out["paper_generation_v2"] = {
+        "run_id": run_id,
+        "producer_generation_id": generation["producer_generation_id"],
+        "account_generation_id": generation["account_generation_id"],
+        "current": True,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    out["main_paper_bridge"] = generation["bridge"]
+    out["main_paper_consumer"] = generation["consumer"]
+    out["main_paper_runtime_queue"] = generation["queue"]
+    out["main_paper_runtime_observation"] = generation["observer"]
+    out["main_paper_trade_ledger"] = generation["trades"]
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={"milestone": "generation_promoted", "paper_generation_run_id": run_id},
+    )
+
+    from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
+    from src.research_lab.paper_signals.training_export import export_training_rows
+    from src.research_lab.paper_lineage import build_paper_lineage
+    from src.research_lab.outcome_retest_result import build_outcome_retest_results
+    from src.research_lab.system_analyst_cycle import run_system_analyst_cycle
+    from src.research_lab.role_environment_dispatch import (
+        dispatch_role_environments,
+        reconcile_role_work_results,
+    )
+    from src.research_lab.trading_policy_calibration import (
+        build_trading_policy_calibration,
+    )
+    from src.research_lab.paper_product_quality_report import (
+        build_paper_product_quality_report,
+    )
+
+    out["paper_product_trade_ledger"] = {
+        "skipped": "legacy_projection_not_authoritative_under_v2",
+        "paper_generation_run_id": run_id,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    out["trade_thesis_supervisor"] = {
+        "skipped": "legacy_product_ledger_not_authoritative_under_v2",
+        "paper_generation_run_id": run_id,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    out["paper_telegram_preview"] = build_paper_telegram_preview(
+        private_root,
+        fetch_public_chart_candles=True,
+        evidence_database_path=evidence_database_path,
+    )
+    preview = out["paper_telegram_preview"]
+    if (
+        preview.get("current_generation_compatible") is not True
+        or str(preview.get("paper_generation_run_id") or "") != run_id
+    ):
+        raise RuntimeError(
+            "paper Telegram preview is not bound to current v2 generation"
+        )
+    out["paper_signal_training_export"] = export_training_rows(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
+    require_current_generation(
+        "paper training export", out["paper_signal_training_export"]
+    )
+    out["product_signal_training_export"] = {
+        "skipped": "separate_legacy_product_event_source_not_paper_v2_authority",
+        "paper_generation_run_id": run_id,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    out["paper_lineage_index"] = build_paper_lineage(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
+    require_current_generation("paper lineage", out["paper_lineage_index"])
+    out["outcome_retest_results"] = build_outcome_retest_results(private_root)
+    require_current_generation(
+        "outcome retest",
+        out["outcome_retest_results"],
+        nested="training_evidence",
+    )
+    out["system_analyst_feedback"] = run_system_analyst_cycle(
+        private_root,
+        apply=apply,
+        expected_generation_run_id=run_id,
+    )
+    require_current_generation("system analyst", out["system_analyst_feedback"])
+    out["role_environment_dispatch"] = dispatch_role_environments(
+        private_root,
+        tasks,
+        apply=apply,
+        limit_per_role=20,
+        expected_generation_run_id=run_id,
+        evidence_database_path=evidence_database_path,
+    )
+    require_current_generation("role dispatch", out["role_environment_dispatch"])
+    out["role_work_result_reconciliation"] = reconcile_role_work_results(
+        private_root,
+        tasks,
+        apply=apply,
+        expected_generation_run_id=run_id,
+    )
+    require_current_generation(
+        "role result reconciliation", out["role_work_result_reconciliation"]
+    )
+    out["trading_policy_calibration"] = build_trading_policy_calibration(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
+    require_current_generation(
+        "trading policy calibration", out["trading_policy_calibration"]
+    )
+    out["setup_outcome_memory_refresh"] = _refresh_setup_outcome_memory(
+        args,
+        private_root,
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        evidence_database_path=evidence_database_path,
+    )
+    require_current_generation(
+        "setup outcome memory", out["setup_outcome_memory_refresh"]
+    )
+    runtime.raise_if_failed()
+    out["paper_product_quality_report"] = build_paper_product_quality_report(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
+    require_current_generation(
+        "paper product quality", out["paper_product_quality_report"]
+    )
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "milestone": "generation_consumers_completed",
+            "paper_generation_run_id": run_id,
+        },
+    )
+
+
+def _run_legacy_main_paper_derived_chain(
+    args,
+    private_root: Path,
+    *,
+    tasks: FarmTasksDB,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+    out: dict,
+    provider=None,
+) -> None:
+    """Compatibility/display pipeline used only outside the canonical v2 launcher."""
     try:
         _write_loop_status(
             private_root,
@@ -412,7 +651,7 @@ def _run_main_paper_derived_chain(
         from src.research_lab.main_paper_bridge import export_main_paper_instructions
 
         out["main_paper_bridge"] = export_main_paper_instructions(private_root)
-    except Exception as exc:  # noqa: BLE001 - derived bridge must not break the cycle
+    except Exception as exc:  # noqa: BLE001 - legacy compatibility surface
         out.setdefault("errors", []).append(
             {"where": "main_paper_bridge", "error": str(exc)}
         )
@@ -1553,6 +1792,7 @@ def _refresh_setup_outcome_memory(
     apply: bool,
     loop: bool,
     cycle_started_at: float,
+    evidence_database_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Run the production memory refresh with real, completed milestones."""
 
@@ -1592,7 +1832,11 @@ def _refresh_setup_outcome_memory(
     )
     summary = memory.summarize_memory(records)
     progress("memory_summarized", len(records), len(records))
-    product_memory = memory.summarize_product_training_memory(private_root)["summary"]
+    product_memory_evidence = memory.summarize_product_training_memory(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
+    product_memory = product_memory_evidence["summary"]
     progress(
         "product_memory_summarized",
         int(product_memory.get("rows") or 0),
@@ -1610,6 +1854,15 @@ def _refresh_setup_outcome_memory(
         "product_rows": product_memory.get("rows", 0),
         "product_terminal_rows": product_memory.get("terminal_rows", 0),
         "product_pnl_usdt": product_memory.get("paper_pnl_usdt", 0),
+        "paper_generation_run_id": str(
+            product_memory_evidence.get("paper_generation_run_id") or ""
+        ),
+        "generation_status": str(
+            product_memory_evidence.get("generation_status") or ""
+        ),
+        "current_generation_compatible": bool(
+            product_memory_evidence.get("current_generation_compatible")
+        ),
         "paper_only": True,
         "execution_allowed": False,
     }
@@ -2082,23 +2335,35 @@ def _run_once(
                     out=out,
                     provider=paper_provider,
                 )
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="paper_exit_supervisor",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.paper_exit_supervisor import (
-                        write_exit_supervisor,
-                    )
+                if getattr(args, "paper_evidence_v2_required", False):
+                    out["paper_exit_supervisor"] = {
+                        "skipped": "legacy_thesis_projection_not_authoritative_under_v2",
+                        "paper_generation_run_id": str(
+                            getattr(args, "paper_generation_run_id", "") or ""
+                        ),
+                        "paper_only": True,
+                        "execution_allowed": False,
+                    }
+                else:
+                    try:
+                        _write_loop_status(
+                            private_root,
+                            stage="paper_exit_supervisor",
+                            apply=apply,
+                            loop=loop,
+                            cycle_started_at=cycle_started_at,
+                        )
+                        from src.research_lab.paper_exit_supervisor import (
+                            write_exit_supervisor,
+                        )
 
-                    out["paper_exit_supervisor"] = write_exit_supervisor(private_root)
-                except Exception as exc:  # noqa: BLE001 - exit advice must not break the cycle
-                    out.setdefault("errors", []).append(
-                        {"where": "paper_exit_supervisor", "error": str(exc)}
-                    )
+                        out["paper_exit_supervisor"] = write_exit_supervisor(
+                            private_root
+                        )
+                    except Exception as exc:  # noqa: BLE001 - compatibility advice
+                        out.setdefault("errors", []).append(
+                            {"where": "paper_exit_supervisor", "error": str(exc)}
+                        )
                 try:
                     _write_loop_status(
                         private_root,
@@ -2127,12 +2392,25 @@ def _run_once(
                         status_digest_interval_hours=int(
                             getattr(args, "paper_telegram_status_digest_hours", 12)
                         ),
+                        expected_generation_run_id=(
+                            str(getattr(args, "paper_generation_run_id", "") or "")
+                            if getattr(args, "paper_evidence_v2_required", False)
+                            else None
+                        ),
                     )
+                    if getattr(args, "paper_evidence_v2_required", False) and out[
+                        "paper_telegram_delivery"
+                    ].get("generation_block_reason"):
+                        raise RuntimeError(
+                            "paper Telegram delivery source is not bound to current v2 generation"
+                        )
                     if delivery_config.get("config_error"):
                         out["paper_telegram_delivery"]["config_error"] = (
                             delivery_config["config_error"]
                         )
-                except Exception as exc:  # noqa: BLE001 - delivery audit must not break the cycle
+                except Exception as exc:  # noqa: BLE001 - compatibility path is best effort
+                    if getattr(args, "paper_evidence_v2_required", False):
+                        raise
                     out.setdefault("errors", []).append(
                         {"where": "paper_telegram_delivery", "error": str(exc)}
                     )
@@ -2553,9 +2831,9 @@ def _priority_worker_loop(
                     details={"sequence": sequence + 1},
                 )
                 validation_maintenance: dict[str, Any] = {}
-                if bool(getattr(args, "run_validation", False)) and worker_tasks.eligible_count(
-                    task_types=("export_validation",)
-                ):
+                if bool(
+                    getattr(args, "run_validation", False)
+                ) and worker_tasks.eligible_count(task_types=("export_validation",)):
                     validation_maintenance = _run_validation_maintenance(
                         args,
                         worker_tasks,
@@ -2684,6 +2962,20 @@ def main() -> None:
         "--run-paper-signals",
         action="store_true",
         help="run one bounded operational paper-watch cycle (observe+generate; research-only)",
+    )
+    ap.add_argument(
+        "--paper-evidence-v2-required",
+        action="store_true",
+        default=_env_flag("STRATEGY_LAB_PAPER_EVIDENCE_V2_REQUIRED"),
+        help=(
+            "require an already activated Paper Evidence v2 cutover and bind its "
+            "writer to the canonical farm owner"
+        ),
+    )
+    ap.add_argument(
+        "--paper-evidence-cutover-manifest",
+        default="",
+        help="optional explicit v2 cutover manifest path inside the private root",
     )
     ap.add_argument(
         "--run-calculator-advisor",
@@ -3043,6 +3335,7 @@ def main() -> None:
     ownership_store = None
     process_lease = None
     lease_heartbeat = None
+    paper_generation_runtime = None
     priority_stop = threading.Event()
     priority_thread = None
     claim_failure_signal = None
@@ -3089,9 +3382,28 @@ def main() -> None:
             if lease_heartbeat.failure is not None:
                 claim_failure_signal.notify(
                     lease_heartbeat.failure,
-                    lease_heartbeat.snapshot()
-                    | {"failure_kind": "process_lease"},
+                    lease_heartbeat.snapshot() | {"failure_kind": "process_lease"},
                 )
+            if getattr(args, "paper_evidence_v2_required", False):
+                from src.research_lab.paper_generation_cutover import (
+                    CanonicalPaperGenerationRuntime,
+                )
+
+                configured_manifest = str(
+                    getattr(args, "paper_evidence_cutover_manifest", "") or ""
+                ).strip()
+                paper_generation_runtime = (
+                    CanonicalPaperGenerationRuntime.open_required(
+                        private_root,
+                        owner_id=process_lease.owner_id,
+                        identity=process_lease.identity,
+                        manifest_path=(
+                            Path(configured_manifest) if configured_manifest else None
+                        ),
+                        on_failure=claim_failure_signal.notify,
+                    )
+                )
+                args.paper_generation_runtime = paper_generation_runtime
             tasks = FarmTasksDB(
                 tasks_db_path(private_root),
                 owner_id=owner_id,
@@ -3108,6 +3420,11 @@ def main() -> None:
                     f"  reconcile: requeued {n_orphan} orphan running task(s) from a previous stop"
                 )
         except Exception:
+            if paper_generation_runtime is not None:
+                try:
+                    paper_generation_runtime.close()
+                except Exception:
+                    pass
             _PROCESS_LEASE_SUPERVISORS.pop(ownership_path, None)
             lease_heartbeat.stop()
             try:
@@ -3236,6 +3553,12 @@ def main() -> None:
         if priority_thread is not None:
             priority_thread.join(timeout=15)
         tasks.close()
+        paper_generation_close_error = None
+        if paper_generation_runtime is not None:
+            try:
+                paper_generation_runtime.close()
+            except Exception as exc:  # noqa: BLE001 - finish all owner cleanup first
+                paper_generation_close_error = exc
         if lease_heartbeat is not None:
             _PROCESS_LEASE_SUPERVISORS.pop(
                 private_root / "state" / "ownership.sqlite",
@@ -3253,6 +3576,10 @@ def main() -> None:
                 private_root / "state" / "farm_loop_status.json",
                 None,
             )
+        if paper_generation_close_error is not None:
+            raise RuntimeError(
+                "paper evidence writer did not stop cleanly"
+            ) from paper_generation_close_error
 
 
 if __name__ == "__main__":

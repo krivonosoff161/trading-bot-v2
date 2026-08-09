@@ -168,10 +168,17 @@ manifests, writer fences, and the current-run pointer. A completed projection is
 a verified read view over one atomic run; JSON/JSONL files and legacy v1 output
 remain display-only and cannot become authority through filename presence.
 
-The coordinator API is dependency-injected and off by default. No supported
-launcher currently activates or migrates private v2 state. Future rollout must
-retain the canonical farm lease as an outer preflight and independently acquire
-the co-located paper writer fence. See
+The coordinator API is dependency-injected. The canonical farm launcher now
+requires a separately produced, digest-bound cutover marker; it never activates
+or migrates private v2 state during startup. The v2 runtime binds the co-located
+paper writer to the exact canonical farm owner and process identity, renews that
+lease independently, sequences producer generations monotonically, and
+propagates renewal or stage failure to the foreground before delivery. The
+active marker's revision identity must match the bounded local checkout HEAD
+before the writer lease is acquired. Legacy
+file stages remain a non-canonical compatibility/display path and cannot regain
+authority after v2 activation. Operational rollout must still prove quiescence,
+backup/restore, shadow parity, integrity, and exact revision equality. See
 [Paper Evidence Generations](docs/paper-evidence-generations.md).
 
 ## Storage

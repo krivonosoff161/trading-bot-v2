@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: fb381deceac935328dbdbf0db3d6b59fa1a4f81c
+  trading-bot-v2: 5c9ee576c3625955764da042e81c117b4ef43d3f
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -86,10 +86,10 @@ current_documents:
     residual_risk: commands require a fresh external owner-authority manifest
     next_gate: keep launch, stop, and hard-fail procedures aligned with RCC code
   - path: docs/paper-evidence-generations.md
-    scope: immutable paper evidence authority and deferred private rollout
-    evidence: tests/test_paper_evidence_store_v2.py
-    residual_risk: canonical private rollout is not established by public code
-    next_gate: separate migration and operator authority before adoption
+    scope: immutable paper evidence authority, canonical integration, and gated cutover
+    evidence: tests/test_paper_generation_cutover.py
+    residual_risk: canonical private cutover and a long canary are not established by public code
+    next_gate: apply only after quiescent backup, restore, shadow parity, integrity, and exact-revision proof
   - path: docs/project-map.md
     scope: concise ownership and repository-boundary projection
     evidence: tests/test_project_brain.py
@@ -201,11 +201,16 @@ modules:
       - src/research_lab/paper_readiness.py
       - src/research_lab/paper_signals/cycle.py
       - src/research_lab/paper_signals/outcome_evidence.py
+      - src/research_lab/paper_evidence_store.py
+      - src/research_lab/paper_generation_cutover.py
+      - src/research_lab/paper_generation_run.py
+      - scripts/strategy_lab/paper_generation_cutover.py
       - tests/test_paper_runtime.py
       - tests/test_pfr_bridge.py
       - tests/test_paper_data_outcome_censor.py
-    missing_evidence: a completed acceptance window demonstrating real outage recovery and zero technical outcome leakage into learning inputs
-    next_gate: prove the provider-error/data-gap/genuine-no-market-data taxonomy and incident recovery during the paper-only canary without execution
+      - tests/test_paper_generation_cutover.py
+    missing_evidence: a completed private cutover and acceptance window demonstrating atomic generation continuity, real outage recovery, and zero technical outcome leakage into learning inputs
+    next_gate: prove backup/restore, shadow parity, exact-revision activation, writer identity and the provider-error/data-gap/genuine-no-market-data taxonomy during the paper-only canary without execution
     authority: paper_only
     public_private_boundary: lifecycle code is public; observations, outcomes, and accounting are private
   - module_id: research_control_center
@@ -261,8 +266,9 @@ modules:
       - src/research_lab/paper_telegram_sender.py
       - src/research_lab/paper_telegram_preview.py
       - tests/test_paper_telegram_sender.py
-    missing_evidence: continuous delivery availability and externally unambiguous acknowledgements
-    next_gate: observe delivery and ACK state during a bounded paper canary
+      - tests/test_paper_generation_cutover.py
+    missing_evidence: continuous delivery availability and externally unambiguous acknowledgements after private v2 cutover
+    next_gate: observe current-generation binding, delivery, and ACK state during a bounded paper canary
     authority: separately_owner_gated
     public_private_boundary: delivery contracts are public; recipients, tokens, messages, and ACK records are private
   - module_id: execution_boundary
