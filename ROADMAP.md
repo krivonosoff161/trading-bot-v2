@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `99ff1dfd62859f1bd180559de2fe5840422e6015`
+- Verified against: `c3441eb6faddb0f66aded77b4f8008f571afcc34`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -67,7 +67,11 @@ dependency, not by a route to live trading.
   and heartbeats cannot establish T+0 or refresh a product SLO. Honest zero
   output is `idle`, public-provider loss is `degraded`, and stale stages,
   validation oldest-age breach, cross-generation races, or retained technical
-  learning rows fail closed.
+  learning rows fail closed. The green T+0 report transports the immutable
+  launch-time product boundary into the steady monitor and re-verifies current
+  component sequences, so transition between monitor adapters cannot reclassify
+  the same accepted startup checkpoint as pre-run; genuine post-T+0 staleness
+  retains the existing fail-closed SLO.
 - RCC startup now publishes a digest-bound attempt identity and completed stage
   before the UI heartbeat exists. Constructor failures retain only their safe
   exception type, BAT wrappers preserve the real exit code, and the startup

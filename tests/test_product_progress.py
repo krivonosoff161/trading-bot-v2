@@ -6,6 +6,7 @@ import pytest
 from src.research_lab.product_progress import (
     ProductProgressMonitor,
     ProductProgressSlo,
+    ProductProgressTransitionError,
     farm_metrics,
     publish_checkpoint,
     scanner_metrics,
@@ -55,6 +56,130 @@ def test_zero_signal_completed_cycles_are_real_progress(tmp_path: Path) -> None:
     assert report["ready"] is True
     assert report["state"] == "ready"
     assert report["components"]["scanner"]["status"] == "idle"
+    assert report["run_started_at"] == 100.0
+
+
+def test_green_t0_transition_preserves_launch_boundary(tmp_path: Path) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    startup = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+
+    steady = ProductProgressMonitor.from_green_t0_report(
+        tmp_path,
+        t0_report=startup,
+        t0_observed_at=102.0,
+        wall_clock=lambda: 103.0,
+    )
+
+    assert steady.run_started_at == 100.0
+    assert steady.sample()["ready"] is True
+    assert ProductProgressMonitor(
+        tmp_path,
+        run_started_at=102.0,
+        wall_clock=lambda: 103.0,
+    ).sample()["ready"] is False
+
+
+def test_t0_transition_rejects_pre_run_or_rebased_report(tmp_path: Path) -> None:
+    _publish_green(tmp_path, completed_at=99.0)
+    pre_run = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 101.0,
+    ).sample()
+    with pytest.raises(ProductProgressTransitionError, match="not green"):
+        ProductProgressMonitor.from_green_t0_report(
+            tmp_path,
+            t0_report=pre_run,
+            t0_observed_at=101.0,
+        )
+
+    _publish_green(tmp_path, completed_at=101.0)
+    green = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+    green["run_started_at"] = 102.0
+    with pytest.raises(ProductProgressTransitionError, match="changed"):
+        ProductProgressMonitor.from_green_t0_report(
+            tmp_path,
+            t0_report=green,
+            t0_observed_at=102.0,
+        )
+
+
+@pytest.mark.parametrize("invalid_boundary", [None, "100.0", True])
+def test_t0_transition_rejects_untyped_boundary(
+    tmp_path: Path, invalid_boundary: object
+) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    green = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+    green["run_started_at"] = invalid_boundary
+
+    with pytest.raises(ProductProgressTransitionError, match="no valid"):
+        ProductProgressMonitor.from_green_t0_report(
+            tmp_path,
+            t0_report=green,
+            t0_observed_at=102.0,
+        )
+
+
+def test_t0_transition_rejects_regressed_sequence(tmp_path: Path) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    green = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+    green["components"]["farm"]["sequence"] = 2
+
+    with pytest.raises(ProductProgressTransitionError, match="regressed"):
+        ProductProgressMonitor.from_green_t0_report(
+            tmp_path,
+            t0_report=green,
+            t0_observed_at=102.0,
+        )
+
+
+@pytest.mark.parametrize("run_started_at", [0.0, float("nan"), float("inf")])
+def test_monitor_rejects_invalid_run_boundary(
+    tmp_path: Path, run_started_at: float
+) -> None:
+    with pytest.raises(ValueError, match="finite positive"):
+        ProductProgressMonitor(tmp_path, run_started_at=run_started_at)
+
+
+def test_steady_monitor_still_fails_on_real_post_t0_staleness(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    slo = ProductProgressSlo(scanner_seconds=10.0, farm_seconds=10.0)
+    startup = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        slo=slo,
+        wall_clock=lambda: 102.0,
+    ).sample()
+    steady = ProductProgressMonitor.from_green_t0_report(
+        tmp_path,
+        t0_report=startup,
+        t0_observed_at=102.0,
+        slo=slo,
+        wall_clock=lambda: 112.0,
+    )
+
+    assert set(steady.sample()["hard_fail_reasons"]) == {
+        "scanner_product_progress_stale",
+        "farm_product_progress_stale",
+    }
 
 
 def test_provider_degradation_does_not_hide_completed_pass(tmp_path: Path) -> None:
