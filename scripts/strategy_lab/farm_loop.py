@@ -1733,6 +1733,25 @@ def _write_loop_status(
         milestone = str((details or {}).get("milestone") or "").strip()
         progress_stage = f"{stage}:{milestone}" if milestone else stage
         _record_process_lease_progress(private_root, progress_stage)
+        if milestone:
+            from src.research_lab.product_progress import publish_checkpoint
+
+            metrics: dict[str, int | str] = {
+                "stage": str(stage)[:80],
+                "milestone": milestone[:80],
+            }
+            for key in ("completed", "total"):
+                value = (details or {}).get(key)
+                if isinstance(value, int):
+                    metrics[key] = value
+            publish_checkpoint(
+                private_root,
+                component="farm_progress",
+                sequence=max(1, int(now * 1_000_000)),
+                status="progress",
+                metrics=metrics,
+                completed_at=now,
+            )
     return published
 
 
@@ -2559,6 +2578,18 @@ def _run_once(
             "last_summary": _cycle_summary(out),
         },
     )
+    if apply:
+        from src.research_lab.product_progress import farm_metrics, publish_checkpoint
+
+        completed_at = time.time()
+        publish_checkpoint(
+            private_root,
+            component="farm",
+            sequence=max(1, int(completed_at * 1_000_000)),
+            status="completed" if not out.get("errors") else "degraded",
+            metrics=farm_metrics(out),
+            completed_at=completed_at,
+        )
     return out
 
 

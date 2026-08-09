@@ -94,6 +94,11 @@ CANONICAL_MONITORING_LANES: tuple[CanaryMonitoringLaneSpec, ...] = (
         max_sample_gap_seconds=300.0,
         permits_database_snapshot=True,
     ),
+    CanaryMonitoringLaneSpec(
+        name="product_progress",
+        max_sample_gap_seconds=90.0,
+        permits_database_snapshot=False,
+    ),
 )
 
 
@@ -338,17 +343,20 @@ class CanaryMonitoringService:
         *,
         fast_probe: Callable[[], Mapping[str, object]],
         deep_probe: Callable[[], Mapping[str, object]],
+        product_probe: Callable[[], Mapping[str, object]],
         on_sample: LaneSampleCallback,
         on_failure: LaneFailureCallback,
         started_at: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         fast_interval_seconds: float = 5.0,
         deep_interval_seconds: float = 60.0,
+        product_interval_seconds: float = 30.0,
         supervisor_interval_seconds: float = 0.25,
     ) -> None:
         if min(
             fast_interval_seconds,
             deep_interval_seconds,
+            product_interval_seconds,
             supervisor_interval_seconds,
         ) <= 0:
             raise ValueError("monitoring intervals must be positive")
@@ -358,10 +366,12 @@ class CanaryMonitoringService:
         self._probes = {
             "fast_safety": fast_probe,
             "deep_database": deep_probe,
+            "product_progress": product_probe,
         }
         self._intervals = {
             "fast_safety": float(fast_interval_seconds),
             "deep_database": float(deep_interval_seconds),
+            "product_progress": float(product_interval_seconds),
         }
         self._supervisor_interval = float(supervisor_interval_seconds)
         self._on_sample = on_sample

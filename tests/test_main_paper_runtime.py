@@ -3,6 +3,10 @@ import json
 from pathlib import Path
 
 from src.research_lab.main_paper_runtime import observe_main_paper_runtime
+from src.research_lab.paper_generation_contract import (
+    PaperGenerationContext,
+    stage_envelope,
+)
 from src.research_lab.providers.okx_public import MarketDataError
 
 
@@ -162,9 +166,71 @@ def test_main_paper_runtime_provider_error_keeps_instrument_context(tmp_path):
     assert item["timeframe"] == "15m"
     assert item["setup_family"] == "early_tp_tactical"
     assert item["source"] == "pfr_farm"
-    assert "MarketDataError" in item["error"]
+    assert item["error"] == ""
+    assert item["market_data_status"] == "provider_error"
+    assert item["outcome_evidence_kind"] == "operational_incident"
+    assert item["outcome"] == {}
     assert item["paper_only"] is True
     assert item["execution_allowed"] is False
+
+
+def test_main_paper_runtime_classifies_empty_and_gapped_data_as_operational(tmp_path):
+    _write_queue(tmp_path, [_queue_item()])
+    empty = observe_main_paper_runtime(
+        tmp_path,
+        provider=FakeProvider([]),
+        now_ms=2_000_000,
+    )
+    assert empty["genuine_no_market_data"] == 1
+    assert empty["items"][0]["outcome_evidence_kind"] == "operational_incident"
+    assert empty["items"][0]["outcome"] == {}
+
+    candles = [
+        {"ts": 1_000_000, "open": 99.0, "high": 100.0, "low": 98.0, "close": 99.5, "vol": 1},
+        {"ts": 2_800_000, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "vol": 1},
+    ]
+    gapped = observe_main_paper_runtime(
+        tmp_path,
+        provider=FakeProvider(candles),
+        now_ms=3_000_000,
+    )
+    assert gapped["data_gap"] == 1
+    assert gapped["items"][0]["outcome_evidence_kind"] == "operational_incident"
+
+
+def test_v2_provider_failure_has_no_observation_or_lifecycle_side_effect(tmp_path):
+    row = _queue_item() | {
+        "paper_generation_run_id": "run-v2",
+        "source_producer_generation_id": "producer-v2",
+    }
+    context = PaperGenerationContext("run-v2", "producer-v2", "sha256:input")
+    payload = {
+        "schema": "main_paper_runtime_adapter.v1",
+        "paper_only": True,
+        "execution_allowed": False,
+        "items": [row],
+        **stage_envelope("queue", context, [row]),
+    }
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "main_paper_runtime_queue.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    persisted: list[dict] = []
+
+    summary = observe_main_paper_runtime(
+        tmp_path,
+        provider=ErrorProvider(),
+        now_ms=2_000_000,
+        expected_run_id="run-v2",
+        expected_input_digest="sha256:input",
+        persist_observation=lambda _row, manifest: persisted.append(manifest) or manifest,
+    )
+
+    assert summary["provider_error"] == 1
+    assert persisted == []
+    assert summary["items"][0]["outcome"] == {}
+    assert "observation_manifest" not in summary["items"][0]
 
 
 def test_main_paper_runtime_has_no_live_order_imports():

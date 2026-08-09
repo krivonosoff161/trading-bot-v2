@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `5c9ee576c3625955764da042e81c117b4ef43d3f`
+- Verified against: `3d0ffc1b9e0311756e6ecf879c11e228dbad3501`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -57,6 +57,12 @@ dependency, not by a route to live trading.
   mismatch fails closed. Public code provides shadow-parity, activation, status,
   and non-destructive pre-runtime rollback primitives, but no private cutover
   has yet been applied.
+- Scanner passes and completed farm cycles publish atomic, secret-free product
+  checkpoints. The RCC supervises them on an independent lane: ordinary PIDs
+  and heartbeats cannot establish T+0 or refresh a product SLO. Honest zero
+  output is `idle`, public-provider loss is `degraded`, and stale stages,
+  validation oldest-age breach, cross-generation races, or retained technical
+  learning rows fail closed.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies
@@ -79,8 +85,8 @@ private runtime, data, or trading hypothesis is proven.
 3. Apply the now-implemented Paper Evidence v2 private cutover only through the
    separately authorized quiescent backup/restore, shadow-parity, integrity,
    and exact-revision operational gate.
-4. Monitor end-to-end product progress and generation freshness rather than PID
-   liveness alone, including deterministic chaos scenarios.
+4. Verify the implemented end-to-end product-progress and generation-freshness
+   monitor under the private canary; PID liveness alone is not readiness.
 5. Apply bounded private storage rotation only after exact backup, restore,
    digest, interruption, and idempotent cleanup proofs.
 

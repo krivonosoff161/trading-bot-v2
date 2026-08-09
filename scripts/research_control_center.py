@@ -36,6 +36,7 @@ from src.research_lab.canary_checkpoint_policy import (
 )
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
 from src.research_lab.ownership import current_process_identity, probe_process_identity
+from src.research_lab.product_progress import ProductProgressMonitor
 from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
 from src.research_lab.windows_listener_probe import (
     ListenerProbeStageEvent,
@@ -818,6 +819,9 @@ class ControlCenter(tk.Tk):
         self._runtime_monitor: CanaryMonitoringService | None = None
         self._runtime_owner_monitor: CanonicalOwnerSafetyMonitor | None = None
         self._runtime_monitor_started_at: float | None = None
+        self._runtime_monitor_wall_started_at: float | None = None
+        self._product_progress_monitor: ProductProgressMonitor | None = None
+        self._product_progress_ready = False
         self._runtime_ready = False
         self._runtime_lane_states: dict[str, str] = {}
         self._runtime_probe_stage_lock = threading.Lock()
@@ -1492,15 +1496,24 @@ class ControlCenter(tk.Tk):
         if stop_intent_fresh and not self._closing:
             raise CanaryMonitorHardFailure("canonical_stop_intent_during_runtime")
 
-        ready = contours_ready and owner.ready and listener_ready and supervisor_ready
+        product_ready = bool(self._product_progress_ready)
+        if not product_ready and elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS:
+            raise CanaryMonitorHardFailure("product_progress_startup_timeout")
+        ready = (
+            contours_ready
+            and owner.ready
+            and listener_ready
+            and supervisor_ready
+            and product_ready
+        )
         if ready and not self._runtime_ready:
             self._runtime_ready = True
             self.events.put(
                 (
                     self.selected_key,
                     "log",
-                    "T+0 READY: canonical profile, Ollama listener, and "
-                    "identity-matched fenced farm owner are green",
+                    "T+0 READY: canonical profile, product progress, Ollama "
+                    "listener, and identity-matched fenced farm owner are green",
                 )
             )
         state = (
@@ -1512,6 +1525,8 @@ class ControlCenter(tk.Tk):
             if not listener_ready
             else "process_starting"
             if not supervisor_ready
+            else "product_starting"
+            if not product_ready
             else owner.state
         )
         return {
@@ -1522,6 +1537,7 @@ class ControlCenter(tk.Tk):
             "lease_supervisor_state": supervisor_state or "pending",
             "lease_supervisor_age_seconds": supervisor_age,
             "ollama_listener_ready": listener_ready,
+            "product_progress_ready": product_ready,
             "paper_only": True,
             "execution_allowed": False,
         }
@@ -1556,7 +1572,19 @@ class ControlCenter(tk.Tk):
                 connection.close()
         return {"database_count": len(sizes), "database_sizes": sizes}
 
+    def _product_runtime_progress_probe(self) -> dict[str, object]:
+        monitor = self._product_progress_monitor
+        if monitor is None:
+            raise RuntimeError("product progress monitor was not initialized")
+        report = monitor.sample()
+        reasons = report.get("hard_fail_reasons")
+        if isinstance(reasons, list) and reasons:
+            raise CanaryMonitorHardFailure(str(reasons[0])[:160])
+        return report
+
     def _on_runtime_monitor_sample(self, sample: CanaryLaneSample) -> None:
+        if sample.lane == "product_progress":
+            self._product_progress_ready = bool(sample.payload.get("ready") is True)
         prior = self._runtime_lane_states.get(sample.lane)
         self._runtime_lane_states[sample.lane] = sample.state
         if prior != sample.state:
@@ -1584,6 +1612,12 @@ class ControlCenter(tk.Tk):
         ):
             return
         self._runtime_monitor_started_at = time.monotonic()
+        self._runtime_monitor_wall_started_at = time.time()
+        self._product_progress_ready = False
+        self._product_progress_monitor = ProductProgressMonitor(
+            PRIVATE_ROOT,
+            run_started_at=self._runtime_monitor_wall_started_at,
+        )
         self._runtime_owner_monitor = CanonicalOwnerSafetyMonitor(
             rows_reader=self._read_active_authority_rows,
             identity_probe=probe_process_identity,
@@ -1592,10 +1626,12 @@ class ControlCenter(tk.Tk):
         monitor = CanaryMonitoringService(
             fast_probe=self._fast_runtime_safety_probe,
             deep_probe=self._deep_runtime_safety_probe,
+            product_probe=self._product_runtime_progress_probe,
             on_sample=self._on_runtime_monitor_sample,
             on_failure=self._on_runtime_monitor_failure,
             fast_interval_seconds=5.0,
             deep_interval_seconds=60.0,
+            product_interval_seconds=30.0,
         )
         self._runtime_monitor = monitor
         monitor.start()
@@ -1605,6 +1641,9 @@ class ControlCenter(tk.Tk):
         self._runtime_monitor = None
         self._runtime_owner_monitor = None
         self._runtime_monitor_started_at = None
+        self._runtime_monitor_wall_started_at = None
+        self._product_progress_monitor = None
+        self._product_progress_ready = False
         self._runtime_ready = False
         self._runtime_lane_states = {}
         self._requested_profile_keys = set()

@@ -127,6 +127,13 @@ automatically restarted. Exits observed after a newer canonical stop intent are
 classified as part of the coordinated stop rather than as a second root-cause
 alert.
 
+Product readiness is a separate contract. Scanner passes and completed farm
+cycles atomically publish only bounded counts and generation/SLO invariants to
+`state/product_progress`; they contain no market rows, paths, recipients, or
+credentials. RCC samples this lane independently from process and SQLite
+health. T+0 requires checkpoints produced after this RCC run began, so a live
+PID or timer heartbeat cannot hide a stuck product chain.
+
 Canonical farm and standalone-worker mutation authority is persisted in
 `ownership.sqlite` as an exact process identity, random owner instance,
 renewable expiry and monotonically increasing fence. All apply modes, including

@@ -554,6 +554,7 @@ def export_training_rows(
         "source_terminal_rows_discovered": len(source_terminal_all),
         "source_terminal_rows_technical_censored": source_terminal_technical,
         "referenced_operational_rows_censored": referenced_technical_censored,
+        "operational_rows_retained": 0,
         "source_terminal_rows_unbound": len(source_terminal_market) - len(source_terminal),
         "source_terminal_hash": source_terminal_hash,
         "export_refs_hash": export_refs_hash,

@@ -27,6 +27,13 @@ from src.research_lab.paper_generation_contract import (
 )
 from src.research_lab.paper_signals import lane
 from src.research_lab.paper_signals.contract import PaperActionSignal, validate_signal
+from src.research_lab.paper_signals.outcome_evidence import (
+    EVIDENCE_OPERATIONAL_INCIDENT,
+    STATUS_DATA_GAP,
+    STATUS_GENUINE_NO_MARKET_DATA,
+    STATUS_PROVIDER_ERROR,
+    classify_market_data_rows,
+)
 from src.research_lab.providers.okx_public import MarketDataError, OkxPublicMarketDataProvider
 
 SUMMARY_SCHEMA = "main_paper_runtime_observation.v1"
@@ -191,7 +198,8 @@ def observe_main_paper_runtime(
         "invalid": 0,
         "provider_error": 0,
         "no_elapsed_bars": 0,
-        "no_data": 0,
+        "data_gap": 0,
+        "genuine_no_market_data": 0,
     }
 
     for row in rows:
@@ -202,11 +210,17 @@ def observe_main_paper_runtime(
                 items.append(_item_result(row, sig, "pending_clock", [], now_ms, provider))
                 continue
             candles = _fetch_window(sig, provider, now_ms)
-            if not candles:
-                counts["no_data"] += 1
-                sig.outcome = {"result": "no_data"}
-                items.append(_item_result(row, sig, "no_data", candles, now_ms, provider))
+            observation = classify_market_data_rows(
+                candles,
+                timeframe_ms=TF_MS[sig.timeframe],
+            )
+            if not observation.usable:
+                counts[observation.status] += 1
+                items.append(
+                    _operational_result(row, observation.status, observation.reason)
+                )
                 continue
+            candles = list(observation.rows)
             manifest = _observation_manifest(sig, candles, now_ms, provider)
             if generation_context is not None:
                 if persist_observation is None:
@@ -246,7 +260,13 @@ def observe_main_paper_runtime(
             items.append(_error_result(row, "invalid", str(exc)))
         except (MarketDataError, OSError, TimeoutError) as exc:
             counts["provider_error"] += 1
-            items.append(_error_result(row, "provider_error", f"{type(exc).__name__}:{exc}"))
+            items.append(
+                _operational_result(
+                    row,
+                    STATUS_PROVIDER_ERROR,
+                    f"public_provider_{type(exc).__name__}",
+                )
+            )
 
     if generation_context is not None:
         for item in items:
@@ -312,6 +332,27 @@ def _error_result(row: dict[str, Any], status: str, error: str) -> dict[str, Any
         "paper_only": True,
         "execution_allowed": False,
         **_generation_refs(row),
+    }
+
+
+def _operational_result(
+    row: dict[str, Any],
+    status: str,
+    reason: str,
+) -> dict[str, Any]:
+    if status not in {
+        STATUS_PROVIDER_ERROR,
+        STATUS_DATA_GAP,
+        STATUS_GENUINE_NO_MARKET_DATA,
+    }:
+        raise ValueError("unsupported operational market-data status")
+    return {
+        **_error_result(row, status, ""),
+        "signal_status": str(row.get("status") or ""),
+        "market_data_status": status,
+        "outcome_evidence_kind": EVIDENCE_OPERATIONAL_INCIDENT,
+        "reason": str(reason)[:120],
+        "error": "",
     }
 
 
