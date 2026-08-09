@@ -26,7 +26,10 @@ import uuid
 from typing import Any, Iterable, Mapping, Sequence, TextIO
 
 from src.research_lab.archive_catalog import ArchiveCatalog, ArchiveCatalogError
-from src.research_lab.private_archive_capability import load_private_archive_capability
+from src.research_lab.private_archive_capability import (
+    RETENTION_RECLAMATION_ROLE,
+    load_private_archive_capability,
+)
 from src.research_lab.storage_capability import (
     canonical_json,
     content_digest,
@@ -217,6 +220,10 @@ def activate_runtime_storage(
         raise RuntimeStorageError("archive capability does not cover runtime streams")
     if not authority.synthetic and archive_capability.synthetic:
         raise RuntimeStorageError("synthetic archive capability cannot serve production")
+    if archive_capability.storage_role != RETENTION_RECLAMATION_ROLE:
+        raise RuntimeStorageError(
+            "runtime storage requires a retention-reclamation archive capability"
+        )
     if not streams or len({item.stream_id for item in streams}) != len(streams):
         raise RuntimeStorageError("runtime stream registry is empty or duplicated")
     for item in streams:
@@ -323,6 +330,10 @@ def load_runtime_storage_capability(source_root: Path) -> RuntimeStorageCapabili
     archive = load_private_archive_capability(Path(str(value.get("archive_root"))))
     if archive.capability_digest != value.get("archive_capability_digest") or os.path.normcase(archive.source_root) != os.path.normcase(str(source)):
         raise RuntimeStorageError("runtime archive binding drift")
+    if archive.storage_role != RETENTION_RECLAMATION_ROLE:
+        raise RuntimeStorageError(
+            "runtime archive role is not retention-reclamation"
+        )
     capability = RuntimeStorageCapability(**value, streams=streams, capability_digest=digest)
     if (
         not _SHA.fullmatch(capability.source_revision)
@@ -872,6 +883,9 @@ def storage_budget_status(capability: RuntimeStorageCapability) -> dict[str, Any
     archive_bytes = sum(path.stat().st_size for path in archive_files)
     source_free_bytes = int(shutil.disk_usage(root).free)
     archive_free_bytes = int(shutil.disk_usage(archive).free)
+    archive_capability = load_private_archive_capability(archive)
+    if archive_capability.storage_role != RETENTION_RECLAMATION_ROLE:
+        raise RuntimeStorageError("runtime archive role is not retention-reclamation")
     state = "ready"
     problems: list[str] = []
     if source_bytes > capability.source_budget_bytes:
@@ -897,6 +911,8 @@ def storage_budget_status(capability: RuntimeStorageCapability) -> dict[str, Any
         "minimum_source_free_bytes": capability.minimum_source_free_bytes,
         "archive_free_bytes": archive_free_bytes,
         "minimum_archive_free_bytes": capability.minimum_archive_free_bytes,
+        "archive_storage_role": archive_capability.storage_role,
+        "disaster_recovery_claim": False,
         "problems": problems,
     }
 

@@ -24,10 +24,17 @@ from src.research_lab.storage_capability import (
 )
 
 
-AUTHORITY_SCHEMA = "PrivateArchiveOwnerAuthority.v1"
-CAPABILITY_SCHEMA = "PrivateArchiveRootCapability.v1"
+AUTHORITY_SCHEMA = "PrivateArchiveOwnerAuthority.v2"
+CAPABILITY_SCHEMA = "PrivateArchiveRootCapability.v2"
+LEGACY_CAPABILITY_SCHEMA = "PrivateArchiveRootCapability.v1"
 POLICY_ID = "private_archive_storage.v1"
 CONTROL_DIR = ".archive-v1"
+RETENTION_RECLAMATION_ROLE = "retention_reclamation"
+DISASTER_RECOVERY_ROLE = "disaster_recovery"
+ALLOWED_STORAGE_ROLES = (
+    DISASTER_RECOVERY_ROLE,
+    RETENTION_RECLAMATION_ROLE,
+)
 ALLOWED_KINDS = (
     "derived_artifact",
     "project_brain_events",
@@ -59,6 +66,7 @@ class PrivateArchiveAuthority:
     expires_at: float
     turn_id: str
     authority_id: str
+    storage_role: str
     synthetic: bool = False
 
     def payload(self) -> dict[str, Any]:
@@ -86,12 +94,15 @@ class PrivateArchiveCapability:
     allowed_sensitivity: tuple[str, ...]
     authority_id: str
     authority_digest: str
+    storage_role: str
     synthetic: bool
     capability_digest: str
 
     def payload(self) -> dict[str, Any]:
         value = asdict(self)
         value.pop("capability_digest")
+        if self.schema == LEGACY_CAPABILITY_SCHEMA:
+            value.pop("storage_role")
         value["allowed_kinds"] = list(self.allowed_kinds)
         value["allowed_sensitivity"] = list(self.allowed_sensitivity)
         return value
@@ -137,6 +148,8 @@ def _validate_authority(
         item not in ALLOWED_KINDS for item in authority.allowed_kinds
     ):
         raise PrivateArchiveCapabilityError("archive authority kind scope is invalid")
+    if authority.storage_role not in ALLOWED_STORAGE_ROLES:
+        raise PrivateArchiveCapabilityError("archive authority storage role is invalid")
     if os.path.normcase(authority.source_root) != os.path.normcase(str(source_root)):
         raise PrivateArchiveCapabilityError("archive authority source root mismatch")
     if os.path.normcase(authority.archive_root) != os.path.normcase(str(archive_root)):
@@ -164,8 +177,9 @@ def activate_private_archive_root(
 ) -> PrivateArchiveCapability:
     """Bind one empty dedicated archive root to one exact owner manifest.
 
-    Non-synthetic activation requires a distinct filesystem from the source.
-    The current repository exposes no command that calls this function.
+    Disaster-recovery activation requires a distinct filesystem from the
+    source. Same-filesystem activation is allowed only for an explicitly
+    owner-authorized retention/reclamation surface and never implies DR.
     """
 
     source = _exact_directory(source_root, label="source root")
@@ -177,9 +191,12 @@ def activate_private_archive_root(
     _validate_authority(authority, source_root=source, archive_root=archive, now=now)
     source_fs = filesystem_identity(source)
     archive_fs = filesystem_identity(archive)
-    if not authority.synthetic and source_fs == archive_fs:
+    if (
+        authority.storage_role == DISASTER_RECOVERY_ROLE
+        and source_fs == archive_fs
+    ):
         raise PrivateArchiveCapabilityError(
-            "non-synthetic archive root must use a distinct filesystem"
+            "disaster-recovery archive root must use a distinct filesystem"
         )
 
     root_id = "archive_" + content_digest(
@@ -203,6 +220,7 @@ def activate_private_archive_root(
         "allowed_sensitivity": list(ALLOWED_SENSITIVITY),
         "authority_id": authority.authority_id,
         "authority_digest": authority.digest,
+        "storage_role": authority.storage_role,
         "synthetic": bool(authority.synthetic),
     }
     capability_digest = content_digest(payload)
@@ -251,6 +269,10 @@ def load_private_archive_capability(root: Path) -> PrivateArchiveCapability:
     if not isinstance(manifest, dict) or not isinstance(marker, dict):
         raise PrivateArchiveCapabilityError("archive capability shape is invalid")
     expected_manifest_keys = set(PrivateArchiveCapability.__dataclass_fields__)
+    schema = manifest.get("schema")
+    legacy = schema == LEGACY_CAPABILITY_SCHEMA
+    if legacy:
+        expected_manifest_keys.remove("storage_role")
     if set(manifest) != expected_manifest_keys:
         raise PrivateArchiveCapabilityError("archive capability key set is invalid")
     digest = str(manifest.pop("capability_digest", ""))
@@ -259,7 +281,7 @@ def load_private_archive_capability(root: Path) -> PrivateArchiveCapability:
     expected_root = str(archive)
     expected_fs = filesystem_identity(archive)
     if (
-        manifest.get("schema") != CAPABILITY_SCHEMA
+        schema not in {CAPABILITY_SCHEMA, LEGACY_CAPABILITY_SCHEMA}
         or manifest.get("policy_id") != POLICY_ID
         or manifest.get("project_id") != "trading-bot-v2"
         or manifest.get("canonical_root") != expected_root
@@ -286,6 +308,16 @@ def load_private_archive_capability(root: Path) -> PrivateArchiveCapability:
         raise PrivateArchiveCapabilityError("archive root marker mismatch")
     kinds = tuple(manifest.get("allowed_kinds") or ())
     sensitivity = tuple(manifest.get("allowed_sensitivity") or ())
+    storage_role = manifest.get("storage_role")
+    if legacy:
+        # V1 production capabilities were created only after a strict
+        # filesystem-separation check. Preserve them as DR; synthetic V1
+        # fixtures carry no production claim and remain retention-only.
+        storage_role = (
+            RETENTION_RECLAMATION_ROLE
+            if bool(manifest.get("synthetic"))
+            else DISASTER_RECOVERY_ROLE
+        )
     if (
         not kinds
         or tuple(sorted(set(kinds))) != kinds
@@ -294,13 +326,16 @@ def load_private_archive_capability(root: Path) -> PrivateArchiveCapability:
         raise PrivateArchiveCapabilityError("archive capability kind scope is invalid")
     if sensitivity != ALLOWED_SENSITIVITY:
         raise PrivateArchiveCapabilityError("archive sensitivity policy mismatch")
+    if storage_role not in ALLOWED_STORAGE_ROLES:
+        raise PrivateArchiveCapabilityError("archive capability storage role is invalid")
     source = _exact_directory(Path(str(manifest.get("source_root"))), label="source root")
     if manifest.get("source_filesystem_identity") != filesystem_identity(source):
         raise PrivateArchiveCapabilityError("archive source filesystem identity drift")
-    if not bool(manifest.get("synthetic")) and filesystem_identity(source) == expected_fs:
+    if storage_role == DISASTER_RECOVERY_ROLE and filesystem_identity(source) == expected_fs:
         raise PrivateArchiveCapabilityError(
-            "non-synthetic archive root lost filesystem separation"
+            "disaster-recovery archive root lost filesystem separation"
         )
+    manifest["storage_role"] = storage_role
     return PrivateArchiveCapability(
         **{
             **manifest,
