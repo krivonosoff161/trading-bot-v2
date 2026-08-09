@@ -104,6 +104,10 @@ def main(argv: list[str] | None = None) -> int:
                     "source_revision": capability.source_revision,
                     "stream_count": len(capability.streams),
                     "capability_digest": capability.capability_digest,
+                    "archive_storage_role": load_private_archive_capability(
+                        Path(capability.archive_root)
+                    ).storage_role,
+                    "disaster_recovery_claim": False,
                 }
             )
             return 0

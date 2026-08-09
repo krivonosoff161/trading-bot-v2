@@ -20,11 +20,15 @@ from src.research_lab.archive_migration import (
 )
 from src.research_lab.private_archive_capability import (
     AUTHORITY_SCHEMA,
+    LEGACY_CAPABILITY_SCHEMA,
+    DISASTER_RECOVERY_ROLE,
+    RETENTION_RECLAMATION_ROLE,
     PrivateArchiveAuthority,
     PrivateArchiveCapabilityError,
     activate_private_archive_root,
     load_private_archive_capability,
 )
+from src.research_lab.storage_capability import canonical_json, content_digest
 
 
 SHA = "1" * 40
@@ -40,6 +44,7 @@ def _authority(
     action: str = "activate_private_archive_storage",
     project_id: str = "trading-bot-v2",
     synthetic: bool = True,
+    storage_role: str = RETENTION_RECLAMATION_ROLE,
 ) -> PrivateArchiveAuthority:
     return PrivateArchiveAuthority(
         schema=AUTHORITY_SCHEMA,
@@ -56,6 +61,7 @@ def _authority(
         expires_at=expires_at,
         turn_id="turn-phase0",
         authority_id="owner_" + "a" * 32,
+        storage_role=storage_role,
         synthetic=synthetic,
     )
 
@@ -162,21 +168,138 @@ def test_private_archive_capability_requires_exact_fresh_owner_scope(
     assert load_private_archive_capability(archive) == capability
 
 
-def test_non_synthetic_activation_rejects_same_filesystem(tmp_path: Path) -> None:
+def test_owner_authorized_non_synthetic_retention_allows_same_filesystem(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    archive = tmp_path / "archive"
+    source.mkdir()
+    archive.mkdir()
+
+    capability = activate_private_archive_root(
+        archive,
+        source_root=source,
+        authority=_authority(
+            source,
+            archive,
+            synthetic=False,
+            storage_role=RETENTION_RECLAMATION_ROLE,
+        ),
+        now=NOW,
+    )
+
+    assert capability.storage_role == RETENTION_RECLAMATION_ROLE
+    assert capability.synthetic is False
+    assert capability.filesystem_identity == capability.source_filesystem_identity
+
+
+@pytest.mark.parametrize("synthetic", [False, True])
+def test_disaster_recovery_rejects_same_filesystem(
+    tmp_path: Path, synthetic: bool
+) -> None:
     source = tmp_path / "source"
     archive = tmp_path / "archive"
     source.mkdir()
     archive.mkdir()
 
     with pytest.raises(
-        PrivateArchiveCapabilityError, match="distinct filesystem"
+        PrivateArchiveCapabilityError, match="disaster-recovery.*distinct filesystem"
     ):
         activate_private_archive_root(
             archive,
             source_root=source,
-            authority=_authority(source, archive, synthetic=False),
+            authority=_authority(
+                source,
+                archive,
+                synthetic=synthetic,
+                storage_role=DISASTER_RECOVERY_ROLE,
+            ),
             now=NOW,
         )
+
+
+def test_disaster_recovery_accepts_only_distinct_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    archive = tmp_path / "archive"
+    source.mkdir()
+    archive.mkdir()
+
+    def identity(path: Path) -> dict[str, int]:
+        return (
+            {"device": 1, "volume_serial": 1}
+            if Path(path).name == "source"
+            else {"device": 2, "volume_serial": 2}
+        )
+
+    monkeypatch.setattr(
+        "src.research_lab.private_archive_capability.filesystem_identity", identity
+    )
+    capability = activate_private_archive_root(
+        archive,
+        source_root=source,
+        authority=_authority(
+            source,
+            archive,
+            synthetic=False,
+            storage_role=DISASTER_RECOVERY_ROLE,
+        ),
+        now=NOW,
+    )
+
+    assert capability.storage_role == DISASTER_RECOVERY_ROLE
+    assert capability.filesystem_identity != capability.source_filesystem_identity
+
+
+def test_unknown_archive_storage_role_fails_closed(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    archive = tmp_path / "archive"
+    source.mkdir()
+    archive.mkdir()
+
+    with pytest.raises(PrivateArchiveCapabilityError, match="storage role"):
+        activate_private_archive_root(
+            archive,
+            source_root=source,
+            authority=_authority(source, archive, storage_role="unspecified"),
+            now=NOW,
+        )
+
+
+def test_legacy_synthetic_capability_loads_as_retention_without_dr_claim(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    archive = tmp_path / "archive"
+    source.mkdir()
+    archive.mkdir()
+    activate_private_archive_root(
+        archive,
+        source_root=source,
+        authority=_authority(source, archive),
+        now=NOW,
+    )
+    capability_path = archive / ".archive-v1" / "capability.json"
+    marker_path = archive / ".archive-v1" / "marker.json"
+    manifest = json.loads(capability_path.read_text(encoding="utf-8"))
+    manifest["schema"] = LEGACY_CAPABILITY_SCHEMA
+    manifest.pop("storage_role")
+    manifest.pop("capability_digest")
+    digest = content_digest(manifest)
+    capability_path.write_text(
+        canonical_json({**manifest, "capability_digest": digest}),
+        encoding="utf-8",
+    )
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["capability_digest"] = digest
+    marker_path.write_text(canonical_json(marker), encoding="utf-8")
+
+    loaded = load_private_archive_capability(archive)
+
+    assert loaded.schema == LEGACY_CAPABILITY_SCHEMA
+    assert loaded.storage_role == RETENTION_RECLAMATION_ROLE
+    assert loaded.synthetic is True
 
 
 def test_capability_has_no_default_path_or_environment_discovery(

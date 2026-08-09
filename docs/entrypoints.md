@@ -25,13 +25,16 @@ No entrypoint grants live trading authority.
 | Build cleanup plan | `python -m scripts.strategy_lab.manage_backup_retention plan --backup-root <exact-root> --archive-root <exact-root> --retain-generation <verified-name> --retain-evidence-sha256 <sha256> --output <plan>` | Hashes and classifies every quiescent backup file without deleting it; the retained generation is bound to separate integrity/restore evidence. |
 | Apply exact plan | `python -m scripts.strategy_lab.manage_backup_retention apply --plan <plan> --authority <typed-authority> --expected-plan-digest <sha256>` | Archives, restore-verifies, then removes only plan-bound source files. |
 | Verify archive | `python -m scripts.strategy_lab.manage_backup_retention verify --plan <plan>` | Independently decompresses and hashes all archived plan objects. |
-| Activate bounded runtime streams | `python -m scripts.strategy_lab.runtime_storage_rotation --source-root <exact-private-root> activate --archive-root <exact-archive-root> --authority-file <safe-runtime-manifest> [--archive-authority-file <safe-archive-manifest>]` | Separately owner-gated cutover. An empty archive root may be initialized only with its own exact authority file; an existing root must already cover every registered stream. The runtime binding pins the exact implementation revision and never discovers roots from environment. |
+| Activate bounded runtime streams | `python -m scripts.strategy_lab.runtime_storage_rotation --source-root <exact-private-root> activate --archive-root <exact-archive-root> --authority-file <safe-runtime-manifest> [--archive-authority-file <safe-archive-manifest>]` | Separately owner-gated cutover. The archive manifest must explicitly declare `storage_role=retention_reclamation`; an empty archive root may be initialized only with its own exact authority file, and an existing root must already cover every registered stream. The runtime binding pins the exact implementation revision and never discovers roots from environment. |
 | Check runtime-stream budget | `python -m scripts.strategy_lab.runtime_storage_rotation --source-root <exact-private-root> status` | Read-only source/archive byte budgets plus separate free-space floors for both volumes; exit code 2 is a canary block. |
 | Drain sealed runtime segments | `python -m scripts.strategy_lab.runtime_storage_rotation --source-root <exact-private-root> maintain` | Archives only writer-sealed segments; release follows content hash plus gzip restore proof. Interruption leaves a recoverable pending segment. |
 | Verify runtime archive | `python -m scripts.strategy_lab.runtime_storage_rotation --source-root <exact-private-root> verify` | Revalidates immutable objects and requires restore proof for every runtime-storage manifest. |
 
-The same-volume archive is a reclamation/evidence surface, not a replacement
-for the retained full backup or an independent disaster-recovery copy. These
+The same-volume archive is permitted only as an explicitly owner-authorized
+`retention_reclamation` evidence surface. It is not a replacement for the
+retained full backup or an independent disaster-recovery copy. A
+`disaster_recovery` archive remains fail-closed unless its filesystem is
+distinct from the source. These
 commands never start RCC, discover private roots, or mutate canonical databases.
 
 ## Canonical Supervisor

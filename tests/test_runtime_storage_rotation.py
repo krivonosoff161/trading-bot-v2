@@ -9,11 +9,16 @@ import time
 
 import pytest
 
-from scripts.strategy_lab.runtime_storage_rotation import main as storage_cli_main
+from scripts.strategy_lab.runtime_storage_rotation import (
+    _archive_authority,
+    main as storage_cli_main,
+)
 
 from src.research_lab.archive_catalog import ArchiveCatalog, ArchiveCatalogError
 from src.research_lab.private_archive_capability import (
     AUTHORITY_SCHEMA as ARCHIVE_AUTHORITY_SCHEMA,
+    DISASTER_RECOVERY_ROLE,
+    RETENTION_RECLAMATION_ROLE,
     PrivateArchiveAuthority,
     activate_private_archive_root,
 )
@@ -106,6 +111,7 @@ def _activated(tmp_path: Path, *, cap: int = 180, budget: int = 10_000_000):
         expires_at=300.0,
         turn_id="synthetic-storage-test",
         authority_id="owner_" + "a" * 32,
+        storage_role=RETENTION_RECLAMATION_ROLE,
         synthetic=True,
     )
     activate_private_archive_root(
@@ -145,6 +151,9 @@ def _activated(tmp_path: Path, *, cap: int = 180, budget: int = 10_000_000):
         now=151.0,
         streams=policies,
     ) == capability
+    status = storage_budget_status(capability)
+    assert status["archive_storage_role"] == RETENTION_RECLAMATION_ROLE
+    assert status["disaster_recovery_claim"] is False
     return capability, source, archive
 
 
@@ -158,6 +167,166 @@ def _rows_from_archive(archive: Path) -> list[dict]:
                 if line.strip().startswith("{"):
                     rows.append(json.loads(line))
     return rows
+
+
+def test_runtime_storage_rejects_disaster_recovery_archive_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    archive = tmp_path / "archive"
+    source.mkdir()
+    archive.mkdir()
+
+    def identity(path: Path) -> dict[str, int]:
+        return (
+            {"device": 1, "volume_serial": 1}
+            if Path(path).name == "source"
+            else {"device": 2, "volume_serial": 2}
+        )
+
+    monkeypatch.setattr(
+        "src.research_lab.private_archive_capability.filesystem_identity", identity
+    )
+    archive_authority = PrivateArchiveAuthority(
+        schema=ARCHIVE_AUTHORITY_SCHEMA,
+        project_id="trading-bot-v2",
+        action="activate_private_archive_storage",
+        source_root=str(source.resolve()),
+        archive_root=str(archive.resolve()),
+        allowed_kinds=tuple(sorted({item.kind for item in _policies()})),
+        issued_at=100.0,
+        expires_at=300.0,
+        turn_id="synthetic-storage-test",
+        authority_id="owner_" + "9" * 32,
+        storage_role=DISASTER_RECOVERY_ROLE,
+        synthetic=True,
+    )
+    activate_private_archive_root(
+        archive,
+        source_root=source,
+        authority=archive_authority,
+        now=150.0,
+    )
+    authority = RuntimeStorageAuthority(
+        schema=AUTHORITY_SCHEMA,
+        project_id="trading-bot-v2",
+        action="activate_runtime_storage_rotation",
+        source_root=str(source.resolve()),
+        archive_root=str(archive.resolve()),
+        source_revision=SHA,
+        issued_at=100.0,
+        expires_at=300.0,
+        turn_id="synthetic-storage-test",
+        authority_id="owner_" + "8" * 32,
+        source_budget_bytes=10_000_000,
+        archive_budget_bytes=10_000_000,
+        minimum_source_free_bytes=0,
+        minimum_archive_free_bytes=0,
+        synthetic=True,
+    )
+
+    with pytest.raises(RuntimeStorageError, match="retention-reclamation"):
+        activate_runtime_storage(
+            source,
+            archive_root=archive,
+            authority=authority,
+            now=150.0,
+            streams=_policies(),
+        )
+
+
+def test_production_runtime_accepts_same_filesystem_retention_role(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    archive = tmp_path / "archive"
+    source.mkdir()
+    archive.mkdir()
+    policies = _policies()
+    archive_authority = PrivateArchiveAuthority(
+        schema=ARCHIVE_AUTHORITY_SCHEMA,
+        project_id="trading-bot-v2",
+        action="activate_private_archive_storage",
+        source_root=str(source.resolve()),
+        archive_root=str(archive.resolve()),
+        allowed_kinds=tuple(sorted({item.kind for item in policies})),
+        issued_at=100.0,
+        expires_at=300.0,
+        turn_id="production-retention-test",
+        authority_id="owner_" + "7" * 32,
+        storage_role=RETENTION_RECLAMATION_ROLE,
+        synthetic=False,
+    )
+    archive_capability = activate_private_archive_root(
+        archive,
+        source_root=source,
+        authority=archive_authority,
+        now=150.0,
+    )
+    authority = RuntimeStorageAuthority(
+        schema=AUTHORITY_SCHEMA,
+        project_id="trading-bot-v2",
+        action="activate_runtime_storage_rotation",
+        source_root=str(source.resolve()),
+        archive_root=str(archive.resolve()),
+        source_revision=SHA,
+        issued_at=100.0,
+        expires_at=300.0,
+        turn_id="production-retention-test",
+        authority_id="owner_" + "6" * 32,
+        source_budget_bytes=10_000_000,
+        archive_budget_bytes=10_000_000,
+        minimum_source_free_bytes=0,
+        minimum_archive_free_bytes=0,
+        synthetic=False,
+    )
+
+    capability = activate_runtime_storage(
+        source,
+        archive_root=archive,
+        authority=authority,
+        now=150.0,
+        streams=policies,
+    )
+    status = storage_budget_status(capability)
+
+    assert archive_capability.storage_role == RETENTION_RECLAMATION_ROLE
+    assert archive_capability.synthetic is False
+    assert status["state"] == "ready"
+    assert status["archive_storage_role"] == RETENTION_RECLAMATION_ROLE
+    assert status["disaster_recovery_claim"] is False
+
+
+def test_production_runtime_rejects_synthetic_retention_archive(
+    tmp_path: Path,
+) -> None:
+    _synthetic_capability, source, archive = _activated(tmp_path)
+    production_authority = RuntimeStorageAuthority(
+        schema=AUTHORITY_SCHEMA,
+        project_id="trading-bot-v2",
+        action="activate_runtime_storage_rotation",
+        source_root=str(source.resolve()),
+        archive_root=str(archive.resolve()),
+        source_revision=SHA,
+        issued_at=100.0,
+        expires_at=300.0,
+        turn_id="production-retention-test",
+        authority_id="owner_" + "5" * 32,
+        source_budget_bytes=10_000_000,
+        archive_budget_bytes=10_000_000,
+        minimum_source_free_bytes=0,
+        minimum_archive_free_bytes=0,
+        synthetic=False,
+    )
+
+    with pytest.raises(RuntimeStorageError, match="synthetic archive"):
+        activate_runtime_storage(
+            source,
+            archive_root=archive,
+            authority=production_authority,
+            now=150.0,
+            streams=_policies(),
+        )
 
 
 def test_writer_coordinated_rotation_preserves_every_completed_row(tmp_path: Path) -> None:
@@ -329,6 +498,7 @@ def test_activation_backfills_tail_and_semantic_index_before_sealing(tmp_path: P
         expires_at=300.0,
         turn_id="synthetic-storage-test",
         authority_id="owner_" + "c" * 32,
+        storage_role=RETENTION_RECLAMATION_ROLE,
         synthetic=True,
     )
     activate_private_archive_root(archive, source_root=source, authority=archive_authority, now=150.0)
@@ -422,6 +592,7 @@ def test_operator_cli_bootstraps_only_from_two_exact_authority_files(
         expires_at=now + 300,
         turn_id="synthetic-cli-test",
         authority_id="owner_" + "f" * 32,
+        storage_role=RETENTION_RECLAMATION_ROLE,
         synthetic=True,
     )
     runtime_file = tmp_path / "runtime-authority.json"
@@ -446,6 +617,8 @@ def test_operator_cli_bootstraps_only_from_two_exact_authority_files(
     activation = json.loads(capsys.readouterr().out)
     assert activation["state"] == "active"
     assert activation["stream_count"] == len(DEFAULT_STREAMS)
+    assert activation["archive_storage_role"] == RETENTION_RECLAMATION_ROLE
+    assert activation["disaster_recovery_claim"] is False
     assert str(source) not in json.dumps(activation)
     assert str(archive) not in json.dumps(activation)
 
@@ -484,3 +657,32 @@ def test_operator_cli_failure_does_not_echo_authority_content(
     assert synthetic_sensitive not in output
     assert str(source) not in output
     assert str(archive) not in output
+
+
+def test_operator_archive_authority_requires_explicit_storage_role(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    archive = tmp_path / "archive"
+    source.mkdir()
+    archive.mkdir()
+    authority = PrivateArchiveAuthority(
+        schema=ARCHIVE_AUTHORITY_SCHEMA,
+        project_id="trading-bot-v2",
+        action="activate_private_archive_storage",
+        source_root=str(source.resolve()),
+        archive_root=str(archive.resolve()),
+        allowed_kinds=("farm_journal",),
+        issued_at=100.0,
+        expires_at=300.0,
+        turn_id="missing-role-test",
+        authority_id="owner_" + "4" * 32,
+        storage_role=RETENTION_RECLAMATION_ROLE,
+        synthetic=True,
+    ).payload()
+    authority.pop("storage_role")
+    authority_path = tmp_path / "archive-authority.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+
+    with pytest.raises(RuntimeStorageError, match="shape is invalid"):
+        _archive_authority(authority_path)

@@ -105,10 +105,13 @@ touches canonical databases, or grants runtime authority.
 
 Activation requires an exact existing empty archive directory, an exact source
 root, and a typed, current owner-authority input bound to this project, action,
-roots, allowed artifact kinds, turn, and expiry. A non-synthetic archive must
-be on a filesystem distinct from the source. The resulting root is bound by a
-hashed capability and marker; links/reparse points and identity drift fail
-closed.
+roots, allowed artifact kinds, storage role, turn, and expiry. The explicit
+`retention_reclamation` role may use the source filesystem when separately
+owner-authorized, but it makes no disaster-recovery claim. The explicit
+`disaster_recovery` role always requires a filesystem distinct from the source,
+including in synthetic tests. Missing or unknown roles fail closed. The
+resulting root is bound by a hashed capability and marker; links/reparse points
+and identity drift fail closed.
 
 Archive bytes are deterministic, content-addressed gzip objects. Immutable
 hashed manifests are the source of truth; the local SQLite catalog is a
@@ -125,13 +128,13 @@ append-only compare-and-append event bound to that same logical stream:
 promotion requires copy and restore verification, rollback selects the
 preserved legacy source, and neither transition deletes either copy.
 
-The current repository does **not** activate this capability, connect it to an
-RCC/farm producer, archive private runtime data, rotate files, reclaim disk, or
-perform a real cutover. The checked tests use temporary synthetic roots only.
-A private rollout still requires a separate exact-root authority, inventory,
-DB/WAL/SHM-safe backup and restore proof where applicable, producer quiescence,
-reader/writer parity, abort metrics, operational evidence, and an owner-approved
-cutover/rollback procedure.
+The repository supplies the off-by-default archive and runtime-rotation
+capabilities plus bounded farm/lineage/LLM/stdout writer integration. It does
+not activate a private root by default or claim that a same-volume retention
+archive is a backup. A private rollout still requires separate exact-root
+authority, inventory, DB/WAL/SHM-safe backup and restore proof where applicable,
+producer quiescence, reader/writer parity, abort metrics, operational evidence,
+and an owner-approved cutover/rollback procedure.
 
 ## Materialization ledger size boundary
 
