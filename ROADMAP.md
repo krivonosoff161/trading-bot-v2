@@ -80,8 +80,11 @@ dependency, not by a route to live trading.
   copy/truncate; immutable content-addressed archive objects are restore-checked
   before source release, interrupted work remains recoverable, recent tails and
   semantic dedup state stay bounded/available, and storage-budget failure is a
-  canonical farm hard fail after activation. This is implementation proof only;
-  private activation/backfill and endurance remain in the operational gate.
+  canonical farm hard fail after activation. The configured lock wait is a
+  shared monotonic budget for local-thread and OS-level interprocess contention;
+  transient concurrent contour writes retry, while a holder that outlives the
+  budget remains fail-closed. This is implementation proof only; private
+  activation endurance remains in the operational gate.
 - Repository quality gates cover the full non-live test suite, Python quality,
   supply-chain policy, tracked-artifact policy, documentation links, and public
   entrypoint inventory.
@@ -103,7 +106,7 @@ private runtime, data, or trading hypothesis is proven.
    monitor under the private canary; PID liveness alone is not readiness.
 5. Apply the implemented bounded private storage rotation only after exact
    backup, restore, digest, interruption, semantic-index parity, and idempotent
-   cleanup proofs.
+   cleanup proofs; verify concurrent contour writers over the full canary.
 
 Exit gate: each phase has an exact-head green scoped PR and green post-merge
 verification; operational cutover/cleanup then passes backup, restore, parity,
