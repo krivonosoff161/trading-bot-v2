@@ -1367,6 +1367,7 @@ def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
     center.selected_key = "paper_cards"
     center._closing = False
     center._runtime_monitor_started_at = 100.0
+    center._product_progress_ready = True
     center._runtime_ready = False
     center._runtime_owner_monitor = SimpleNamespace(
         sample=lambda: SimpleNamespace(
@@ -1484,6 +1485,31 @@ def test_runtime_probe_sets_t0_only_after_listener_and_owner_are_ready(
     assert center._runtime_ready is True
     assert len(events) == 1
     assert "T+0 READY" in events[0][2]
+
+
+def test_runtime_probe_does_not_set_t0_before_real_product_progress(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, events = _runtime_probe_center()
+    center._product_progress_ready = False
+    ollama_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    sample = center._fast_runtime_safety_probe()
+
+    assert sample["state"] == "product_starting"
+    assert sample["ready"] is False
+    assert center._runtime_ready is False
+    assert events == []
 
 
 def test_runtime_probe_listener_loss_after_t0_is_immediate_hard_failure(

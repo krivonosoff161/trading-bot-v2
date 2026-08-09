@@ -127,7 +127,8 @@ def test_registry_has_three_public_telegram_sources():
         assert sources[name]["expected_body"] == "telegram_text"
 
 
-def test_scanner_ingest_summary_includes_tg_web(monkeypatch, capsys):
+def test_scanner_ingest_summary_includes_tg_web(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", str(tmp_path))
     monkeypatch.setattr(S, "fetch_rss", lambda: [])
     monkeypatch.setattr(S, "fetch_new_listings", lambda **kw: [])
     monkeypatch.setattr(S, "fetch_recent_filings", lambda **kw: [])

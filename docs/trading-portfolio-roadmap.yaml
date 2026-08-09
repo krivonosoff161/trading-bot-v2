@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 5c9ee576c3625955764da042e81c117b4ef43d3f
+  trading-bot-v2: 3d0ffc1b9e0311756e6ecf879c11e228dbad3501
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -222,10 +222,12 @@ modules:
       - scripts/research_control_center.py
       - src/research_lab/rcc_runtime_safety.py
       - src/research_lab/windows_listener_probe.py
+      - src/research_lab/product_progress.py
       - tests/test_research_control_center.py
       - tests/test_windows_listener_probe.py
-    missing_evidence: a green 48-hour canary after the latest reliability repairs
-    next_gate: separate owner-authorized operational launch and continuous evidence review
+      - tests/test_product_progress.py
+    missing_evidence: a green 48-hour canary proving product-stage SLO and generation freshness on the private runtime
+    next_gate: separate owner-authorized operational launch with process, database, and product-progress lanes all green
     authority: separately_owner_gated
     public_private_boundary: supervisor code is public; process identities, ports, heartbeats, and runtime evidence are private
   - module_id: llm_advisory

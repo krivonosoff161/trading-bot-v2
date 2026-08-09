@@ -113,7 +113,14 @@ a sanitized aggregate if a result needs discussion.
   first and only then sends CTRL_BREAK to the same verified PID/start process
   group as its bounded graceful fallback.
 - Active canary monitoring keeps fast process/authority samples independent
-  from deeper SQLite health work. The canonical RCC starts this supervisor
+  from deeper SQLite health work and completed product progress. Scanner passes
+  and farm cycles publish atomic safe aggregates only at real completion
+  boundaries. The product lane requires current-run checkpoints before T+0;
+  an ordinary heartbeat cannot refresh its scanner, farm, validation, or
+  generation SLO. A completed pass with zero candidates is honest `idle`, and
+  bounded public-provider failure is `degraded`; stale stages, validation SLO
+  breach, generation mismatch, or retained technical learning evidence fail
+  closed. The canonical RCC starts this supervisor
   with the paper profile: early owner/listener absence remains `starting`
   inside the bounded cold-start budget, then the first green owner/fence
   generation and a fresh, exact identity/fence-matched process-lease supervisor

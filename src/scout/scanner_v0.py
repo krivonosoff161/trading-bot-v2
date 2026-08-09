@@ -76,6 +76,7 @@ from src.scout import pending_store as PS                        # noqa: E402
 from src.scout import watch_queue as WQ                          # noqa: E402
 from src.scout.price_provider import get_price as _get_price     # noqa: E402
 from src.utils import llm_budget_guard as LBG                    # noqa: E402
+from src.research_lab.product_progress import publish_checkpoint, scanner_metrics  # noqa: E402
 from src.utils.telegram import chat_ids, send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
@@ -1360,6 +1361,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     dedup_min = int(dcfg.get("fuzzy_min", 88))
     recent = J.recent_events(int(dcfg.get("window_hours", 48)))   # окно event-дедупа
     max_per_asset = int(limits_config().get("max_cards_per_asset_per_run", 1))
+    provider_failures = 0
     carded: dict = {}                                            # кап карточек на актив за проход
     print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | {'BUFFER' if use_buffer else 'RSS+листинги'} | "
           f"{'OKX_DAY_TEST' if okx_day_test else 'NORMAL'} | "
@@ -1370,73 +1372,87 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         rss_items = [] if okx_only else fetch_rss()
     except Exception as e:
         print(f"RSS ОШИБКА: {e}")
+        provider_failures += 1
         rss_items = []
     try:
         listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
     except Exception as e:
         print(f"OKX listings ОШИБКА: {e}")
+        provider_failures += 1
         listings = []
     try:
         ann_enabled = bool(source_meta("okx_announcements").get("enabled")) or okx_day_test
         announcement_items = [] if (dry or not ann_enabled) else fetch_okx_announcements(limit=12)
     except Exception as e:
         print(f"OKX announcements ОШИБКА: {e}")
+        provider_failures += 1
         announcement_items = []
     try:
         tape_enabled = bool(source_meta("okx_market_tape").get("enabled")) or okx_day_test
         market_tape_items = [] if (dry or not tape_enabled) else fetch_okx_market_tape(limit=12)
     except Exception as e:
         print(f"OKX market tape ОШИБКА: {e}")
+        provider_failures += 1
         market_tape_items = []
     try:
         sec_items = [] if (dry or okx_only) else fetch_recent_filings(within_hours=24, limit=8)
     except Exception as e:
         print(f"SEC filings ОШИБКА: {e}")
+        provider_failures += 1
         sec_items = []
     try:
         tactical_items = [] if (dry or not source_meta("btc_eth_tactical").get("enabled")) else fetch_btc_eth_tactical(limit=4)
     except Exception as e:
         print(f"BTC/ETH tactical ОШИБКА: {e}")
+        provider_failures += 1
         tactical_items = []
     try:
         fred_items = [] if (dry or okx_only or not source_meta("fred_calendar").get("enabled")) else fetch_fred_calendar(limit=8)
     except Exception as e:
         print(f"FRED calendar ОШИБКА: {e}")
+        provider_failures += 1
         fred_items = []
     try:
         eia_items = [] if (dry or okx_only or not source_meta("eia").get("enabled")) else fetch_eia_schedule(limit=2)
     except Exception as e:
         print(f"EIA schedule ОШИБКА: {e}")
+        provider_failures += 1
         eia_items = []
     try:
         opec_items = [] if (dry or okx_only or not source_meta("opec").get("enabled")) else fetch_opec_schedule(limit=2)
     except Exception as e:
         print(f"OPEC schedule ОШИБКА: {e}")
+        provider_failures += 1
         opec_items = []
     try:
         earnings_items = [] if (dry or okx_only or not source_meta("earnings_calendar").get("enabled")) else fetch_earnings_calendar(limit=8)
     except Exception as e:
         print(f"Earnings calendar ОШИБКА: {e}")
+        provider_failures += 1
         earnings_items = []
     try:
         unlock_items = [] if (dry or okx_only or not source_meta("token_unlocks").get("enabled")) else fetch_upcoming_unlocks(limit=12)
     except Exception as e:
         print(f"Token unlocks ОШИБКА: {e}")
+        provider_failures += 1
         unlock_items = []
     try:
         dex_items = [] if (dry or okx_only or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
     except Exception as e:
         print(f"Dexscreener ОШИБКА: {e}")
+        provider_failures += 1
         dex_items = []
     try:
         risk_items = [] if (dry or okx_only or not source_meta("goplus_rugcheck").get("enabled")) else fetch_token_risk_signals(dex_items, limit=6)
     except Exception as e:
         print(f"GoPlus rugcheck ОШИБКА: {e}")
+        provider_failures += 1
         risk_items = []
     try:
         telegram_items = [] if okx_only else fetch_telegram_web_sources(limit_per_source=20)
     except Exception as e:
         print(f"Telegram web ОШИБКА: {e}")
+        provider_failures += 1
         telegram_items = []
     leading = listings + announcement_items + sec_items + unlock_items + tactical_items + fred_items + eia_items + opec_items + earnings_items   # опережающие/прямые сигналы
     native = market_tape_items + dex_items        # native event/market feeds (COINCIDENT)
@@ -1535,6 +1551,30 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
                           apply=False)
         except Exception as exc:
             print(f"  storage-maintain: {exc}")
+        completed_at = dt.datetime.now(tz=dt.timezone.utc).timestamp()
+        configured_root = os.environ.get("TRADING_BOT_RESEARCH_ROOT", "").strip()
+        product_root = Path(configured_root) if configured_root else _ROOT
+        publish_checkpoint(
+            product_root,
+            component="scanner",
+            sequence=max(1, int(completed_at * 1_000_000)),
+            status=(
+                "degraded"
+                if provider_failures
+                else "idle"
+                if not fresh
+                else "completed"
+            ),
+            metrics=scanner_metrics(
+                inputs=len(items),
+                fresh=len(fresh),
+                cards=made,
+                dropped=n_dropped,
+                llm_failures=n_llm_fail,
+                provider_failures=provider_failures,
+            ),
+            completed_at=completed_at,
+        )
     print(f"\n=== готово: {made} карточек · seen={len(seen)}"
           f"{' (dry — не сохранён)' if dry else ''} · токенов={total_tokens} (~{cost} RUB) · журнал={J.JOURNAL} ===")
 

@@ -162,6 +162,8 @@ def test_fast_safety_lane_excludes_database_snapshot() -> None:
     assert lanes["fast_safety"].max_sample_gap_seconds == 15.0
     assert lanes["deep_database"].permits_database_snapshot
     assert lanes["deep_database"].max_sample_gap_seconds == 300.0
+    assert not lanes["product_progress"].permits_database_snapshot
+    assert lanes["product_progress"].max_sample_gap_seconds == 90.0
 
 
 def test_deep_database_progress_cannot_refresh_fast_safety_lane() -> None:
@@ -260,10 +262,12 @@ def test_blocked_deep_probe_cannot_block_fast_lane_or_hide_freshness_failure() -
     service = CanaryMonitoringService(
         fast_probe=lambda: {"authority": "valid"},
         deep_probe=deep_probe,
+        product_probe=lambda: {"ready": True},
         on_sample=lambda sample: samples.append(sample.lane),
         on_failure=lambda lane, _assessment: failures.append(lane),
         fast_interval_seconds=0.01,
         deep_interval_seconds=0.01,
+        product_interval_seconds=0.01,
         supervisor_interval_seconds=0.005,
     )
     service.coordinator.watchdogs[
@@ -281,6 +285,7 @@ def test_blocked_deep_probe_cannot_block_fast_lane_or_hide_freshness_failure() -
 
     assert failures == ["deep_database"]
     assert samples.count("fast_safety") >= 2
+    assert samples.count("product_progress") >= 2
     release_deep.set()
     assert service.stop(timeout=0.5) == ()
 
@@ -295,6 +300,7 @@ def test_explicit_safety_violation_is_escalated_without_waiting_for_gap() -> Non
     service = CanaryMonitoringService(
         fast_probe=hard_failure,
         deep_probe=lambda: {"bounded": True},
+        product_probe=lambda: {"ready": True},
         on_sample=lambda _sample: None,
         on_failure=lambda lane, assessment: (
             failures.append((lane, assessment.failure_reason)),
@@ -311,11 +317,40 @@ def test_explicit_safety_violation_is_escalated_without_waiting_for_gap() -> Non
     assert failures == [("fast_safety", "owner_authority:lease_expired")]
 
 
+def test_product_stage_race_is_immediate_and_leaves_no_monitor_thread() -> None:
+    failed = threading.Event()
+    failures: list[tuple[str, str | None]] = []
+
+    def generation_race() -> dict[str, object]:
+        raise CanaryMonitorHardFailure("paper_generation_stage_mismatch")
+
+    service = CanaryMonitoringService(
+        fast_probe=lambda: {"authority": "valid"},
+        deep_probe=lambda: {"bounded": True},
+        product_probe=generation_race,
+        on_sample=lambda _sample: None,
+        on_failure=lambda lane, assessment: (
+            failures.append((lane, assessment.failure_reason)),
+            failed.set(),
+        ),
+        fast_interval_seconds=10.0,
+        deep_interval_seconds=10.0,
+        product_interval_seconds=10.0,
+        supervisor_interval_seconds=0.01,
+    )
+    service.start()
+
+    assert failed.wait(0.5)
+    assert service.stop(timeout=0.5) == ()
+    assert failures == [("product_progress", "paper_generation_stage_mismatch")]
+
+
 def test_monitor_failure_callback_is_idempotent_across_lanes() -> None:
     failures: list[str] = []
     service = CanaryMonitoringService(
         fast_probe=lambda: (_ for _ in ()).throw(OSError("synthetic")),
         deep_probe=lambda: (_ for _ in ()).throw(OSError("synthetic")),
+        product_probe=lambda: (_ for _ in ()).throw(OSError("synthetic")),
         on_sample=lambda _sample: None,
         on_failure=lambda lane, _assessment: failures.append(lane),
         fast_interval_seconds=0.005,
