@@ -35,6 +35,7 @@ from src.research_lab.setup_library import build_setup_card, write_setup_library
 from src.research_lab.validation_handoff import refresh_from_artifacts
 from src.research_lab.validation_feedback import generate_feedback, write_feedback
 from src.research_lab.validation_generation import (
+    current_generation_manifest_status,
     write_current_generation,
     write_pending_generation,
 )
@@ -223,7 +224,7 @@ def run_due_validations(
     check_active: ActiveCheck | None = None,
 ) -> dict[str, Any]:
     """Execute export + validation + stamp-back for queued export_validation tasks."""
-    counters = {
+    counters: dict[str, Any] = {
         "export_tasks": 0,
         "tasks_examined": 0,
         "exported": 0,
@@ -240,6 +241,8 @@ def run_due_validations(
         "artifact_batches": 0,
         "artifact_ready_tasks": 0,
         "fair_scan_exhausted": 0,
+        "generation_empty_published": 0,
+        "generation_status_before": "unchecked",
         "generation_unchanged": 0,
         "bridge_ok": all(bridge_available().values()),
     }
@@ -380,6 +383,26 @@ def run_due_validations(
     )
 
     if not export_tasks:
+        generation_status = current_generation_manifest_status(Path(private_root))
+        counters["generation_status_before"] = generation_status
+        if apply and generation_status == "code_stale":
+            _check_active(check_active)
+            write_current_generation(
+                Path(private_root),
+                tasks=[],
+                exported_ids=[],
+                completed_ids=[],
+                producer_time=now,
+            )
+            _completed_progress(
+                progress,
+                check_active,
+                "empty_generation_published",
+                1,
+                1,
+            )
+            counters["generation_empty_published"] = 1
+            return counters
         counters["generation_unchanged"] = 1
         return counters
 

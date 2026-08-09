@@ -357,6 +357,102 @@ def test_validation_orchestrator_rejects_stale_generation_when_current_export_is
     tasks.close()
 
 
+def test_validation_orchestrator_replaces_code_stale_generation_with_empty_authority(
+    monkeypatch, tmp_path
+):
+    from src.research_lab import validation_generation as generation
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    generation.write_current_generation(
+        tmp_path,
+        tasks=[],
+        exported_ids=[],
+        completed_ids=[],
+        producer_time=1.0,
+    )
+    current_code = generation._producer_code_manifest()
+    replacement_code = dict(current_code)
+    replacement_code[sorted(replacement_code)[0]] = "0" * 64
+    monkeypatch.setattr(
+        generation, "_producer_code_manifest", lambda: replacement_code
+    )
+    progress = []
+
+    out = run_due_validations(
+        tasks,
+        tmp_path,
+        apply=True,
+        limit=2,
+        now=2.0,
+        progress=lambda stage, completed, total: progress.append(
+            (stage, completed, total)
+        ),
+    )
+
+    assert out["generation_status_before"] == "code_stale"
+    assert out["generation_empty_published"] == 1
+    assert out["generation_unchanged"] == 0
+    assert ("empty_generation_published", 1, 1) in progress
+    assert generation.load_current_generation_snapshot(tmp_path).status == "ready_empty"
+    assert not tasks.tasks_in_state("queued", task_type="export_validation")
+    assert not tasks.tasks_in_state("running", task_type="export_validation")
+    first_publication = generation.manifest_path(tmp_path).read_bytes()
+
+    repeated = run_due_validations(tasks, tmp_path, apply=True, limit=2, now=3.0)
+    assert repeated["generation_status_before"] == "code_current"
+    assert repeated["generation_empty_published"] == 0
+    assert repeated["generation_unchanged"] == 1
+    assert generation.manifest_path(tmp_path).read_bytes() == first_publication
+    tasks.close()
+
+
+def test_validation_orchestrator_does_not_replace_stale_generation_after_stop(
+    monkeypatch, tmp_path
+):
+    from src.research_lab import validation_generation as generation
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    generation.write_current_generation(
+        tmp_path,
+        tasks=[],
+        exported_ids=[],
+        completed_ids=[],
+        producer_time=1.0,
+    )
+    replacement_code = dict(generation._producer_code_manifest())
+    replacement_code[sorted(replacement_code)[0]] = "0" * 64
+    monkeypatch.setattr(
+        generation, "_producer_code_manifest", lambda: replacement_code
+    )
+    before = generation.manifest_path(tmp_path).read_bytes()
+    stopped = False
+
+    def progress(stage, _completed, _total):
+        nonlocal stopped
+        if stage == "tasks_claimed":
+            stopped = True
+
+    def check_active():
+        if stopped:
+            raise RuntimeError("synthetic owner/fence loss")
+
+    with pytest.raises(RuntimeError, match="synthetic owner/fence loss"):
+        run_due_validations(
+            tasks,
+            tmp_path,
+            apply=True,
+            limit=2,
+            now=2.0,
+            progress=progress,
+            check_active=check_active,
+        )
+
+    assert generation.manifest_path(tmp_path).read_bytes() == before
+    tasks.close()
+
+
 def test_validation_orchestrator_publishes_pending_before_export_side_effects(
     monkeypatch, tmp_path
 ):
