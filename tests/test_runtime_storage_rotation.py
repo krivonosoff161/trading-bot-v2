@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import multiprocessing
 from pathlib import Path
 import threading
 from dataclasses import replace
@@ -46,6 +47,16 @@ from src.research_lab.runtime_storage_rotation import (
 
 
 SHA = "7" * 40
+
+
+def _hold_runtime_storage_lock(
+    lock_path: str, ready_path: str, hold_seconds: float
+) -> None:
+    from src.research_lab.storage_os_lock import storage_root_lock
+
+    with storage_root_lock(Path(lock_path)):
+        Path(ready_path).write_text("locked", encoding="ascii")
+        time.sleep(hold_seconds)
 
 
 def _policies(*, cap: int = 180) -> tuple[RuntimeStreamPolicy, ...]:
@@ -460,6 +471,34 @@ def test_no_capability_preserves_legacy_append_without_archive_discovery(tmp_pat
     append_runtime_jsonl(path, {"schema": "farm_journal.v1", "sequence": 1})
     assert json.loads(path.read_text(encoding="utf-8"))["sequence"] == 1
     assert not (tmp_path / ".runtime-storage-v1").exists()
+
+
+def test_runtime_append_waits_for_transient_interprocess_writer(tmp_path: Path) -> None:
+    _capability, source, _archive = _activated(tmp_path, cap=10_000)
+    path = source / "logs" / "farm" / "cycle_log.jsonl"
+    ready = tmp_path / "runtime-lock-ready"
+    context = multiprocessing.get_context("spawn")
+    child = context.Process(
+        target=_hold_runtime_storage_lock,
+        args=(str(source / ".runtime-storage-v1" / "rotation.lock"), str(ready), 0.5),
+    )
+    child.start()
+    for _ in range(200):
+        if ready.exists():
+            break
+        time.sleep(0.01)
+    assert ready.read_text(encoding="ascii") == "locked"
+
+    started = time.monotonic()
+    append_runtime_jsonl(path, {"schema": "farm_journal.v1", "sequence": 1})
+    elapsed = time.monotonic() - started
+
+    child.join(timeout=15)
+    assert child.exitcode == 0
+    assert 0.1 <= elapsed < 5.0
+    assert read_runtime_tail(path, limit=10) == [
+        {"schema": "farm_journal.v1", "sequence": 1}
+    ]
 
 
 def test_activation_backfills_tail_and_semantic_index_before_sealing(tmp_path: Path) -> None:

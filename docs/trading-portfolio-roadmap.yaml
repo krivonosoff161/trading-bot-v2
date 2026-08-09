@@ -256,14 +256,16 @@ modules:
     implemented_evidence:
       - src/research_lab/storage_capability.py
       - src/research_lab/storage_segment_store.py
+      - src/research_lab/storage_os_lock.py
       - src/research_lab/runtime_storage_rotation.py
       - src/research_lab/backup_retention.py
       - scripts/strategy_lab/manage_backup_retention.py
       - tests/test_private_storage_foundation.py
+      - tests/test_storage_segment_store_v2.py
       - tests/test_runtime_storage_rotation.py
       - tests/test_backup_retention.py
-    missing_evidence: post-merge exact-root cleanup proof and canonical producer/reader adoption
-    next_gate: activate only after exact-root backup/restore and semantic-index parity, prove interruption recovery plus idempotent maintenance, and enforce the storage budget before canary
+    missing_evidence: post-merge exact-root cleanup proof and a full canary proving interprocess writer contention stays within the bounded lock budget
+    next_gate: activate only after exact-root backup/restore and semantic-index parity, prove interruption recovery plus idempotent maintenance, enforce the storage budget, and observe concurrent contour writers throughout the canary
     authority: separately_owner_gated
     public_private_boundary: capability code, schemas, and synthetic fixtures are public; storage roots, plans, manifests, and payloads are private
   - module_id: delivery

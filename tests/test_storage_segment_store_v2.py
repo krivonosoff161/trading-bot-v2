@@ -7,6 +7,7 @@ import multiprocessing
 import os
 import sqlite3
 import stat
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,12 @@ def _child_abandon_root_lock(lock_path: str, ready_path: str) -> None:
     with storage_root_lock(Path(lock_path)):
         Path(ready_path).write_text("locked", encoding="ascii")
         os._exit(0)
+
+
+def _child_hold_root_lock(lock_path: str, ready_path: str, hold_seconds: float) -> None:
+    with storage_root_lock(Path(lock_path)):
+        Path(ready_path).write_text("locked", encoding="ascii")
+        time.sleep(hold_seconds)
 
 
 def _child_crash_after_append_intent(root: str, request_id: str) -> None:
@@ -264,6 +271,54 @@ def test_child_process_exit_releases_real_os_lock(tmp_path):
     assert ready.read_text(encoding="ascii") == "locked"
     receipt = store.append("farm.cycle", {"parent": True}, request_id=_req(1))
     assert receipt["stream_record_seq"] == 1
+
+
+def test_wait_budget_applies_to_real_interprocess_lock(tmp_path):
+    lock_path = tmp_path / "operation.lock"
+    lock_path.write_bytes(b"0")
+    ready = tmp_path / "child-lock-ready"
+    context = multiprocessing.get_context("spawn")
+    child = context.Process(
+        target=_child_hold_root_lock,
+        args=(str(lock_path), str(ready), 0.5),
+    )
+    child.start()
+    for _ in range(200):
+        if ready.exists():
+            break
+        time.sleep(0.01)
+    assert ready.read_text(encoding="ascii") == "locked"
+    started = time.monotonic()
+    with storage_root_lock(lock_path, wait_seconds=2.0):
+        elapsed = time.monotonic() - started
+    child.join(timeout=15)
+    assert child.exitcode == 0
+    assert 0.1 <= elapsed < 2.0
+
+
+def test_interprocess_lock_still_fails_closed_after_wait_budget(tmp_path):
+    lock_path = tmp_path / "operation.lock"
+    lock_path.write_bytes(b"0")
+    ready = tmp_path / "child-lock-ready"
+    context = multiprocessing.get_context("spawn")
+    child = context.Process(
+        target=_child_hold_root_lock,
+        args=(str(lock_path), str(ready), 1.0),
+    )
+    child.start()
+    for _ in range(200):
+        if ready.exists():
+            break
+        time.sleep(0.01)
+    assert ready.read_text(encoding="ascii") == "locked"
+    started = time.monotonic()
+    with pytest.raises(StorageLockConflict, match="wait budget"):
+        with storage_root_lock(lock_path, wait_seconds=0.2):
+            pass
+    elapsed = time.monotonic() - started
+    child.join(timeout=15)
+    assert child.exitcode == 0
+    assert 0.15 <= elapsed < 0.8
 
 
 def test_child_process_persisted_intent_recovers_exactly_once(tmp_path):

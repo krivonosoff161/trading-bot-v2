@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import os
 import stat
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -91,6 +93,43 @@ def _open_lock_nofollow(path: Path) -> tuple[Any, dict[str, int]]:
 
 _LOCAL_LOCK = threading.Lock()
 _LOCAL_OWNER: int | None = None
+_OS_LOCK_RETRY_SECONDS = 0.01
+
+
+def _lock_busy(exc: OSError) -> bool:
+    return (
+        isinstance(exc, BlockingIOError)
+        or exc.errno in {errno.EACCES, errno.EAGAIN}
+        or getattr(exc, "winerror", None) in {5, 32, 33}
+    )
+
+
+def _acquire_os_lock(handle: Any, *, deadline: float) -> None:
+    last_error: OSError | None = None
+    while True:
+        try:
+            if os.name == "nt":
+                if msvcrt is None:  # pragma: no cover
+                    raise StorageLockConflict("Windows OS locking is unavailable")
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                if fcntl is None:  # pragma: no cover
+                    raise StorageLockConflict("POSIX OS locking is unavailable")
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError as exc:
+            if not _lock_busy(exc):
+                raise StorageLockConflict(
+                    "cannot acquire storage operation lock"
+                ) from exc
+            last_error = exc
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            raise StorageLockConflict(
+                "cannot acquire storage operation lock within wait budget"
+            ) from last_error
+        time.sleep(min(_OS_LOCK_RETRY_SECONDS, remaining))
 
 
 @contextmanager
@@ -102,7 +141,9 @@ def storage_root_lock(path: Path, *, wait_seconds: float = 0.0) -> Iterator[None
         raise StorageLockConflict(
             "storage operation lock is already held by this thread"
         )
-    acquired = _LOCAL_LOCK.acquire(timeout=max(0.0, float(wait_seconds)))
+    wait_budget = max(0.0, float(wait_seconds))
+    deadline = time.monotonic() + wait_budget
+    acquired = _LOCAL_LOCK.acquire(timeout=wait_budget)
     if not acquired:
         raise StorageLockConflict("storage operation lock is already held")
     _LOCAL_OWNER = owner
@@ -110,21 +151,10 @@ def storage_root_lock(path: Path, *, wait_seconds: float = 0.0) -> Iterator[None
     locked = False
     try:
         handle, lock_identity = _open_lock_nofollow(path)
-        try:
-            if os.name == "nt":
-                if msvcrt is None:  # pragma: no cover
-                    raise StorageLockConflict("Windows OS locking is unavailable")
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                if fcntl is None:  # pragma: no cover
-                    raise StorageLockConflict("POSIX OS locking is unavailable")
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            locked = True
-            if _path_identity(path) != lock_identity:
-                raise StorageLockConflict("storage operation lock identity changed")
-        except (OSError, BlockingIOError) as exc:
-            raise StorageLockConflict("cannot acquire storage operation lock") from exc
+        _acquire_os_lock(handle, deadline=deadline)
+        locked = True
+        if _path_identity(path) != lock_identity:
+            raise StorageLockConflict("storage operation lock identity changed")
         yield
     finally:
         if handle is not None:
