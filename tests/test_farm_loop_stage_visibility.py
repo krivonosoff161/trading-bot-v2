@@ -1218,7 +1218,8 @@ class TestCycleLogStages:
         assert "'%STRATEGY_LAB_AGENT_ROLE_REVIEWS_ARG%'" in bat
         assert "'--agent-role-provider','%STRATEGY_LAB_AGENT_ROLE_PROVIDER%'" in bat
         assert "Tee-Object" not in bat
-        assert "Add-Content -Path '%LOG_FILE%' -Value $line -Encoding UTF8" in bat
+        assert "Add-Content -Path '%LOG_FILE%' -Value $line -Encoding UTF8" not in bat
+        assert '"& python @cmd;"' in bat
 
     def test_farm_loop_cli_default_matches_visible_pfr_budget(self) -> None:
         source = Path("scripts/strategy_lab/farm_loop.py").read_text(encoding="utf-8")

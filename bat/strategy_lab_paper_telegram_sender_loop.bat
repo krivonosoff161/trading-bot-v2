@@ -41,7 +41,7 @@ echo.
 
 :loop
 if exist "%STOP_FILE%" goto done
-python -X utf8 -m scripts.strategy_lab.paper_telegram_sender --private-root "%TRADING_BOT_RESEARCH_ROOT%" --limit %STRATEGY_LAB_PAPER_TELEGRAM_SEND_LIMIT% --send 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath '%LOG_FILE%' -Append"
+python -X utf8 -m scripts.strategy_lab.paper_telegram_sender --private-root "%TRADING_BOT_RESEARCH_ROOT%" --limit %STRATEGY_LAB_PAPER_TELEGRAM_SEND_LIMIT% --send
 if exist "%STOP_FILE%" goto done
 timeout /t %STRATEGY_LAB_PAPER_TELEGRAM_SEND_SLEEP_SECONDS% /nobreak
 goto loop

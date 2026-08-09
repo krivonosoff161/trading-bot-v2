@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `3d0ffc1b9e0311756e6ecf879c11e228dbad3501`
+- Verified against: `6312753e27f45ff12fec792ecfc6cd35f995ac08`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -28,7 +28,7 @@ model conversations, recipients, credentials, or workstation-specific state.
 | Paper observation | implemented bounded | Current-generation authority is content-verified once per cycle, active cards are loaded directly without a historical catalog scan, and signal evaluation preserves prefix no-lookahead semantics inside a declared-history-bounded recent horizon with completed-chunk progress and fail-closed cancellation. Public-data failures are classified as `provider_error`, `data_gap`, or `genuine_no_market_data`; they preserve the active observation, append separate operational incident/recovery evidence, and are censored from family ranking, paper/product training, setup memory, adaptive consumers, and LLM outcome review. The canonical farm now requires an explicitly activated Paper Evidence v2 cutover, binds its writer lease to the same owner/process identity, atomically promotes bridge through projection, and blocks stale-generation Telegram delivery. Operational cutover and continuous private-runtime recovery remain unproved. |
 | Research Control Center | implemented bounded | The canonical paper-only supervisor separates process/authority, database, and real product-progress lanes. T+0 requires completed scanner and farm work from the current run; stale stages, validation SLO breach, generation races, or technical learning leakage fail closed, while a completed zero-signal pass is honest idle and provider degradation remains observable. A fresh 48-hour canary is still required. |
 | LLM advisory contour | implemented bounded | Inputs and outputs are bounded proposals; deterministic code owns calculations, verdicts, state changes, and permissions. |
-| Evidence/storage capability | implemented bounded | Content-bound archives, synthetic migration, and plan-digest-bound backup retention exist; applying them to private roots remains separately owner-gated. |
+| Evidence/storage capability | implemented bounded | Content-bound archives, synthetic migration, and plan-digest-bound backup retention exist. An off-by-default exact-root capability now seals bounded farm stdout, journals, lineage, invocation metadata, and selected derived audit streams at writer boundaries; it uses the same content-addressed catalog, releases sources only after restore proof, retains compact recent/semantic projections, and fails closed on archive or budget loss. Private activation and legacy backfill remain separately owner-gated and operationally unproved. |
 | Paper-card delivery | implemented bounded | Preview, deduplication, and guarded delivery exist; recipients, content, and acknowledgement state stay private. |
 | Execution denial boundary | implemented | No supported entrypoint grants live order authority. |
 

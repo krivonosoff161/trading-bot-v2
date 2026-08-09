@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 3d0ffc1b9e0311756e6ecf879c11e228dbad3501
+  trading-bot-v2: 6312753e27f45ff12fec792ecfc6cd35f995ac08
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -245,18 +245,20 @@ modules:
     public_private_boundary: schemas and routers are public; prompts, responses, provider identity, and ledgers are private
   - module_id: evidence_storage
     owner_repository: trading-bot-v2
-    purpose: provide content-bound evidence, storage policy, synthetic migration, and plan-bound backup retention capabilities
+    purpose: provide content-bound evidence, storage policy, synthetic migration, plan-bound backup retention, and off-by-default writer-coordinated runtime rotation capabilities
     status: implemented_bounded
     dependencies: []
     implemented_evidence:
       - src/research_lab/storage_capability.py
       - src/research_lab/storage_segment_store.py
+      - src/research_lab/runtime_storage_rotation.py
       - src/research_lab/backup_retention.py
       - scripts/strategy_lab/manage_backup_retention.py
       - tests/test_private_storage_foundation.py
+      - tests/test_runtime_storage_rotation.py
       - tests/test_backup_retention.py
     missing_evidence: post-merge exact-root cleanup proof and canonical producer/reader adoption
-    next_gate: apply only an owner-authorized exact retention plan, prove second-apply idempotence, and enforce the storage budget before canary
+    next_gate: activate only after exact-root backup/restore and semantic-index parity, prove interruption recovery plus idempotent maintenance, and enforce the storage budget before canary
     authority: separately_owner_gated
     public_private_boundary: capability code, schemas, and synthetic fixtures are public; storage roots, plans, manifests, and payloads are private
   - module_id: delivery

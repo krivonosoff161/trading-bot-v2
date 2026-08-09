@@ -31,6 +31,11 @@ def main() -> None:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
+    if args.send:
+        from src.research_lab.runtime_storage_rotation import install_runtime_stdout_tee
+
+        install_runtime_stdout_tee(args.private_root, stream_id="telegram.stdout")
+
     users = list_delivery_users()
     ids = [
         str(user["chat_id"])

@@ -353,6 +353,19 @@ def _refresh_live_universe(
 def _maybe_storage_maintain(private_root: Path, apply: bool) -> None:
     if not apply:
         return
+    from src.research_lab.runtime_storage_rotation import (
+        archive_pending_segments,
+        maybe_runtime_storage_capability,
+        storage_budget_status,
+    )
+
+    capability = maybe_runtime_storage_capability(Path(private_root) / "sentinel")
+    if capability is not None:
+        maintenance = archive_pending_segments(capability)
+        budget = storage_budget_status(capability)
+        if maintenance["state"] != "ready" or budget["state"] != "ready":
+            raise RuntimeError("activated runtime storage maintenance failed closed")
+        return
     try:
         from src.research_lab.farm_journal import farm_log_paths
         from src.research_lab.storage_policy import bound_farm_artifacts, maintain
@@ -3351,6 +3364,14 @@ def main() -> None:
     args = ap.parse_args()
     apply = bool(args.apply)
 
+    if apply:
+        private_root = resolve_private_root(
+            Path(args.private_root), allow_public_output=args.allow_public_output
+        )
+        from src.research_lab.runtime_storage_rotation import install_runtime_stdout_tee
+
+        install_runtime_stdout_tee(private_root, stream_id="farm.stdout")
+
     print(
         f"farm_loop mode={'APPLY' if apply else 'DRY-RUN'} run={'loop' if args.loop else 'once'} "
         f"private_root={args.private_root}"
@@ -3371,9 +3392,6 @@ def main() -> None:
     priority_thread = None
     claim_failure_signal = None
     if apply:
-        private_root = resolve_private_root(
-            Path(args.private_root), allow_public_output=args.allow_public_output
-        )
         claim_failure_signal = _TaskClaimFailureSignal(private_root, priority_stop)
         legacy_lock = private_root / "state" / "farm_loop.lock"
         if legacy_lock.exists():
