@@ -204,11 +204,13 @@ modules:
       - src/research_lab/paper_evidence_store.py
       - src/research_lab/paper_generation_cutover.py
       - src/research_lab/paper_generation_run.py
+      - src/research_lab/main_paper_bridge.py
       - scripts/strategy_lab/paper_generation_cutover.py
       - tests/test_paper_runtime.py
       - tests/test_pfr_bridge.py
       - tests/test_paper_data_outcome_censor.py
       - tests/test_paper_generation_cutover.py
+      - tests/test_paper_generation_run_v2.py
     missing_evidence: a completed private cutover and acceptance window demonstrating atomic generation continuity, real outage recovery, and zero technical outcome leakage into learning inputs
     next_gate: prove backup/restore, shadow parity, exact-revision activation, writer identity and the provider-error/data-gap/genuine-no-market-data taxonomy during the paper-only canary without execution
     authority: paper_only

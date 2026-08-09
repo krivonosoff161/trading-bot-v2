@@ -862,6 +862,39 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             private_root=private_root,
             status_counts=pfr_counts,
         )
+        authorized_validation_generations = {
+            str(row.get("validation_generation_id") or "")
+            for row in all_pfr
+            if str(row.get("validation_generation_id") or "")
+        }
+        stale_pfr_signal_ids: set[str] = set()
+        if not pfr_counts.get("pfr_generation:legacy_absent"):
+            for old in existing:
+                if old.status not in ACTIVE or old.source != "pfr_farm":
+                    continue
+                signal_generation = str(
+                    (old.validator_context or {}).get("validation_generation_id") or ""
+                )
+                if signal_generation in authorized_validation_generations:
+                    continue
+                stale_pfr_signal_ids.add(old.signal_id)
+                pfr_key_active.discard(old.dedup_key)
+                by_key_active.discard(old.dedup_key)
+                if apply:
+                    old.status = "invalidated"
+                    old.review = {
+                        **(old.review or {}),
+                        "diagnosis": "validation_generation_superseded",
+                        "note": (
+                            "The signal is outside the current verified validation "
+                            "generation and no longer grants Paper Evidence v2 authority."
+                        ),
+                    }
+                    store.update_signal(private_root, old)
+        if stale_pfr_signal_ids:
+            pfr_counts["pfr_stale_generation_invalidated"] = len(
+                stale_pfr_signal_ids
+            )
         passed_pfr, rejected_pfr = pfr_bridge.apply_quality_policy(
             all_pfr, policy=pfr_quality_policy
         )
@@ -893,7 +926,11 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
 
         active_setup_ids: set[str] = set()
         for s in existing:
-            if s.status in ACTIVE and str(s.source or "") == "pfr_farm":
+            if (
+                s.status in ACTIVE
+                and str(s.source or "") == "pfr_farm"
+                and s.signal_id not in stale_pfr_signal_ids
+            ):
                 sid = (s.validator_context or {}).get("setup_id") or ""
                 if sid:
                     active_setup_ids.add(sid)

@@ -7,7 +7,10 @@ from scripts.strategy_lab import operational_health
 from src.research_lab.ownership import ProcessIdentity
 from src.research_lab.paper_evidence_store import PaperEvidenceStore
 from src.research_lab.paper_generation_run import run_paper_generation_v2
-from src.research_lab.paper_generation_contract import canonical_digest
+from src.research_lab.paper_generation_contract import (
+    PaperGenerationMismatch,
+    canonical_digest,
+)
 from src.research_lab.paper_lineage import build_paper_lineage
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.paper_signals.store import (
@@ -74,6 +77,7 @@ def _signal() -> PaperActionSignal:
             "ready_strategy_id": "ready-v2",
             "source_validation_verdict": "PAPER_FORWARD_READY",
             "validation_id": "validation-generation-v2",
+            "validation_generation_id": "validation-generation-v2",
         },
     )
 
@@ -115,6 +119,7 @@ def _run(tmp_path, store, lease, account, *, sequence=1, parent=None, provider=N
         producer_method_identity="synthetic-producer.v2",
         simulator_manifest_id="simulator-manifest-v2",
         lifecycle_method_identity="paper-lifecycle.v2",
+        required_validation_generation_id="validation-generation-v2",
         now_ms=8_000_000,
         parent_producer_generation_id=parent,
     )
@@ -147,6 +152,119 @@ def test_end_to_end_generation_commits_events_account_and_projection_once(tmp_pa
     assert projection["items"][0]["terminal_lifecycle_event_id"]
     assert projection["items"][0]["account_generation_id"] == account
     assert not (tmp_path / "state" / "derived" / "paper_account_events.jsonl").exists()
+
+
+def _broad_signal(signal_id: str = "broad-research-signal") -> PaperActionSignal:
+    signal = _signal()
+    signal.signal_id = signal_id
+    signal.source = "farm"
+    signal.validation_id = ""
+    signal.validator_context = {}
+    signal.dedup_key = f"broad|{signal_id}"
+    return signal
+
+
+def test_v2_generation_excludes_broad_research_signal_from_authority(tmp_path):
+    append_signal(tmp_path, _broad_signal())
+    append_signal(tmp_path, _signal())
+    store, lease, account = _store_and_account(tmp_path)
+
+    result = _run(tmp_path, store, lease, account)
+
+    assert result["producer_membership"] == {
+        "active_executable_signals": 2,
+        "validation_bound_members": 1,
+        "research_only_excluded": 1,
+        "authority_source": "pfr_farm",
+    }
+    members = store.connection.execute(
+        "SELECT logical_id FROM producer_generation_members ORDER BY logical_id"
+    ).fetchall()
+    assert [row["logical_id"] for row in members] == ["signal-v2"]
+    assert result["bridge"]["instructions"] == 1
+    assert result["bridge"]["skipped_unvalidated"] == 1
+    assert store.active_subject("broad-research-signal") is None
+
+
+def test_v2_empty_generation_preserves_broad_research_observation(tmp_path):
+    broad = _broad_signal()
+    append_signal(tmp_path, broad)
+    store, lease, account = _store_and_account(tmp_path)
+
+    result = _run(tmp_path, store, lease, account)
+
+    assert result["producer_membership"]["validation_bound_members"] == 0
+    assert result["producer_membership"]["research_only_excluded"] == 1
+    assert result["bridge"]["instructions"] == 0
+    assert result["finalized"]["current"] is True
+    producer = store.connection.execute(
+        "SELECT expected_member_count FROM producer_generations"
+    ).fetchone()
+    assert producer["expected_member_count"] == 0
+    assert store.active_subject(broad.signal_id) is None
+
+
+def test_non_pfr_signal_cannot_self_grant_v2_authority(tmp_path):
+    broad = _broad_signal()
+    broad.validation_id = "forged-validation-id"
+    broad.validator_context = {
+        "validation_id": "forged-validation-id",
+        "validation_generation_id": "forged-validation-generation-id",
+        "ready_strategy_id": "forged-ready-id",
+        "source_validation_verdict": "PAPER_FORWARD_READY",
+    }
+    append_signal(tmp_path, broad)
+    store, lease, account = _store_and_account(tmp_path)
+
+    result = _run(tmp_path, store, lease, account)
+
+    assert result["producer_membership"]["validation_bound_members"] == 0
+    assert result["bridge"]["instructions"] == 0
+    assert store.active_subject(broad.signal_id) is None
+
+
+def test_pfr_signal_without_validation_identity_still_fails_closed(tmp_path):
+    malformed = _signal()
+    malformed.validation_id = ""
+    malformed.validator_context = {
+        "ready_strategy_id": "ready-v2",
+        "source_validation_verdict": "PAPER_FORWARD_READY",
+        "validation_id": "validation-candidate-v2",
+    }
+    append_signal(tmp_path, malformed)
+    store, lease, account = _store_and_account(tmp_path)
+
+    with pytest.raises(
+        PaperGenerationMismatch,
+        match="PFR bridge source lacks validation generation identity",
+    ):
+        _run(tmp_path, store, lease, account)
+
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM producer_generations"
+    ).fetchone()[0] == 0
+
+
+def test_pfr_signal_from_superseded_validation_generation_fails_before_write(
+    tmp_path,
+):
+    stale = _signal()
+    stale.validator_context = {
+        **stale.validator_context,
+        "validation_generation_id": "validation-generation-superseded",
+    }
+    append_signal(tmp_path, stale)
+    store, lease, account = _store_and_account(tmp_path)
+
+    with pytest.raises(
+        PaperGenerationMismatch,
+        match="outside the current validation generation",
+    ):
+        _run(tmp_path, store, lease, account)
+
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM producer_generations"
+    ).fetchone()[0] == 0
 
 
 def test_stage_exception_marks_run_failed_without_current_publication(tmp_path, monkeypatch):

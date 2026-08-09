@@ -351,6 +351,7 @@ def run_forward_shadow_replay(
     owner_id: str,
     identity: ProcessIdentity,
     code_identity: str,
+    validation_generation_id: str,
     now_ms: int,
 ) -> dict[str, Any]:
     """Replay authenticated active signals into an isolated forward-only v2 root.
@@ -391,7 +392,11 @@ def run_forward_shadow_replay(
         identity=identity,
     )
     try:
-        generation = runtime.run(provider=provider, now_ms=now_ms)
+        generation = runtime.run(
+            provider=provider,
+            now_ms=now_ms,
+            validation_generation_id=validation_generation_id,
+        )
         parity = compare_shadow_parity(
             list(generation["trades"].get("items") or []),
             generation["projection"],
@@ -545,7 +550,13 @@ class CanonicalPaperGenerationRuntime:
     def raise_if_failed(self) -> None:
         self.heartbeat.raise_if_failed()
 
-    def run(self, *, provider: Any, now_ms: int) -> dict[str, Any]:
+    def run(
+        self,
+        *,
+        provider: Any,
+        now_ms: int,
+        validation_generation_id: str,
+    ) -> dict[str, Any]:
         self.raise_if_failed()
         producer_id = str(self.manifest["producer_id"])
         cursor = self.store.latest_producer_cursor(producer_id)
@@ -562,6 +573,7 @@ class CanonicalPaperGenerationRuntime:
             producer_method_identity=str(self.manifest["producer_method_identity"]),
             simulator_manifest_id=str(self.manifest["simulator_manifest_id"]),
             lifecycle_method_identity=str(self.manifest["lifecycle_method_identity"]),
+            required_validation_generation_id=validation_generation_id,
             now_ms=now_ms,
             parent_producer_generation_id=parent,
         )

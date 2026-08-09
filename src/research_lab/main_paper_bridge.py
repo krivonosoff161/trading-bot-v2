@@ -191,6 +191,25 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
     )
 
 
+def v2_source_validation_generation_id(sig: PaperActionSignal) -> str | None:
+    """Return validation authority for one canonical v2 producer member.
+
+    Broad ``farm`` signals remain useful research observations, but only the
+    validation bridge mints ``pfr_farm`` signals. Returning ``None`` keeps the
+    former outside Paper Evidence v2; a malformed PFR signal fails closed.
+    """
+    if sig.source != "pfr_farm":
+        return None
+    validation_generation_id = str(
+        sig.validator_context.get("validation_generation_id") or ""
+    )
+    if not validation_generation_id:
+        raise PaperGenerationMismatch(
+            "v2 PFR bridge source lacks validation generation identity"
+        )
+    return validation_generation_id
+
+
 def instruction_from_signal(
     sig: PaperActionSignal,
     *,
@@ -202,11 +221,14 @@ def instruction_from_signal(
         return None
     entry = _entry_midpoint(sig)
     contract = _contract_from_signal(sig, entry)
-    source_validation_generation_id = str(
-        sig.validation_id or sig.validator_context.get("validation_id") or ""
-    )
-    if generation_context is not None and not source_validation_generation_id:
-        raise PaperGenerationMismatch("v2 bridge source lacks validation generation identity")
+    if generation_context is not None:
+        source_validation_generation_id = v2_source_validation_generation_id(sig)
+        if source_validation_generation_id is None:
+            return None
+    else:
+        source_validation_generation_id = str(
+            sig.validation_id or sig.validator_context.get("validation_id") or ""
+        )
     return MainPaperInstruction(
         instruction_id=f"mainpaper_{sig.signal_id}",
         source_signal_id=sig.signal_id,

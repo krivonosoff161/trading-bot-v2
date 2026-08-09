@@ -539,6 +539,28 @@ class TestPFRBuilderIdentity:
         assert sig is not None, f"Expected signal, got None: {reason}"
         self._assert_identity(sig, row)
 
+    def test_builder_propagates_validation_generation_identity(self):
+        row = _row(
+            {
+                **_MRF_ROW_DICT,
+                "validation_generation_id": "hvg_synthetic_current",
+            }
+        )
+        sig, reason = pfr_bridge.build_pfr_mean_reversion_fade(
+            row,
+            _mrf_candles_short(),
+            now=1e6,
+            boundary_ts=0,
+            mode="live",
+        )
+
+        assert sig is not None, f"Expected signal, got None: {reason}"
+        assert (
+            sig.validator_context["validation_generation_id"]
+            == "hvg_synthetic_current"
+        )
+        assert sig.validator_context["validation_id"] == str(row["candidate_id"])
+
     def test_mbr_preserves_identity(self):
         row = _row(_MBR_ROW_DICT)
         candles = _mbr_candles_long()
@@ -967,6 +989,52 @@ class TestPFRCycleIntegration:
         assert s.validator_context.get("setup_id") == "setup-C1"
         assert s.validator_context.get("source_validation_verdict") == "PAPER_FORWARD_READY"
         assert s.validator_context.get("params_hash") is not None
+
+    def test_run_cycle_invalidates_active_pfr_from_superseded_generation(
+        self, tmp_path, monkeypatch
+    ):
+        from src.research_lab.paper_signals import cycle, store
+
+        _seed_universe(tmp_path)
+        old_row = _row(
+            {**_MRF_ROW_DICT, "validation_generation_id": "hvg_old"}
+        )
+        old_signal, reason = pfr_bridge.build_pfr_mean_reversion_fade(
+            old_row,
+            _mrf_candles_short(),
+            now=1e6,
+            boundary_ts=0,
+            mode="live",
+        )
+        assert old_signal is not None, reason
+        store.append_signal(tmp_path, old_signal)
+        current_row = _row(
+            {**_MRF_ROW_DICT, "validation_generation_id": "hvg_current"}
+        )
+
+        def load_current(_db, *, status_counts, **_kwargs):
+            status_counts["pfr_generation:ready"] = 1
+            return [current_row]
+
+        monkeypatch.setattr(pfr_bridge, "load_pfr_records", load_current)
+        monkeypatch.setattr(pfr_bridge, "generate_pfr_signals", lambda *_a, **_k: [])
+
+        result = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("1h",),
+            provider=FakeProvider([]),
+            apply=True,
+            now=1e6,
+            pfr_db_path=self._pfr_db(tmp_path),
+            max_new=1,
+        )
+
+        stored = {signal.signal_id: signal for signal in store.load_signals(tmp_path)}
+        invalidated = stored[old_signal.signal_id]
+        assert invalidated.status == "invalidated"
+        assert invalidated.review["diagnosis"] == "validation_generation_superseded"
+        assert result["pfr_counts"]["pfr_stale_generation_invalidated"] == 1
 
     def test_run_cycle_reports_pfr_quality_rejection_reason(self, tmp_path):
         from src.research_lab.paper_signals import cycle, store

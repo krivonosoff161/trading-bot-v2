@@ -53,10 +53,12 @@ dependency, not by a route to live trading.
   co-located renewable paper fence; bridge, consumer, queue, observation,
   account, and projection promote atomically. Current-generation readers,
   training, lineage, calibration, memory, quality, and Telegram delivery bind
-  to the resulting run. Missing cutover, stale fence, stage failure, or preview
-  mismatch fails closed. Public code provides shadow-parity, activation, status,
-  and non-destructive pre-runtime rollback primitives, but no private cutover
-  has yet been applied.
+  to the resulting run. Producer membership is restricted to validation-bound
+  `pfr_farm` signals; broad research observations are excluded from generation
+  authority even if they carry forged validation-like fields, while a malformed
+  PFR identity still fails closed. Missing cutover, stale fence, stage failure,
+  or preview mismatch fails closed. Public code provides shadow-parity,
+  activation, status, and non-destructive pre-runtime rollback primitives.
 - Scanner passes and completed farm cycles publish atomic, secret-free product
   checkpoints. The RCC supervises them on an independent lane: ordinary PIDs
   and heartbeats cannot establish T+0 or refresh a product SLO. Honest zero

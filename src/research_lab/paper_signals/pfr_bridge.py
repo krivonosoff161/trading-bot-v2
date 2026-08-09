@@ -307,6 +307,8 @@ def _common_validator_context(
         "setup_id": row["setup_id"],
         "ready_strategy_id": _ready_strategy_id(row),
         "candidate_id": str(row["candidate_id"]),
+        "validation_id": str(row["candidate_id"]),
+        "validation_generation_id": str(row.get("validation_generation_id") or ""),
         "run_id": str(row.get("run_id") or ""),
         "params_hash": row["params_hash"],
         "source_validation_verdict": str(row.get("hard_status") or ""),
