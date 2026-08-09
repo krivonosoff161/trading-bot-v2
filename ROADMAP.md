@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
+- Verified against: `99ff1dfd62859f1bd180559de2fe5840422e6015`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -34,8 +34,11 @@ dependency, not by a route to live trading.
   mark without dropping its queued work. Aggregate backlog, oldest age,
   arrival/service rates, and drain estimates expose the service SLO; a finite
   retry budget terminally classifies repeated no-artifact/no-verdict work. A
-  batch with no exportable candidate preserves the prior generation and does
-  not rescan the full historical validation corpus.
+  batch with no exportable candidate preserves an existing current-code
+  generation. If that authority is `code_stale`, maintenance publishes one
+  idempotent current-code `ready_empty` generation after its active/fence check;
+  pending, invalid, unavailable, and ambiguous states remain fail-closed. This
+  path does not rescan the full historical validation corpus.
 - Paper runtime consumers share one content-verified current-generation
   snapshot per cycle, load only manifest-named active cards, and expose explicit
   pending/stale/empty/invalid availability states. Signal evaluation retains the

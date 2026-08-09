@@ -341,6 +341,42 @@ def load_current_generation(private_root: Path) -> dict[str, Any] | None:
     return _load_dict(path) or {}
 
 
+def _current_generation_manifest_status(manifest: dict[str, Any] | None) -> str:
+    if manifest is None:
+        return "legacy_absent"
+    generation_id = str(manifest.get("generation_id") or "")
+    if manifest.get("producer_complete") is not True:
+        return "pending"
+    if (
+        manifest.get("schema") != SCHEMA
+        or manifest.get("paper_only") is not True
+        or manifest.get("execution_allowed") is not False
+        or not isinstance(manifest.get("active"), dict)
+        or generation_id != _generation_id(_identity(manifest))
+    ):
+        return "invalid_manifest"
+    try:
+        current_code = _producer_code_manifest()
+    except OSError:
+        return "producer_code_unavailable"
+    if _identity(manifest).get("producer_code") != current_code:
+        return "code_stale"
+    return "code_current"
+
+
+def current_generation_manifest_status(private_root: Path) -> str:
+    """Classify publication authority without re-hashing active artifact chains.
+
+    Validation maintenance only needs to know whether the published manifest is
+    bound to the running producer code.  Full consumers still use
+    ``load_current_generation_snapshot`` to verify every active artifact.
+    """
+
+    return _current_generation_manifest_status(
+        load_current_generation(Path(private_root))
+    )
+
+
 def _base_manifest_valid(manifest: dict[str, Any]) -> bool:
     if (
         manifest.get("schema") != SCHEMA
@@ -466,26 +502,13 @@ def load_current_generation_snapshot(
     private_root = Path(private_root)
     _ensure_active(check_active)
     manifest = load_current_generation(private_root)
+    manifest_status = _current_generation_manifest_status(manifest)
     if manifest is None:
-        return CurrentGenerationSnapshot("legacy_absent", "", {}, 0)
+        return CurrentGenerationSnapshot(manifest_status, "", {}, 0)
     generation_id = str(manifest.get("generation_id") or "")
-    if manifest.get("producer_complete") is not True:
-        return CurrentGenerationSnapshot("pending", generation_id, {}, 0)
-    if (
-        manifest.get("schema") != SCHEMA
-        or manifest.get("paper_only") is not True
-        or manifest.get("execution_allowed") is not False
-        or not isinstance(manifest.get("active"), dict)
-        or generation_id != _generation_id(_identity(manifest))
-    ):
-        return CurrentGenerationSnapshot("invalid_manifest", generation_id, {}, 0)
-    try:
-        current_code = _producer_code_manifest()
-    except OSError:
-        return CurrentGenerationSnapshot("producer_code_unavailable", generation_id, {}, 0)
+    if manifest_status != "code_current":
+        return CurrentGenerationSnapshot(manifest_status, generation_id, {}, 0)
     _report_progress(progress, check_active, "generation_manifest_verified", 1, 1)
-    if _identity(manifest).get("producer_code") != current_code:
-        return CurrentGenerationSnapshot("code_stale", generation_id, {}, 0)
 
     active: dict[str, Any] = manifest["active"]
     candidate_ids = sorted(str(item) for item in active if str(item))

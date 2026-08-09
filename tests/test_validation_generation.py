@@ -281,3 +281,16 @@ def test_generation_snapshot_distinguishes_pending_and_code_stale(
         lambda: {**actual, "src/research_lab/paper_runtime.py": "new-code"},
     )
     assert generation.load_current_generation_snapshot(tmp_path).status == "code_stale"
+
+
+def test_manifest_status_does_not_scan_active_artifact_chains(monkeypatch, tmp_path):
+    _write_chain(tmp_path, "fv_manifest-status")
+    monkeypatch.setattr(
+        generation,
+        "_active_payloads",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("manifest-only classification scanned active artifacts")
+        ),
+    )
+
+    assert generation.current_generation_manifest_status(tmp_path) == "code_current"
