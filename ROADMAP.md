@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `6312753e27f45ff12fec792ecfc6cd35f995ac08`
+- Verified against: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -63,6 +63,11 @@ dependency, not by a route to live trading.
   output is `idle`, public-provider loss is `degraded`, and stale stages,
   validation oldest-age breach, cross-generation races, or retained technical
   learning rows fail closed.
+- RCC startup now publishes a digest-bound attempt identity and completed stage
+  before the UI heartbeat exists. Constructor failures retain only their safe
+  exception type, BAT wrappers preserve the real exit code, and the startup
+  adapter rejects a dead or PID-reused process generation instead of waiting
+  through the full cold-start budget.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies

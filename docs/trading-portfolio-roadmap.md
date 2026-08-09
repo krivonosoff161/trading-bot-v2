@@ -3,8 +3,8 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `5c9ee576c3625955764da042e81c117b4ef43d3f`
-- Trading repository SHA: `5c9ee576c3625955764da042e81c117b4ef43d3f`
+- Verified against: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
+- Trading repository SHA: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
 - Validator repository SHA: `0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6`
 - Scope: public-safe ownership, capability, evidence, and authority map
 - Evidence: [machine source](trading-portfolio-roadmap.yaml) and
@@ -50,7 +50,7 @@ execution -> outside the supported portfolio and separately owner-gated
 | Skeptical validation | `honest-backtest` | implemented bounded | none | A pass means not rejected, never profitable. | Maintain the versioned bridge and untouched evidence. |
 | Candidate lifecycle | `trading-bot-v2` | implemented bounded | paper only | Fenced state transitions; private identities. | Prove interruption and recovery invariants. |
 | Paper observation | `trading-bot-v2` | implemented bounded | paper only | Provider/data taxonomy preserves active observations; canonical v2 generation authority atomically binds paper lifecycle, account, readers, and delivery without orders. | Prove quiescent private cutover, exact-revision parity, and a stable acceptance window. |
-| Research Control Center | `trading-bot-v2` | implemented bounded | separately owner-gated | Supervises one canonical paper-only profile with independent process, database, and completed-product-progress lanes; PID liveness alone cannot establish T+0. | Green 48-hour canary proving product-stage SLO and generation freshness. |
+| Research Control Center | `trading-bot-v2` | implemented bounded | separately owner-gated | Supervises one canonical paper-only profile with independent process, database, and completed-product-progress lanes. Revision-bound pre-heartbeat evidence rejects constructor failure, dead PID, or process-generation reuse without retaining raw exception text; PID liveness alone cannot establish T+0. | Green 48-hour canary proving product-stage SLO and generation freshness. |
 | LLM advisory | `trading-bot-v2` | implemented bounded | advisory | Proposals are untrusted and schema-gated. | Held-out usefulness evaluation after reliability. |
 | Evidence/storage | `trading-bot-v2` | implemented bounded | separately owner-gated | Synthetic migration plus plan-bound private backup retention; roots and payloads stay private. | Apply the reviewed retention plan, prove idempotent reclamation, then enforce its budget before canary. |
 | Delivery | `trading-bot-v2` | implemented bounded | separately owner-gated | Paper cards require the current v2 generation; recipients and ACK state are private. | Observe generation binding and delivery continuity in canary. |

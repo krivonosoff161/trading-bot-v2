@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 6312753e27f45ff12fec792ecfc6cd35f995ac08
+  trading-bot-v2: 6cd736139904ed5f3180d39d8b2a25a111933b3d
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -220,10 +220,13 @@ modules:
     dependencies: [research_ingestion, strategy_lab, paper_observation, delivery]
     implemented_evidence:
       - scripts/research_control_center.py
+      - scripts/strategy_lab/rcc_startup_status.py
       - src/research_lab/rcc_runtime_safety.py
+      - src/research_lab/rcc_startup_evidence.py
       - src/research_lab/windows_listener_probe.py
       - src/research_lab/product_progress.py
       - tests/test_research_control_center.py
+      - tests/test_rcc_preheartbeat_startup.py
       - tests/test_windows_listener_probe.py
       - tests/test_product_progress.py
     missing_evidence: a green 48-hour canary proving product-stage SLO and generation freshness on the private runtime
