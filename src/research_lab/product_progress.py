@@ -8,6 +8,7 @@ bounded aggregates and never reads market rows, recipient identities or secrets.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,6 +196,10 @@ class ProductProgressSlo:
     farm_seconds: float = 300.0
 
 
+class ProductProgressTransitionError(RuntimeError):
+    """A green startup sample cannot establish a safe steady-state monitor."""
+
+
 class ProductProgressMonitor:
     """Assess real completed work separately from process liveness."""
 
@@ -208,8 +213,91 @@ class ProductProgressMonitor:
     ) -> None:
         self.private_root = Path(private_root)
         self.run_started_at = float(run_started_at)
+        if not math.isfinite(self.run_started_at) or self.run_started_at <= 0.0:
+            raise ValueError("run_started_at must be a finite positive timestamp")
         self.slo = slo
         self.wall_clock = wall_clock
+
+    @classmethod
+    def from_green_t0_report(
+        cls,
+        private_root: Path,
+        *,
+        t0_report: Mapping[str, Any],
+        t0_observed_at: float,
+        slo: ProductProgressSlo = ProductProgressSlo(),
+        wall_clock: Any = time.time,
+    ) -> "ProductProgressMonitor":
+        """Continue one run across T+0 without rebasing its time boundary.
+
+        Startup and steady-state adapters are separate processes in the canary
+        harness.  The accepted startup report therefore carries the immutable
+        launch-time boundary into the steady-state monitor.  Replacing that
+        boundary with the later T+0 observation can make the very checkpoint
+        that established readiness look pre-run and must fail closed.
+        """
+
+        observed_at = float(t0_observed_at)
+        boundary_value = t0_report.get("run_started_at")
+        if not isinstance(boundary_value, (int, float)) or isinstance(
+            boundary_value, bool
+        ):
+            raise ProductProgressTransitionError(
+                "green T+0 report has no valid run boundary"
+            )
+        run_started_at = float(boundary_value)
+        if (
+            not math.isfinite(observed_at)
+            or not math.isfinite(run_started_at)
+            or run_started_at <= 0.0
+            or observed_at < run_started_at
+        ):
+            raise ProductProgressTransitionError(
+                "green T+0 report has an invalid run boundary"
+            )
+        components = _mapping(t0_report.get("components"))
+        if (
+            t0_report.get("schema") != REPORT_SCHEMA
+            or t0_report.get("ready") is not True
+            or t0_report.get("paper_only") is not True
+            or t0_report.get("execution_allowed") is not False
+            or list(t0_report.get("hard_fail_reasons") or ())
+            or _mapping(components.get("scanner")).get("current_run") is not True
+            or _mapping(components.get("farm")).get("current_run") is not True
+        ):
+            raise ProductProgressTransitionError(
+                "product progress was not green at T+0"
+            )
+
+        verifier = cls(
+            private_root,
+            run_started_at=run_started_at,
+            slo=slo,
+            wall_clock=lambda: observed_at,
+        )
+        current = verifier.sample()
+        current_components = _mapping(current.get("components"))
+        for component in ("scanner", "farm"):
+            baseline_sequence = int(
+                _mapping(components.get(component)).get("sequence") or 0
+            )
+            current_sequence = int(
+                _mapping(current_components.get(component)).get("sequence") or 0
+            )
+            if baseline_sequence < 1 or current_sequence < baseline_sequence:
+                raise ProductProgressTransitionError(
+                    "product progress regressed during the T+0 transition"
+                )
+        if current.get("ready") is not True:
+            raise ProductProgressTransitionError(
+                "product progress changed before the T+0 transition completed"
+            )
+        return cls(
+            private_root,
+            run_started_at=run_started_at,
+            slo=slo,
+            wall_clock=wall_clock,
+        )
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
@@ -288,6 +376,7 @@ class ProductProgressMonitor:
         }
         return {
             "schema": REPORT_SCHEMA,
+            "run_started_at": self.run_started_at,
             "state": "failed"
             if hard_fail
             else "degraded"

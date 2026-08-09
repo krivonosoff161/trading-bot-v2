@@ -130,7 +130,11 @@ a sanitized aggregate if a result needs discussion.
   generation SLO. A completed pass with zero candidates is honest `idle`, and
   bounded public-provider failure is `degraded`; stale stages, validation SLO
   breach, generation mismatch, or retained technical learning evidence fail
-  closed. The canonical RCC starts this supervisor
+  closed. The green T+0 product report carries the original launch-time run
+  boundary into steady monitoring; the steady adapter must use
+  `ProductProgressMonitor.from_green_t0_report`, recheck scanner/farm sequences,
+  and must not rebase that boundary to the later T+0 observation. The canonical
+  RCC starts this supervisor
   with the paper profile: early owner/listener absence remains `starting`
   inside the bounded cold-start budget, then the first green owner/fence
   generation and a fresh, exact identity/fence-matched process-lease supervisor
