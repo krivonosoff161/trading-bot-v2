@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `5c9ee576c3625955764da042e81c117b4ef43d3f`
+- Verified against: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
 - Scope: supported paper/research entrypoints, effects, and incompatible owners
 - Evidence: [public documentation guard](../scripts/ci/check_public_docs.py) and
   [Research Control Center tests](../tests/test_research_control_center.py)
@@ -42,12 +42,16 @@ commands never start RCC, discover private roots, or mutate canonical databases.
 | Goal | Command | Effects and limits |
 |---|---|---|
 | Supervise a bounded profile | `bat\research_control_center.bat` | Canonical UI supervisor. All contours start disabled. A profile launch requires separate owner authority. |
+| Inspect pre-heartbeat liveness | `python -m scripts.strategy_lab.rcc_startup_status --private-root <exact-root> --revision <exact-sha> [--previous-attempt-id <id> --startup-requested-at <unix-seconds>]` | Read-only, revision-bound PID/process-generation check. Exit code 2 means the RCC failed or stopped before heartbeat; output contains no exception message or environment value. |
 
 The supported paper-only profile consists of independently owned contours:
 `ollama`, `public_news`, `scanner`, `paper_cards`, and `telegram_bot`. The RCC
 must prove one canonical process authority, fencing, listener ownership, fresh
 progress, and `execution_allowed=false`. It never auto-restarts after a hard
-fail.
+fail. Before heartbeat, `state/control-center/startup.json` publishes an atomic,
+digest-verified attempt stage. A GUI/Tcl initialization failure is recorded by
+safe exception type and remains a hard startup refusal; it is never treated as
+a slow dependency.
 
 ## Paper And Farm
 

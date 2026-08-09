@@ -3,9 +3,10 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified against: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
 - Scope: supported paper-only preflight, start, monitor, and graceful stop
-- Evidence: [RCC tests](../tests/test_research_control_center.py) and
+- Evidence: [RCC tests](../tests/test_research_control_center.py),
+  [pre-heartbeat tests](../tests/test_rcc_preheartbeat_startup.py), and
   [entrypoint catalog](entrypoints.md)
 - Residual risks: all runtime commands still require fresh external owner authority.
 - Next gate: keep stop/finalizer behavior aligned with production code.
@@ -90,6 +91,15 @@ a sanitized aggregate if a result needs discussion.
   Any finalizer must bind both values to the currently live process and fail
   closed when the start identity is missing or differs; it must never derive
   the expected start time by probing a heartbeat PID after the fact.
+- Before that heartbeat exists, the RCC atomically publishes a digest-bound
+  `state/control-center/startup.json` record with its exact revision, attempt,
+  PID/process-start identity, completed startup stage, and paper-only boundary.
+  `scripts.strategy_lab.rcc_startup_status` binds a launch to the new attempt
+  and checks the live process generation. A constructor failure, malformed
+  evidence, dead/PID-reused process, or missing new attempt after the bounded
+  evidence grace is an immediate startup failure; exception messages and
+  environment values are never retained. A missing contour listener remains a
+  dependency-level `starting` state and is evaluated by its separate deadline.
 - The same heartbeat publishes a bounded `shutdown` contract. A finalizer may
   request the documented graceful stop only for the exact live RCC generation
   while `shutdown.state=running`. When the identity-matched RCC reports

@@ -36,7 +36,9 @@ from src.research_lab.canary_checkpoint_policy import (
 )
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
 from src.research_lab.ownership import current_process_identity, probe_process_identity
+from src.research_lab.paper_generation_cutover import current_checkout_revision
 from src.research_lab.product_progress import ProductProgressMonitor
+from src.research_lab.rcc_startup_evidence import RccStartupEvidenceWriter
 from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
 from src.research_lab.windows_listener_probe import (
     ListenerProbeStageEvent,
@@ -74,6 +76,7 @@ PRIVATE_ROOT = (
     else Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
 )
 STATE_DIR = PRIVATE_ROOT / "state" / "control-center"
+STARTUP_STATUS_PATH = STATE_DIR / "startup.json"
 STOP_FARM = PRIVATE_ROOT / "state" / "STOP_FARM_FULL_CYCLE.txt"
 CANONICAL_STOP_INTENTS = (
     STOP_FARM,
@@ -2561,15 +2564,57 @@ def main() -> int:
     args = parser.parse_args()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        instance = SingleInstance(STATE_DIR / "control-center.lock")
-    except RuntimeError as exc:
-        messagebox.showerror("Исследовательский центр", str(exc))
+        revision = current_checkout_revision(ROOT)
+        identity = current_process_identity()
+        startup = RccStartupEvidenceWriter(
+            STARTUP_STATUS_PATH,
+            revision=revision,
+            pid=identity.pid,
+            process_started_at=identity.started_at,
+        )
+        startup.transition("revision_verified")
+    except Exception as exc:
+        print(
+            "RCC startup failed at revision_verified: " + type(exc).__name__,
+            file=sys.stderr,
+        )
         return 2
-    app = ControlCenter(instance, tuple(args.start))
+
+    instance: SingleInstance | None = None
+    app: ControlCenter | None = None
+    stage = "lock_acquiring"
     try:
+        startup.transition(stage)
+        instance = SingleInstance(STATE_DIR / "control-center.lock")
+        stage = "lock_acquired"
+        startup.transition(stage)
+        stage = "ui_initializing"
+        startup.transition(stage)
+        app = ControlCenter(instance, tuple(args.start))
+        stage = "heartbeat_started"
+        startup.transition(stage)
+        stage = "mainloop_running"
+        startup.transition(stage, state="running")
         app.mainloop()
+    except Exception as exc:
+        try:
+            startup.fail(stage, exc)
+        except Exception as evidence_exc:
+            print(
+                "RCC startup evidence write failed: " + type(evidence_exc).__name__,
+                file=sys.stderr,
+            )
+        print(
+            f"RCC startup failed at {stage}: {type(exc).__name__}",
+            file=sys.stderr,
+        )
+        return 2
     finally:
-        app._stop_heartbeat_publisher()
+        if app is not None:
+            app._stop_heartbeat_publisher()
+        if instance is not None:
+            instance.close()
+    startup.transition("mainloop_stopped", state="stopped")
     return 0
 
 
