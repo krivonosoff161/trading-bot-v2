@@ -1146,6 +1146,7 @@ def send_paper_telegram_previews(
     status_digest: bool = False,
     status_digest_interval_hours: int = 12,
     now: float | None = None,
+    expected_generation_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Dry-run or send validated paper previews to active subscriber bot chats.
 
@@ -1155,6 +1156,22 @@ def send_paper_telegram_previews(
     from importing Telegram or credential-aware modules.
     """
     items, source_path, source = _load_preview_items(private_root)
+    expected_run_id = str(expected_generation_run_id or "")
+    generation_block_reason = ""
+    if expected_run_id:
+        source_run_id = str(source.get("paper_generation_run_id") or "")
+        if source.get("current_generation_compatible") is not True:
+            generation_block_reason = "preview_generation_not_current"
+        elif source_run_id != expected_run_id:
+            generation_block_reason = "preview_generation_run_mismatch"
+        elif any(
+            str(item.get("paper_generation_run_id") or "") != expected_run_id
+            for item in items
+        ):
+            generation_block_reason = "preview_item_generation_run_mismatch"
+        if generation_block_reason:
+            items = []
+            status_digest = False
     recipient_ids = [str(r).strip() for r in (recipient_ids or []) if str(r).strip()]
     sent_keys: set[str] = set()
     accepted: list[dict[str, Any]] = []
@@ -1317,6 +1334,13 @@ def send_paper_telegram_previews(
         "source_schema": source.get("schema", ""),
         "source_exists": source_path is not None,
         "source_path": str(source_path) if source_path else "",
+        "paper_generation_run_id": str(source.get("paper_generation_run_id") or ""),
+        "expected_generation_run_id": expected_run_id,
+        "generation_block_reason": generation_block_reason,
+        "current_generation_compatible": bool(
+            source.get("current_generation_compatible")
+        )
+        and not generation_block_reason,
         "records_read": len(items),
         "eligible": len(accepted),
         "eligible_cards": len(accepted),

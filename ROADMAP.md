@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `fb381deceac935328dbdbf0db3d6b59fa1a4f81c`
+- Verified against: `5c9ee576c3625955764da042e81c117b4ef43d3f`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -48,6 +48,15 @@ dependency, not by a route to live trading.
   incident/recovery evidence; defense-in-depth selectors exclude them from
   family ranking, training projections, setup memory, adaptive recommendations,
   and advisory outcome-review inputs.
+- Paper Evidence v2 is wired into the canonical farm as a required,
+  operator-activated generation authority. One outer farm identity owns the
+  co-located renewable paper fence; bridge, consumer, queue, observation,
+  account, and projection promote atomically. Current-generation readers,
+  training, lineage, calibration, memory, quality, and Telegram delivery bind
+  to the resulting run. Missing cutover, stale fence, stage failure, or preview
+  mismatch fails closed. Public code provides shadow-parity, activation, status,
+  and non-destructive pre-runtime rollback primitives, but no private cutover
+  has yet been applied.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies
@@ -67,8 +76,9 @@ private runtime, data, or trading hypothesis is proven.
 2. Verify during the bounded canary that the implemented provider-error/data-gap/
    genuine-no-market-data taxonomy preserves observations through a real outage
    and recovery while technical evidence remains absent from all learning inputs.
-3. Bind paper consumers to a verified current validation generation and perform
-   any private v2 cutover only through the separately authorized operational gate.
+3. Apply the now-implemented Paper Evidence v2 private cutover only through the
+   separately authorized quiescent backup/restore, shadow-parity, integrity,
+   and exact-revision operational gate.
 4. Monitor end-to-end product progress and generation freshness rather than PID
    liveness alone, including deterministic chaos scenarios.
 5. Apply bounded private storage rotation only after exact backup, restore,

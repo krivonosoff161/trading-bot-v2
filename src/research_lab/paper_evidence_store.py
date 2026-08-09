@@ -407,11 +407,93 @@ class PaperEvidenceStore:
             conn.commit()
             self._conn = conn
 
+    @classmethod
+    def open_existing(
+        cls,
+        path: Path | str,
+        *,
+        clock: Callable[[], float] = time.time,
+    ) -> "PaperEvidenceStore":
+        """Open an already activated v2 store without creating or migrating it.
+
+        Canonical runtime uses this path after an explicit operational cutover.  A
+        missing file, an incompatible schema, or an incomplete activation therefore
+        fails closed instead of silently creating a new authority database.
+        """
+        database_path = Path(path)
+        if not database_path.is_file():
+            raise PaperEvidenceConflict("paper evidence authority database is missing")
+        uri = f"file:{database_path.resolve().as_posix()}?mode=rw"
+        conn = sqlite3.connect(
+            uri,
+            uri=True,
+            timeout=30,
+            check_same_thread=False,
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("PRAGMA foreign_keys = ON")
+            marker = conn.execute(
+                "SELECT value FROM paper_meta WHERE key='schema_version'"
+            ).fetchone()
+            if marker is None or str(marker["value"]) != SCHEMA_VERSION:
+                raise PaperEvidenceConflict("unsupported paper evidence schema")
+            required_tables = {
+                "account_geneses",
+                "paper_writer_lease",
+                "producer_generations",
+                "paper_runs",
+                "paper_current_run",
+                "projection_materializations",
+            }
+            present = {
+                str(row["name"])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if not required_tables.issubset(present):
+                raise PaperEvidenceConflict("paper evidence activation is incomplete")
+            integrity = conn.execute("PRAGMA quick_check").fetchone()
+            if integrity is None or str(integrity[0]) != "ok":
+                raise PaperEvidenceConflict("paper evidence quick check failed")
+        except Exception:
+            conn.close()
+            raise
+        store = cls(database_path, clock=clock)
+        store._conn = conn
+        return store
+
     def close(self) -> None:
         with self._lock:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
+
+    def latest_producer_cursor(self, producer_id: str) -> dict[str, Any]:
+        """Return the immutable producer cursor used for the next fenced run."""
+        if not producer_id:
+            raise ValueError("producer identity required")
+        row = self.connection.execute(
+            "SELECT producer_generation_id,producer_sequence,status "
+            "FROM producer_generations WHERE producer_id=? "
+            "ORDER BY producer_sequence DESC LIMIT 1",
+            (producer_id,),
+        ).fetchone()
+        if row is None:
+            return {
+                "producer_id": producer_id,
+                "producer_sequence": 0,
+                "producer_generation_id": "",
+                "status": "unavailable",
+            }
+        return {
+            "producer_id": producer_id,
+            "producer_sequence": int(row["producer_sequence"]),
+            "producer_generation_id": str(row["producer_generation_id"]),
+            "status": str(row["status"]),
+        }
 
     def _begin(self) -> sqlite3.Connection:
         conn = self.connection

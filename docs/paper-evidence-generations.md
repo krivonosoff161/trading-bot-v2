@@ -2,12 +2,15 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
-- Scope: immutable paper-evidence authority and deferred private rollout
+- Verified: 2026-08-09
+- Verified against: `5c9ee576c3625955764da042e81c117b4ef43d3f`
+- Scope: immutable paper-evidence authority, canonical integration, and gated cutover
 - Evidence: [paper evidence tests](../tests/test_paper_evidence_store_v2.py)
-- Residual risks: public capability does not establish private migration or adoption.
-- Next gate: separate migration, parity, rollback, and owner authority.
+  and [cutover tests](../tests/test_paper_generation_cutover.py)
+- Residual risks: public integration does not establish that private cutover,
+  parity, backup, or a long canary has succeeded.
+- Next gate: separately authorized operational shadow/parity, cutover, and
+  runtime proof.
 
 This document defines the public v2 paper-evidence boundary. The implementation
 is paper/research only. It cannot place orders, enable execution, read a private
@@ -29,8 +32,10 @@ back to a convenient legacy filename.
 
 ## One Generation Run
 
-`run_paper_generation_v2()` is a dependency-injected coordinator, not a default
-launcher. Its caller must supply all of the following:
+`run_paper_generation_v2()` remains dependency-injected. The canonical farm
+reaches it only through `CanonicalPaperGenerationRuntime`, after validating an
+external cutover marker and opening an already activated store. Its caller must
+supply all of the following:
 
 - an explicitly activated `PaperEvidenceStore`;
 - a live co-located `paper_evidence_writer` lease and fence;
@@ -49,7 +54,11 @@ withdrawal. The previous completed projection remains current.
 The canonical farm lease remains an outer process-ownership preflight. It does
 not replace or bypass the writer lease stored in the paper-evidence database.
 Every v2 mutation rechecks the co-located owner, process identity, expiry,
-monotonic fence, and mutation sequence in the same database transaction.
+monotonic fence, and mutation sequence in the same database transaction. A
+dedicated renewal thread keeps the paper-writer lease alive while bounded
+public-data work is in progress. Renewal failure is propagated to the farm
+foreground, and graceful stop joins the thread before releasing the outer farm
+owner.
 
 ## Immutable Account And Lifecycle Evidence
 
@@ -93,18 +102,51 @@ cannot demote, promote or rerank a geometry profile.
 The paper cycle recomputes its calibration view from that selector; it does not
 grant authority to a previously written calibration JSON file.
 
+The canonical v2 path does not execute the legacy product-ledger, thesis/exit,
+or unrelated product-event training writers because they do not own a v2
+generation envelope. Their historical files remain display/reference evidence.
+Preview, paper training, lineage, retest selection, System Analyst tasks, role
+dispatch, calibration, setup memory, quality reporting, and Telegram delivery
+must match the exact current run. Stale accepted role work is skipped rather
+than dispatched into the new generation.
+
 ## Activation, Migration, And Rollback
 
-No supported launcher currently activates v2, and this package performs no
-private migration or runtime rollout. A later rollout requires a separate,
-explicit operator instruction plus quiescence, backup, dry inventory, shadow
-replay, parity/exception reporting, abort metrics, and forward-only recovery.
+The canonical farm launcher now requires
+`STRATEGY_LAB_PAPER_EVIDENCE_V2_REQUIRED=1`. It does **not** activate or
+migrate a database implicitly. Startup fails closed unless
+`state/paper_evidence_cutover.v2.json` is active, digest-valid, paper-only,
+points to the one canonical relative database path, and names an existing
+account generation whose model digest matches the store. Activation and every
+canonical open also compare the marker's code identity with the bounded local
+`git rev-parse HEAD`; a marker from another revision is rejected before the
+writer lease or any materialization is acquired.
 
-Legacy artifacts are never upgraded by guessing missing identities. After v2
-authority is activated, rollback may disable v2 consumers or use a v2-aware
-compatibility reader, but it must preserve the database, event chains,
-revisions, cursors, account generations, and materialization history. Returning
-replacement-mode v1 writers to authority is not a valid rollback.
+The supported operational primitives are:
+
+- `python -m scripts.strategy_lab.paper_generation_cutover ... shadow-parity`
+  compares normalized legacy and v2 content in a shadow root;
+- `... shadow-replay --shadow-root <new-root> ...` copies only the authenticated
+  paper-signal ledger to a distinct root, performs one bounded public-data v2
+  run, and emits aggregate hashes/parity without copying configuration,
+  delivery state, identities, or credentials;
+- `... activate --code-identity <exact-revision> --confirm-quiescent` creates
+  or opens the selected v2 store, creates the immutable account genesis, proves
+  integrity, and publishes the active marker last;
+- `... rollback` disables a pre-runtime cutover by replacing the marker with a
+  digest-bound `rolled_back` state. It deletes neither the database nor its
+  evidence, and a second rollback changes nothing.
+
+These primitives do not prove the required operational preconditions. The
+operator must first prove zero owners/processes, WAL-aware backup and restore,
+database integrity, exact revision equality, shadow parity or documented
+exceptions, and a safe storage budget.
+
+Legacy artifacts are never upgraded by guessing missing identities. The first
+v2 run is a forward-only generation over currently authenticated active
+signals. Once v2 runtime has published evidence, returning replacement-mode v1
+writers to authority is not a valid rollback. Incomplete or corrupt v2
+authority continues to fail closed rather than falling back to filenames.
 
 All public tests use temporary roots, synthetic rows, and temporary SQLite
 databases. They do not read private runtime rows, choose a real provider, start

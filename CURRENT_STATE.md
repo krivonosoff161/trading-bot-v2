@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `fb381deceac935328dbdbf0db3d6b59fa1a4f81c`
+- Verified against: `5c9ee576c3625955764da042e81c117b4ef43d3f`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -25,7 +25,7 @@ model conversations, recipients, credentials, or workstation-specific state.
 | Deterministic simulation | implemented bounded | Declared truth tiers and synthetic parity are covered; full market execution fidelity is not claimed. |
 | Independent validation bridge | implemented bounded | `honest-backtest` can try to falsify a candidate; a pass means only not rejected. |
 | Fenced candidate lifecycle | implemented bounded | Owner, fence, claim, generation, and idempotency contracts are tested. Continuous validation maintenance honors the configured batch capacity, scans a bounded window past terminal orphan/ineligible and artifact-unavailable head tasks, and applies upstream classification backpressure at a configurable high-water mark without discarding classify work. Aggregate backlog, oldest age, arrival, service, and drain estimates are observable; a finite retry budget terminalizes repeated failures. A batch with no exportable candidate preserves the last valid generation; private runtime continuity and SLO compliance remain operational questions. |
-| Paper observation | implemented bounded | Current-generation authority is content-verified once per cycle, active cards are loaded directly without a historical catalog scan, and signal evaluation preserves prefix no-lookahead semantics inside a declared-history-bounded recent horizon with completed-chunk progress and fail-closed cancellation. Public-data failures are classified as `provider_error`, `data_gap`, or `genuine_no_market_data`; they preserve the active observation, append separate operational incident/recovery evidence, and are censored from family ranking, paper/product training, setup memory, adaptive consumers, and LLM outcome review. Outcomes and accounting remain paper-only and cannot create exchange actions; continuous private-runtime recovery remains unproved. |
+| Paper observation | implemented bounded | Current-generation authority is content-verified once per cycle, active cards are loaded directly without a historical catalog scan, and signal evaluation preserves prefix no-lookahead semantics inside a declared-history-bounded recent horizon with completed-chunk progress and fail-closed cancellation. Public-data failures are classified as `provider_error`, `data_gap`, or `genuine_no_market_data`; they preserve the active observation, append separate operational incident/recovery evidence, and are censored from family ranking, paper/product training, setup memory, adaptive consumers, and LLM outcome review. The canonical farm now requires an explicitly activated Paper Evidence v2 cutover, binds its writer lease to the same owner/process identity, atomically promotes bridge through projection, and blocks stale-generation Telegram delivery. Operational cutover and continuous private-runtime recovery remain unproved. |
 | Research Control Center | implemented bounded | The canonical paper-only supervisor and fail-closed safety checks exist. Listener inventory uses an isolated, bounded native Windows provider; a fresh 48-hour canary is still required. |
 | LLM advisory contour | implemented bounded | Inputs and outputs are bounded proposals; deterministic code owns calculations, verdicts, state changes, and permissions. |
 | Evidence/storage capability | implemented bounded | Content-bound archives, synthetic migration, and plan-digest-bound backup retention exist; applying them to private roots remains separately owner-gated. |
@@ -50,7 +50,10 @@ row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-road
 4. **Validation service SLO:** prove during the paper-only canary that the
    configured service capacity drains rather than grows the validation backlog,
    the oldest-age SLO remains bounded, and backpressure never loses classify work.
-5. **Quality calibration:** only after reliability, measure signal, validator,
+5. **Paper authority cutover:** after all product-chain phases merge, prove
+   quiescent backup/restore, shadow parity, exact-revision marker activation,
+   writer/fence identity, and rollback readiness before RCC launch.
+6. **Quality calibration:** only after reliability, measure signal, validator,
    role, and LLM advisory quality against immutable held-out evidence.
 
 GitHub issue #224 tracks end-to-end paper-only observation. Issue #155 remains
