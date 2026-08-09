@@ -220,7 +220,14 @@ def test_farm_metrics_requires_complete_same_generation_chain() -> None:
     run = "run-current"
     metrics = farm_metrics(
         {
-            "paper_generation_v2": {"run_id": run},
+            "paper_generation_v2": {
+                "run_id": run,
+                "producer_membership": {
+                    "active_executable_signals": 4,
+                    "validation_bound_members": 1,
+                    "research_only_excluded": 3,
+                },
+            },
             "main_paper_bridge": {
                 "paper_generation_run_id": run,
                 "instructions": 1,
@@ -250,6 +257,58 @@ def test_farm_metrics_requires_complete_same_generation_chain() -> None:
 
     assert metrics["generation_consistent"] is True
     assert metrics["queue_items"] == 1
+    assert metrics["producer_active_executable_signals"] == 4
+    assert metrics["producer_validation_bound_members"] == 1
+    assert metrics["producer_research_only_excluded"] == 3
+
+
+def test_validation_generation_waiting_is_starting_not_stage_mismatch(
+    tmp_path: Path,
+) -> None:
+    publish_checkpoint(
+        tmp_path,
+        component="scanner",
+        sequence=1,
+        status="idle",
+        metrics=scanner_metrics(
+            inputs=0,
+            fresh=0,
+            cards=0,
+            dropped=0,
+            llm_failures=0,
+            provider_failures=0,
+        ),
+        completed_at=101.0,
+    )
+    metrics = farm_metrics(
+        {
+            "paper_generation_v2": {
+                "state": "waiting_validation_generation",
+                "validation_generation_status": "code_stale",
+                "run_id": "",
+            }
+        }
+    )
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=1,
+        status="waiting",
+        metrics=metrics,
+        completed_at=101.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+
+    assert report["ready"] is False
+    assert report["state"] == "starting"
+    assert report["hard_fail_reasons"] == []
+    assert metrics["paper_generation_waiting"] is True
+    assert metrics["validation_generation_status"] == "code_stale"
 
 
 def test_checkpoint_payload_contains_only_safe_aggregates(tmp_path: Path) -> None:

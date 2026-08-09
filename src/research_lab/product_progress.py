@@ -102,6 +102,7 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     counters = _mapping(out.get("counters"))
     validation = _mapping(counters.get("validation"))
     generation = _mapping(out.get("paper_generation_v2"))
+    producer_membership = _mapping(generation.get("producer_membership"))
     bridge = _mapping(out.get("main_paper_bridge"))
     queue = _mapping(out.get("main_paper_runtime_queue"))
     observer = _mapping(out.get("main_paper_runtime_observation"))
@@ -111,6 +112,8 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     outcome = _mapping(out.get("outcome_retest_results"))
     outcome_generation = _mapping(outcome.get("training_evidence"))
     run_id = str(generation.get("run_id") or "")
+    generation_state = str(generation.get("state") or "")
+    generation_waiting = generation_state == "waiting_validation_generation"
     required_generation_refs = tuple(
         str(payload.get("paper_generation_run_id") or "")
         for payload in (bridge, queue, observer, preview, training, outcome_generation)
@@ -144,7 +147,21 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
             validation.get("backlog_slo_seconds") or 3600.0
         ),
         "paper_generation_run_id": run_id,
+        "paper_generation_state": generation_state,
+        "paper_generation_waiting": generation_waiting,
+        "validation_generation_status": str(
+            generation.get("validation_generation_status") or ""
+        ),
         "generation_consistent": generation_consistent,
+        "producer_active_executable_signals": int(
+            producer_membership.get("active_executable_signals") or 0
+        ),
+        "producer_validation_bound_members": int(
+            producer_membership.get("validation_bound_members") or 0
+        ),
+        "producer_research_only_excluded": int(
+            producer_membership.get("research_only_excluded") or 0
+        ),
         "bridge_instructions": int(bridge.get("instructions") or 0),
         "queue_items": int(queue.get("queued") or len(queue.get("items") or ())),
         "paper_observed": int(observer.get("observed") or 0),
@@ -248,7 +265,9 @@ class ProductProgressMonitor:
                 )
                 if oldest > backlog_slo:
                     hard_fail.append("validation_backlog_slo_exceeded")
-                if metrics.get("generation_consistent") is not True:
+                if metrics.get("paper_generation_waiting") is True:
+                    ready = False
+                elif metrics.get("generation_consistent") is not True:
                     hard_fail.append("paper_generation_stage_mismatch")
                 if int(metrics.get("operational_rows_retained") or 0):
                     hard_fail.append("technical_outcome_entered_training")

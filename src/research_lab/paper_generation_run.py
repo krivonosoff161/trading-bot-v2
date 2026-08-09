@@ -16,6 +16,7 @@ from src.research_lab.main_paper_bridge import (
     ACTIVE_STATUSES,
     export_main_paper_instructions,
     instruction_from_signal,
+    v2_source_validation_generation_id,
 )
 from src.research_lab.main_paper_consumer import consume_main_paper_instructions
 from src.research_lab.main_paper_runtime import CandleProvider, observe_main_paper_runtime
@@ -28,6 +29,7 @@ from src.research_lab.paper_evidence_store import (
 )
 from src.research_lab.paper_generation_contract import (
     PaperGenerationContext,
+    PaperGenerationMismatch,
     canonical_digest,
 )
 from src.research_lab.paper_signals.store import load_signals_strict
@@ -167,28 +169,41 @@ def run_paper_generation_v2(
     producer_method_identity: str,
     simulator_manifest_id: str,
     lifecycle_method_identity: str,
+    required_validation_generation_id: str,
     now_ms: int,
     parent_producer_generation_id: str | None = None,
 ) -> dict[str, Any]:
     """Build and atomically promote one fully verified paper generation."""
     if provider is None:
         raise ValueError("v2 paper generation requires an explicit bounded provider")
-    if not simulator_manifest_id or not lifecycle_method_identity:
-        raise ValueError("simulator and lifecycle method identities are required")
+    if (
+        not simulator_manifest_id
+        or not lifecycle_method_identity
+        or not required_validation_generation_id
+    ):
+        raise ValueError(
+            "validation, simulator and lifecycle method identities are required"
+        )
     signals = load_signals_strict(Path(private_root))
-    selected = [
+    active_executable = [
         signal
         for signal in signals
         if signal.status in ACTIVE_STATUSES and instruction_from_signal(signal) is not None
     ]
     members: list[dict[str, str]] = []
-    for signal in selected:
-        validation_generation_id = str(
-            signal.validation_id or signal.validator_context.get("validation_id") or ""
-        )
-        if not validation_generation_id:
-            raise PaperEvidenceConflict(
-                f"producer member {signal.signal_id} lacks validation generation identity"
+    research_only_excluded = 0
+    for signal in active_executable:
+        # The broad farm/scanner lanes are useful paper research observations, but
+        # they have no hard-validation authority.  Paper Evidence v2 is the
+        # canonical product generation and may only consume the PFR bridge whose
+        # source identity was bound to the current validation generation.
+        validation_generation_id = v2_source_validation_generation_id(signal)
+        if validation_generation_id is None:
+            research_only_excluded += 1
+            continue
+        if validation_generation_id != required_validation_generation_id:
+            raise PaperGenerationMismatch(
+                "v2 PFR source is outside the current validation generation"
             )
         members.append(
             {
@@ -541,6 +556,12 @@ def run_paper_generation_v2(
         "observer": observer,
         "trades": trades,
         "finalized": finalized,
+        "producer_membership": {
+            "active_executable_signals": len(active_executable),
+            "validation_bound_members": len(members),
+            "research_only_excluded": research_only_excluded,
+            "authority_source": "pfr_farm",
+        },
         "paper_only": True,
         "execution_allowed": False,
     }

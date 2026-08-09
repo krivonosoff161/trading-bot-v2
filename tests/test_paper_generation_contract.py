@@ -46,6 +46,7 @@ def _signal() -> PaperActionSignal:
             "ready_strategy_id": "ready-v2",
             "source_validation_verdict": "PAPER_FORWARD_READY",
             "validation_id": "validation-generation-v2",
+            "validation_generation_id": "validation-generation-v2",
         },
     )
 

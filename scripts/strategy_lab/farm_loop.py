@@ -60,6 +60,10 @@ class FarmCycleStopRequested(RuntimeError):
     """A canonical stop intent cancelled an interruptible long farm stage."""
 
 
+class _ValidationGenerationWaiting(RuntimeError):
+    """A fresh validation generation is still being produced for this revision."""
+
+
 def _env_flag(name: str) -> bool:
     return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -464,6 +468,44 @@ def _run_v2_main_paper_derived_chain(
         )
     runtime = args.paper_generation_runtime
     runtime.raise_if_failed()
+    from src.research_lab.validation_generation import (
+        load_current_generation_snapshot,
+    )
+
+    validation_generation = load_current_generation_snapshot(private_root)
+    if validation_generation.status in {"legacy_absent", "pending", "code_stale"}:
+        out["paper_generation_v2"] = {
+            "state": "waiting_validation_generation",
+            "validation_generation_status": validation_generation.status,
+            "validation_generation_id": validation_generation.generation_id,
+            "run_id": "",
+            "current": False,
+            "producer_membership": {
+                "active_executable_signals": 0,
+                "validation_bound_members": 0,
+                "research_only_excluded": 0,
+                "authority_source": "pfr_farm",
+            },
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+        _write_loop_status(
+            private_root,
+            stage="paper_generation_v2",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            details={
+                "milestone": "waiting_validation_generation",
+                "validation_generation_status": validation_generation.status,
+            },
+        )
+        raise _ValidationGenerationWaiting(validation_generation.status)
+    if validation_generation.status not in {"ready", "ready_empty"}:
+        raise RuntimeError(
+            "validation generation is invalid for Paper Evidence v2: "
+            f"{validation_generation.status}"
+        )
     _write_loop_status(
         private_root,
         stage="paper_generation_v2",
@@ -472,7 +514,11 @@ def _run_v2_main_paper_derived_chain(
         cycle_started_at=cycle_started_at,
         details={"milestone": "generation_started"},
     )
-    generation = runtime.run(provider=provider, now_ms=int(time.time() * 1000))
+    generation = runtime.run(
+        provider=provider,
+        now_ms=int(time.time() * 1000),
+        validation_generation_id=validation_generation.generation_id,
+    )
     run_id = str(generation["run_id"])
 
     def require_current_generation(
@@ -492,9 +538,13 @@ def _run_v2_main_paper_derived_chain(
     evidence_database_path = runtime.database_path
     args.paper_generation_run_id = run_id
     out["paper_generation_v2"] = {
+        "state": "ready",
+        "validation_generation_status": validation_generation.status,
+        "validation_generation_id": validation_generation.generation_id,
         "run_id": run_id,
         "producer_generation_id": generation["producer_generation_id"],
         "account_generation_id": generation["account_generation_id"],
+        "producer_membership": dict(generation["producer_membership"]),
         "current": True,
         "paper_only": True,
         "execution_allowed": False,
@@ -2175,16 +2225,24 @@ def _run_once(
             "results": (paper.get("results") or [])[:10],
         }
         if not getattr(args, "run_paper_signals", False):
-            _run_main_paper_derived_chain(
-                args,
-                private_root,
-                tasks=tasks,
-                apply=apply,
-                loop=loop,
-                cycle_started_at=cycle_started_at,
-                out=out,
-                provider=provider,
-            )
+            try:
+                _run_main_paper_derived_chain(
+                    args,
+                    private_root,
+                    tasks=tasks,
+                    apply=apply,
+                    loop=loop,
+                    cycle_started_at=cycle_started_at,
+                    out=out,
+                    provider=provider,
+                )
+            except _ValidationGenerationWaiting as exc:
+                out["paper_telegram_delivery"] = {
+                    "skipped": "validation_generation_waiting",
+                    "validation_generation_status": str(exc),
+                    "paper_only": True,
+                    "execution_allowed": False,
+                }
         priority_checkpoint("paper_runtime")
         if cycle_stop_requested():
             out["stop_requested"] = True
@@ -2542,6 +2600,13 @@ def _run_once(
                         out.setdefault("errors", []).append(
                             {"where": "agent_role_reviews", "error": str(exc)}
                         )
+            except _ValidationGenerationWaiting as exc:
+                out["paper_telegram_delivery"] = {
+                    "skipped": "validation_generation_waiting",
+                    "validation_generation_status": str(exc),
+                    "paper_only": True,
+                    "execution_allowed": False,
+                }
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append(
                     {"where": "paper_signals", "error": str(exc)}
@@ -2595,12 +2660,19 @@ def _run_once(
         from src.research_lab.product_progress import farm_metrics, publish_checkpoint
 
         completed_at = time.time()
+        metrics = farm_metrics(out)
         publish_checkpoint(
             private_root,
             component="farm",
             sequence=max(1, int(completed_at * 1_000_000)),
-            status="completed" if not out.get("errors") else "degraded",
-            metrics=farm_metrics(out),
+            status=(
+                "waiting"
+                if metrics.get("paper_generation_waiting")
+                else "completed"
+                if not out.get("errors")
+                else "degraded"
+            ),
+            metrics=metrics,
             completed_at=completed_at,
         )
     return out

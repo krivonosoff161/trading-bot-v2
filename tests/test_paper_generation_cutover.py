@@ -28,6 +28,7 @@ from src.research_lab.system_analyst_cycle import (
     feedback_payloads_from_outcomes,
     feedback_payloads_from_system_results,
 )
+from src.research_lab.validation_generation import CurrentGenerationSnapshot
 
 
 IDENTITY = ProcessIdentity(4141, 100.0, "python-test.exe", "sha256:test-command")
@@ -88,6 +89,7 @@ def _signal() -> PaperActionSignal:
             "ready_strategy_id": "ready-cutover",
             "source_validation_verdict": "PAPER_FORWARD_READY",
             "validation_id": "validation-cutover",
+            "validation_generation_id": "validation-generation-cutover",
         },
     )
 
@@ -170,7 +172,11 @@ def test_canonical_runtime_binds_same_owner_and_publishes_one_current_generation
             "executable": IDENTITY.executable,
             "command_digest": IDENTITY.command_digest,
         }
-        result = runtime.run(provider=_Provider(), now_ms=8_000_000)
+        result = runtime.run(
+            provider=_Provider(),
+            now_ms=8_000_000,
+            validation_generation_id="validation-generation-cutover",
+        )
         assert result["projection"]["current"] is True
         assert result["projection"]["paper_generation_run_id"] == result["run_id"]
         assert result["paper_only"] is True
@@ -208,13 +214,21 @@ def test_writer_fence_advance_blocks_stale_runtime_before_second_materialization
         heartbeat_interval_seconds=60.0,
     )
     try:
-        first = runtime.run(provider=_Provider(), now_ms=8_000_000)
+        first = runtime.run(
+            provider=_Provider(),
+            now_ms=8_000_000,
+            validation_generation_id="validation-generation-cutover",
+        )
         runtime.store.connection.execute(
             "UPDATE paper_writer_lease SET next_fence=next_fence+1"
         )
         runtime.store.connection.commit()
         with pytest.raises(PaperEvidenceConflict, match="stale"):
-            runtime.run(provider=_Provider(), now_ms=8_100_000)
+            runtime.run(
+                provider=_Provider(),
+                now_ms=8_100_000,
+                validation_generation_id="validation-generation-cutover",
+            )
         assert runtime.store.current_run_id() == first["run_id"]
         assert (
             runtime.store.connection.execute(
@@ -311,6 +325,7 @@ def test_forward_shadow_replay_copies_only_signal_ledger_and_preserves_source(tm
         owner_id="shadow-owner",
         identity=IDENTITY,
         code_identity=current_checkout_revision(),
+        validation_generation_id="validation-generation-cutover",
         now_ms=8_000_000,
     )
 
@@ -471,9 +486,10 @@ class _FakeRuntime:
     def raise_if_failed(self):
         self.failures_checked += 1
 
-    def run(self, *, provider, now_ms):
+    def run(self, *, provider, now_ms, validation_generation_id):
         assert provider == "bounded-provider"
         assert now_ms > 0
+        assert validation_generation_id == "validation-generation-current"
         return {
             "run_id": "run-current",
             "producer_generation_id": "producer-current",
@@ -483,13 +499,35 @@ class _FakeRuntime:
             "queue": {"stage": "queue"},
             "observer": {"stage": "observer"},
             "trades": {"stage": "account"},
+            "producer_membership": {
+                "active_executable_signals": 1,
+                "validation_bound_members": 1,
+                "research_only_excluded": 0,
+                "authority_source": "pfr_farm",
+            },
         }
+
+
+def _use_ready_validation_generation(monkeypatch) -> None:
+    from src.research_lab import validation_generation
+
+    monkeypatch.setattr(
+        validation_generation,
+        "load_current_generation_snapshot",
+        lambda _root: CurrentGenerationSnapshot(
+            "ready",
+            "validation-generation-current",
+            {},
+            0,
+        ),
+    )
 
 
 def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
     tmp_path, monkeypatch
 ):
     runtime = _FakeRuntime()
+    _use_ready_validation_generation(monkeypatch)
     args = type("Args", (), {"paper_generation_runtime": runtime})()
     calls = []
 
@@ -597,12 +635,16 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
     }
     assert all(path == expected for _name, path in calls)
     assert out["paper_generation_v2"]["run_id"] == "run-current"
+    assert out["paper_generation_v2"]["producer_membership"][
+        "validation_bound_members"
+    ] == 1
     assert args.paper_generation_run_id == "run-current"
     assert runtime.failures_checked == 2
 
 
 def test_farm_v2_preview_mismatch_fails_closed_before_training(tmp_path, monkeypatch):
     runtime = _FakeRuntime()
+    _use_ready_validation_generation(monkeypatch)
     args = type("Args", (), {"paper_generation_runtime": runtime})()
     training_called = []
     monkeypatch.setattr(farm_loop, "_write_loop_status", lambda *_a, **_k: None)
@@ -635,3 +677,53 @@ def test_farm_v2_preview_mismatch_fails_closed_before_training(tmp_path, monkeyp
             provider="bounded-provider",
         )
     assert training_called == []
+
+
+def test_farm_v2_waits_for_code_current_validation_without_side_effects(
+    tmp_path, monkeypatch
+):
+    from src.research_lab import validation_generation
+
+    runtime = _FakeRuntime()
+    runtime.run = lambda **_kwargs: pytest.fail("runtime generation must not start")
+    args = type("Args", (), {"paper_generation_runtime": runtime})()
+    monkeypatch.setattr(farm_loop, "_write_loop_status", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        validation_generation,
+        "load_current_generation_snapshot",
+        lambda _root: CurrentGenerationSnapshot(
+            "code_stale",
+            "validation-generation-old-code",
+            {},
+            0,
+        ),
+    )
+    out = {}
+
+    with pytest.raises(farm_loop._ValidationGenerationWaiting, match="code_stale"):
+        farm_loop._run_main_paper_derived_chain(
+            args,
+            tmp_path,
+            tasks=object(),
+            apply=True,
+            loop=True,
+            cycle_started_at=1.0,
+            out=out,
+            provider="bounded-provider",
+        )
+
+    assert out["paper_generation_v2"] == {
+        "state": "waiting_validation_generation",
+        "validation_generation_status": "code_stale",
+        "validation_generation_id": "validation-generation-old-code",
+        "run_id": "",
+        "current": False,
+        "producer_membership": {
+            "active_executable_signals": 0,
+            "validation_bound_members": 0,
+            "research_only_excluded": 0,
+            "authority_source": "pfr_farm",
+        },
+        "paper_only": True,
+        "execution_allowed": False,
+    }

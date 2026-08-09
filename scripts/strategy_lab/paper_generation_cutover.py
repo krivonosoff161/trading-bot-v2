@@ -50,6 +50,7 @@ def main() -> None:
     replay = commands.add_parser("shadow-replay")
     replay.add_argument("--shadow-root", type=Path, required=True)
     replay.add_argument("--code-identity", required=True)
+    replay.add_argument("--validation-generation-id", required=True)
     replay.add_argument("--now-ms", type=int, required=True)
     replay.add_argument("--timeout-seconds", type=float, default=10.0)
 
@@ -108,6 +109,7 @@ def main() -> None:
             owner_id=f"paper-shadow-{os.getpid()}",
             identity=current_process_identity(),
             code_identity=str(args.code_identity),
+            validation_generation_id=str(args.validation_generation_id),
             now_ms=int(args.now_ms),
         )
     else:
