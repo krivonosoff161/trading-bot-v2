@@ -29,8 +29,12 @@ CAPABILITY_SCHEMA = "PrivateArchiveRootCapability.v1"
 POLICY_ID = "private_archive_storage.v1"
 CONTROL_DIR = ".archive-v1"
 ALLOWED_KINDS = (
+    "derived_artifact",
     "project_brain_events",
     "farm_journal",
+    "lineage",
+    "llm_invocation",
+    "runtime_stdout",
     "scout_journal",
 )
 ALLOWED_SENSITIVITY = ("public_safe_derived", "private_metadata", "private_payload")

@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-09
-- Verified against: `3d0ffc1b9e0311756e6ecf879c11e228dbad3501`
+- Verified against: `6312753e27f45ff12fec792ecfc6cd35f995ac08`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -68,6 +68,13 @@ dependency, not by a route to live trading.
   latter preserves one full unpacked generation and restore-verifies
   content-addressed older evidence before exact-file reclamation. None of
   these contracts activates a private root without owner authority.
+- Runtime append surfaces now have a separate, off-by-default exact-root
+  rotation capability. Writer-coordinated atomic sealing replaces unsafe
+  copy/truncate; immutable content-addressed archive objects are restore-checked
+  before source release, interrupted work remains recoverable, recent tails and
+  semantic dedup state stay bounded/available, and storage-budget failure is a
+  canonical farm hard fail after activation. This is implementation proof only;
+  private activation/backfill and endurance remain in the operational gate.
 - Repository quality gates cover the full non-live test suite, Python quality,
   supply-chain policy, tracked-artifact policy, documentation links, and public
   entrypoint inventory.
@@ -87,8 +94,9 @@ private runtime, data, or trading hypothesis is proven.
    and exact-revision operational gate.
 4. Verify the implemented end-to-end product-progress and generation-freshness
    monitor under the private canary; PID liveness alone is not readiness.
-5. Apply bounded private storage rotation only after exact backup, restore,
-   digest, interruption, and idempotent cleanup proofs.
+5. Apply the implemented bounded private storage rotation only after exact
+   backup, restore, digest, interruption, semantic-index parity, and idempotent
+   cleanup proofs.
 
 Exit gate: each phase has an exact-head green scoped PR and green post-merge
 verification; operational cutover/cleanup then passes backup, restore, parity,

@@ -18,6 +18,13 @@ from typing import Any, Mapping
 import uuid
 
 from src.research_lab.lineage_contract import append_jsonl, stable_id, utc_now
+from src.research_lab.runtime_storage_rotation import (
+    maybe_runtime_storage_capability,
+    llm_invocation_summary as indexed_invocation_summary,
+    recent_semantic_statuses,
+    semantic_key_exists,
+    semantic_status_count,
+)
 from src.research_lab.llm_boundary_identity import EndpointIdentity, endpoint_identity_from_url
 from src.research_lab.llm_provider import LLMUsage, ProposalProvider
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root
@@ -252,12 +259,24 @@ def preflight_invocation(
         if str(row.get("invocation_id") or "") == invocation_id
         and str(row.get("event_phase") or "completed") != "started"
     ]
-    if any(
+    capability = maybe_runtime_storage_capability(ledger_path(private_root))
+    duplicate_completed = (
+        semantic_key_exists(
+            private_root,
+            stream_id="llm.invocations",
+            key_type="invocation_id",
+            key_value=invocation_id,
+            status="accepted",
+        )
+        if capability is not None
+        else any(
         str(row.get("invocation_id") or "") == invocation_id
         and str(row.get("status") or "") in TERMINAL_CALL_STATUSES
         and str(row.get("event_phase") or "completed") != "started"
         for row in rows
-    ):
+        )
+    )
+    if duplicate_completed:
         return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
                        "duplicate_completed", provider_class=provider_class, endpoint=endpoint,
                        boundary_checks=boundary_checks)
@@ -290,21 +309,39 @@ def preflight_invocation(
         return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
                        "local_model_not_allowlisted", provider_class=provider_class, endpoint=endpoint,
                        boundary_checks=boundary_checks)
-    retryable_attempts = sum(
-        1 for row in matching
-        if str(row.get("status") or "") in RETRYABLE_CALL_STATUSES
+    retryable_attempts = (
+        semantic_status_count(
+            private_root,
+            stream_id="llm.invocations",
+            key_type="invocation_id",
+            key_value=invocation_id,
+            statuses=RETRYABLE_CALL_STATUSES,
+        )
+        if capability is not None
+        else sum(1 for row in matching if str(row.get("status") or "") in RETRYABLE_CALL_STATUSES)
     )
     if retryable_attempts >= MAX_RETRYABLE_ATTEMPTS:
         return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
                        "retry_exhausted", provider_class=provider_class, endpoint=endpoint,
                        boundary_checks=boundary_checks)
-    recent = [
+    recent_rows = [
         row
         for row in rows
         if row.get("role_id") == role_id and row.get("provider") == provider_name
         and str(row.get("event_phase") or "completed") != "started"
     ][-CIRCUIT_FAILURE_LIMIT:]
-    if len(recent) >= CIRCUIT_FAILURE_LIMIT and all(row.get("status") == "provider_error" for row in recent):
+    recent = (
+        recent_semantic_statuses(
+            private_root,
+            stream_id="llm.invocations",
+            role_id=role_id,
+            provider=provider_name,
+            limit=CIRCUIT_FAILURE_LIMIT,
+        )
+        if capability is not None
+        else [str(row.get("status") or "") for row in recent_rows]
+    )
+    if len(recent) >= CIRCUIT_FAILURE_LIMIT and all(status == "provider_error" for status in recent):
         return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
                        "circuit_open", provider_class=provider_class, endpoint=endpoint,
                        boundary_checks=boundary_checks)
@@ -448,6 +485,8 @@ def finish_transport_invocation(
 
 
 def invocation_summary(private_root: Path) -> dict[str, Any]:
+    if maybe_runtime_storage_capability(ledger_path(private_root)) is not None:
+        return indexed_invocation_summary(private_root)
     rows = _rows(private_root)
     logical_rows: list[dict[str, Any]] = []
     transport: dict[str, dict[str, Any]] = {}

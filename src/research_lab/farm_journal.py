@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """Structured append-only logs for the continuous farm — explain state, don't spam.
 
-Three legacy JSONL streams under ``<private_root>/logs/farm/``. Automatic storage
-maintenance may report their size, but does not rotate or truncate them:
+Three JSONL streams under ``<private_root>/logs/farm/``. Without an explicit
+runtime-storage capability they retain the legacy append behaviour. After an
+owner-authorized cutover, completed lines use writer-coordinated sealing and
+restore-verified archival (never copy/truncate):
 
   * ``cycle_log.jsonl``       — one row per coordinator cycle (pivot, counters, states);
   * ``task_transitions.jsonl``— one row per task state change (the audit trail that the
@@ -11,15 +13,19 @@ maintenance may report their size, but does not rotate or truncate them:
 
 These are the durable, queryable explanation of "what the farm did and why". Raw stdout
 stays for live watching; humans read structured state via farm_status_report / cockpit,
-not by tailing logs. The separate segmented-store adapter is synthetic-only and must be
-passed explicitly; this module never activates, imports, or dual-writes it. Pure file IO,
-no network, no order path.
+not by tailing logs. The separate segmented-store adapter remains synthetic-only.
+This module never activates either capability; it only honors an exact capability
+already bound to the private root. Pure file IO, no network, no order path.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
+
+from src.research_lab.runtime_storage_rotation import (
+    append_runtime_jsonl,
+    read_runtime_tail,
+)
 
 SCHEMA = "farm_journal.v1"
 
@@ -46,9 +52,7 @@ def farm_log_paths(private_root: Path) -> list[Path]:
 
 
 def _append(path: Path, row: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"schema": SCHEMA, **row}, ensure_ascii=False, sort_keys=True) + "\n")
+    append_runtime_jsonl(path, {"schema": SCHEMA, **row})
 
 
 def log_cycle(
@@ -93,19 +97,7 @@ def log_cycle(
 
 
 def _read_tail(path: Path, limit: int) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except (ValueError, TypeError):
-                continue
-    return rows[-limit:] if limit and limit > 0 else rows
+    return read_runtime_tail(path, limit=limit)
 
 
 def read_recent_cycles(private_root: Path, limit: int = 20) -> list[dict[str, Any]]:

@@ -169,8 +169,24 @@ explicit maintenance concern.
 source errors. Stale failure artifacts from a stopped farm remain evidence but do not
 impersonate a current hard failure.
 
-Safe coordinated segmentation is not implemented yet. Do not infer rotation authority
-from a normal farm `apply` cycle; it deliberately keeps storage maintenance report-only.
+The legacy `storage_policy` remains report-only. A separate runtime-storage
+capability now supports writer-coordinated sealing: appenders close completed
+lines under one OS lock, atomically rename an oversized active file, and release
+the sealed source only after the content-addressed archive records a successful
+restore proof. An interrupted archive keeps the sealed source for the next
+maintenance pass. Recent structured rows remain in a bounded tail projection;
+semantic ids required for lineage and invocation deduplication remain in a
+compact SQLite index rebuilt before initial cutover. Current JSON projections,
+task/ownership databases, queue/outbox state, stop intents, and Paper Evidence
+generation files are never rotation targets.
+
+This path is off by default. A normal farm `apply` cycle still grants no storage
+authority: activation requires an exact source root, exact archive root, exact
+revision, a separately passed fresh owner manifest, and a pre-existing archive
+capability covering every stream. Once activated, archive or budget failure is
+fail-closed rather than hidden by the legacy best-effort reporter. The budget
+checks controlled source bytes, content-addressed archive bytes, and independent
+minimum free-space floors for both source and archive volumes.
 
 ## Commands
 

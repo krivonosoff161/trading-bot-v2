@@ -14,6 +14,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.runtime_storage_rotation import (
+    append_runtime_jsonl,
+    append_runtime_lines,
+    semantic_counts_for_path,
+    semantic_key_values_for_path,
+)
+
 
 SCANNER_EVENT_SCHEMA = "ScannerEvent.v1"
 CYCLE_LINK_SCHEMA = "LineageLink.v1"
@@ -37,10 +44,7 @@ def content_sha256(payload: Any) -> str:
 
 
 def append_jsonl(path: Path, row: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-    return path
+    return append_runtime_jsonl(path, row)
 
 
 def lineage_dir(private_root: Path) -> Path:
@@ -88,7 +92,7 @@ def _lineage_link_id(row: dict[str, Any]) -> str:
 
 
 def _existing_link_ids(path: Path) -> set[str]:
-    ids: set[str] = set()
+    ids: set[str] = semantic_key_values_for_path(path, key_type="lineage_link_id")
     if not path.exists():
         return ids
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -257,7 +261,7 @@ def scanner_event_from_intake(event: dict[str, Any], *, mode: str = "live", time
 
 
 def _existing_scanner_event_ids(path: Path) -> set[str]:
-    ids: set[str] = set()
+    ids: set[str] = semantic_key_values_for_path(path, key_type="scanner_event_id")
     if not path.exists():
         return ids
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -314,14 +318,17 @@ def write_cycle_links(private_root: Path, rows: list[dict[str, Any]]) -> Path:
         pending.append(_cycle_link_payload(row, link_id=link_id))
     if not pending:
         return path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        for payload in pending:
-            fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
-    return path
+    lines = tuple(
+        (json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        for payload in pending
+    )
+    return append_runtime_lines(path, lines)
 
 
 def load_jsonl_counts(path: Path, *, key: str | None = None) -> dict[str, Any]:
+    indexed = semantic_counts_for_path(path)
+    if indexed is not None and key in (None, "source"):
+        return indexed
     if not path.exists():
         return {"exists": False, "rows": 0, "by_key": {}}
     rows = 0
