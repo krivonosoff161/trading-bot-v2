@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: c5615acd689e4a4af49c6e5ee4913fd0d6b187e0
+  trading-bot-v2: ee927237e6ba0f1e49261cdf6030bb4f5401401e
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -131,10 +131,13 @@ modules:
     implemented_evidence:
       - scripts/strategy_lab/farm_loop.py
       - src/research_lab/farm_coordinator.py
+      - src/research_lab/setup_outcome_memory.py
+      - src/research_lab/trade_path_diagnostics.py
       - tests/test_farm_loop_integration.py
       - tests/test_farm_loop_stage_visibility.py
-    missing_evidence: a completed long-duration operational reliability window
-    next_gate: complete the separately authorized paper-only canary without a hard fail
+      - tests/test_trade_path_diagnostics_memory_bound.py
+    missing_evidence: a completed long-duration operational reliability window proving incremental setup-memory invalidation remains bounded as history grows
+    next_gate: complete the separately authorized paper-only canary without a hard fail and observe cache hits, bounded delta rereads and zero stale classifier reuse
     authority: paper_only
     public_private_boundary: code and synthetic tests are public; tasks, artifacts, and results are private
   - module_id: experiment_registry

@@ -57,7 +57,10 @@ def _hold_runtime_storage_lock(
     from src.research_lab.storage_os_lock import storage_root_lock
 
     with storage_root_lock(Path(lock_path)):
-        Path(ready_path).write_text("locked", encoding="ascii")
+        ready = Path(ready_path)
+        temporary = ready.with_suffix(".tmp")
+        temporary.write_text("locked", encoding="ascii")
+        temporary.replace(ready)
         time.sleep(hold_seconds)
 
 

@@ -2105,10 +2105,16 @@ def _refresh_setup_outcome_memory(
         )
         check_active()
 
+    build_stats: dict[str, Any] = {}
     records = memory.build_memory_index(
         private_root,
         progress=progress,
         check_active=check_active,
+        reject_cache_path=private_root
+        / "state"
+        / "derived"
+        / "setup_outcome_memory_reject_cache.json",
+        build_stats=build_stats,
     )
     summary = memory.summarize_memory(records)
     progress("memory_summarized", len(records), len(records))
@@ -2122,7 +2128,11 @@ def _refresh_setup_outcome_memory(
         int(product_memory.get("rows") or 0),
         int(product_memory.get("rows") or 0),
     )
-    snapshot_path = memory.write_memory_snapshot(private_root, records=records)
+    snapshot_path = memory.write_memory_snapshot(
+        private_root,
+        records=records,
+        product_paper_memory=product_memory_evidence,
+    )
     progress("snapshot_written", len(records), len(records))
     return {
         "schema": "setup_outcome_memory_refresh.v1",
@@ -2142,6 +2152,9 @@ def _refresh_setup_outcome_memory(
         ),
         "current_generation_compatible": bool(
             product_memory_evidence.get("current_generation_compatible")
+        ),
+        "reject_characterization": dict(
+            build_stats.get("reject_characterization") or {}
         ),
         "paper_only": True,
         "execution_allowed": False,

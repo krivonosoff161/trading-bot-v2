@@ -162,10 +162,17 @@ a sanitized aggregate if a result needs discussion.
 - The setup-outcome memory refresh streams its paper JSONL input and reads
   unique candidates in bounded chunks. Reject characterization loads and
   releases one run-artifact index at a time instead of retaining the complete
-  multi-run corpus. Status milestones are published only after real inputs,
-  rows, or run-artifact groups complete. Both a canonical stop intent and the
-  latched owner/claim failure are checked between real chunks, so shutdown and
-  fail-closed cancellation do not depend on an artificial timer milestone.
+  multi-run corpus. The canonical farm also maintains a derived incremental
+  reject-characterization cache bound to the classifier version/context, the
+  complete candidate source digest, and each run artifact's size/mtime identity.
+  A complete prior snapshot can bootstrap only unchanged pre-snapshot rows;
+  changed or unavailable groups are re-read with the ordinary classifier. The
+  cache is never validation or paper authority. Status milestones are published
+  only after real inputs, rows, or run-artifact groups complete, and safe cache
+  hit/recompute/reread counters are included in product progress. Both a
+  canonical stop intent and the latched owner/claim failure are checked between
+  real chunks, so shutdown and fail-closed cancellation do not depend on an
+  artificial timer milestone.
 - Validation maintenance applies the same contract to its current bounded
   batch. Export, deterministic checks, and artifact work publish a durable
   milestone only after a real chunk completes; the process lease stores that

@@ -119,8 +119,11 @@ clears, for example `NEEDS_OI_DATA`.
    only if hard validation passed and executable params include `hold_bars`, `stop_pct`,
    `take_pct`, with percent-point units and at least 1:2 reward/risk.
 10. **Derived setup lifecycle:** status/reporting rebuild positive, negative, mixed, and
-   no-sample setup groups from canonical artifacts. These groups are research evidence,
-   not promotion/deletion rules.
+   no-sample setup groups from canonical artifacts. Historical reject-path facts use a
+   classifier/context/source/artifact-bound derived cache, so unchanged run artifacts are
+   not reread on every cycle while changed groups are deterministically invalidated and
+   recomputed. These groups and the cache are research evidence, not promotion/deletion
+   rules or paper authority.
 11. **Pivot:** the cycle reports `work_available`, `advanced_lifecycle`,
    `discovery_refill`, or `blocked:no_eligible_tasks`.
 

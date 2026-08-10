@@ -18,7 +18,9 @@ read of what already happened. No money path, no orders, no live.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -66,7 +68,7 @@ def _load_rejected_uc(private_root: Path) -> list[dict[str, Any]]:
         # so hard-failed FORWARD_PAPER candidates (e.g. FAILED_COSTS) are characterized too.
         rows = conn.execute(
             "SELECT uc_key, symbol, timeframe, family, params_hash, n_trades, avg_net_pct, "
-            "regime_bucket, hard_status, validation_status, decision, run_dir_label "
+            "regime_bucket, hard_status, validation_status, decision, run_dir_label, updated_at "
             "FROM unique_candidates "
             "WHERE decision='REJECT' OR validation_status='REJECT' "
             "   OR hard_status LIKE 'FAILED%' OR hard_status IN ('HARD_REJECT','REGIME_ONLY')"
@@ -74,6 +76,180 @@ def _load_rejected_uc(private_root: Path) -> list[dict[str, Any]]:
     finally:
         conn.close()
     return [dict(r) for r in rows]
+
+
+REJECT_CACHE_SCHEMA = "RejectCharacterizationCache.v1"
+REJECT_CLASSIFIER_VERSION = "trade_path_reject_taxonomy.v1"
+
+
+def _source_digest(row: dict[str, Any]) -> str:
+    payload = {
+        key: row.get(key)
+        for key in (
+            "uc_key",
+            "symbol",
+            "timeframe",
+            "family",
+            "params_hash",
+            "n_trades",
+            "avg_net_pct",
+            "regime_bucket",
+            "hard_status",
+            "validation_status",
+            "decision",
+            "run_dir_label",
+            "updated_at",
+        )
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _artifact_identity(private_root: Path, run_dir_label: str) -> dict[str, Any]:
+    if not run_dir_label:
+        return {"state": "unavailable", "size": 0, "mtime_ns": 0}
+    path = Path(private_root) / run_dir_label / "metrics.json"
+    try:
+        stat = path.stat()
+    except OSError:
+        return {"state": "unavailable", "size": 0, "mtime_ns": 0}
+    return {
+        "state": "available",
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def _classifier_context_digest() -> str:
+    payload = {
+        "classifier_version": REJECT_CLASSIFIER_VERSION,
+        "cost_pct": COST_PCT,
+        "capture_late": CAPTURE_LATE,
+        "thin_max": THIN_MAX,
+        "power_floor": POWER_FLOOR,
+        "oi_micro_families": sorted(oi_micro_families()),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _load_reject_cache(
+    path: Path,
+    *,
+    classifier_context_digest: str,
+) -> dict[str, dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != REJECT_CACHE_SCHEMA
+        or payload.get("classifier_version") != REJECT_CLASSIFIER_VERSION
+        or payload.get("classifier_context_digest") != classifier_context_digest
+    ):
+        return {}
+    items = payload.get("items")
+    if not isinstance(items, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in items.items()
+        if isinstance(key, str) and isinstance(value, dict)
+    }
+
+
+def _snapshot_bootstrap(
+    path: Path,
+) -> tuple[int, str, dict[str, dict[str, Any]]]:
+    try:
+        encoded = path.read_bytes()
+        stat = path.stat()
+        payload = json.loads(encoded.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return 0, "", {}
+    records = payload.get("records") if isinstance(payload, dict) else None
+    if not isinstance(records, list):
+        return 0, "", {}
+    snapshot_version = str(payload.get("reject_classifier_version") or "")
+    # The pre-cache snapshot format had no version field.  It is accepted only
+    # as the one-time bootstrap for this unchanged v1 taxonomy.  Once this
+    # repair writes a versioned snapshot, any future taxonomy bump fails closed
+    # and recomputes the affected history instead of reusing stale labels.
+    if snapshot_version not in {"", REJECT_CLASSIFIER_VERSION}:
+        return int(stat.st_mtime_ns), hashlib.sha256(encoded).hexdigest(), {}
+    by_key = {
+        str(row.get("uc_key") or ""): row
+        for row in records
+        if isinstance(row, dict) and str(row.get("uc_key") or "")
+    }
+    return int(stat.st_mtime_ns), hashlib.sha256(encoded).hexdigest(), by_key
+
+
+def _epoch_to_ns(value: Any) -> int:
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if timestamp > 10_000_000_000:
+        timestamp /= 1000.0
+    return int(timestamp * 1_000_000_000)
+
+
+def _bootstrap_characterization(record: dict[str, Any]) -> dict[str, Any] | None:
+    reason = str(record.get("rejection_reason") or "")
+    if not reason:
+        return None
+    return {
+        "uc_key": str(record.get("uc_key") or ""),
+        "symbol": str(record.get("symbol") or ""),
+        "timeframe": str(record.get("timeframe") or ""),
+        "family": str(record.get("family") or ""),
+        "regime_bucket": str(record.get("regime_bucket") or ""),
+        "hard_status": str(record.get("hard_status") or ""),
+        "reject_subreason": reason,
+        "recyclable": reason in _RECYCLABLE,
+        "trades_available": bool(
+            record.get("avg_mfe_pct")
+            or record.get("avg_mae_pct")
+            or record.get("avg_capture_ratio")
+        ),
+        "n_trades": int(record.get("n_trades") or 0),
+        "avg_net_pct": float(record.get("baseline_net") or 0.0),
+        "best_net_pct": 0.0,
+        "worst_net_pct": 0.0,
+        "avg_mfe_pct": float(record.get("avg_mfe_pct") or 0.0),
+        "avg_mae_pct": float(record.get("avg_mae_pct") or 0.0),
+        "avg_capture_ratio": float(record.get("avg_capture_ratio") or 0.0),
+        "late_entry_rate": 0.0,
+        "n_tp": 0,
+        "n_sl": 0,
+        "n_timeout": 0,
+        "tp_before_sl_share": 0.0,
+    }
+
+
+def _atomic_write_reject_cache(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
 
 
 def _index_run_results(
@@ -176,21 +352,14 @@ _RECYCLABLE = {
 }
 
 
-def characterize_rejects(
+def _characterize_reject_rows(
     private_root: Path,
+    uc: list[dict[str, Any]],
     *,
-    limit: int | None = None,
     progress: Callable[[str, int, int], None] | None = None,
     check_active: Callable[[], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """One row per rejected unique_candidate with sub-reason + trade-path facts."""
-    private_root = Path(private_root)
-    if check_active is not None:
-        check_active()
     oi_micro = oi_micro_families()
-    uc = _load_rejected_uc(private_root)
-    if limit:
-        uc = uc[:limit]
     total = len(uc)
     grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     for original_index, row in enumerate(uc):
@@ -286,6 +455,191 @@ def characterize_rejects(
     if len(complete) != total:
         raise RuntimeError("reject characterization lost source rows")
     return complete
+
+
+def characterize_rejects(
+    private_root: Path,
+    *,
+    limit: int | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
+) -> list[dict[str, Any]]:
+    """One row per rejected unique_candidate with sub-reason + trade-path facts."""
+    private_root = Path(private_root)
+    if check_active is not None:
+        check_active()
+    uc = _load_rejected_uc(private_root)
+    if limit:
+        uc = uc[:limit]
+    return _characterize_reject_rows(
+        private_root,
+        uc,
+        progress=progress,
+        check_active=check_active,
+    )
+
+
+def characterize_rejects_incremental(
+    private_root: Path,
+    *,
+    cache_path: Path,
+    bootstrap_snapshot_path: Path | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Refresh reject facts without rereading immutable history on every farm cycle.
+
+    The cache is a derived accelerator, never authority.  A row is reused only
+    when both its complete DB source digest and its run-artifact stat identity
+    still match.  A previous complete setup-memory snapshot can bootstrap the
+    first cache only for source rows and metrics that predate that snapshot.
+    Changed run groups are reread through the ordinary deterministic
+    characterization path.
+    """
+
+    private_root = Path(private_root)
+    cache_path = Path(cache_path)
+    if check_active is not None:
+        check_active()
+    source_rows = _load_rejected_uc(private_root)
+    total = len(source_rows)
+    if progress is not None:
+        progress("incremental_sources_loaded", total, total)
+
+    classifier_context_digest = _classifier_context_digest()
+    existing = _load_reject_cache(
+        cache_path,
+        classifier_context_digest=classifier_context_digest,
+    )
+    snapshot_mtime_ns = 0
+    snapshot_sha256 = ""
+    snapshot_rows: dict[str, dict[str, Any]] = {}
+    if bootstrap_snapshot_path is not None and len(existing) < total:
+        snapshot_mtime_ns, snapshot_sha256, snapshot_rows = _snapshot_bootstrap(
+            Path(bootstrap_snapshot_path)
+        )
+
+    artifact_identities: dict[str, dict[str, Any]] = {}
+    cache_items: dict[str, dict[str, Any]] = {}
+    rows_by_key: dict[str, dict[str, Any]] = {}
+    misses: list[dict[str, Any]] = []
+    cache_hits = 0
+    snapshot_hits = 0
+    invalidated = 0
+
+    for index, source in enumerate(source_rows, start=1):
+        if check_active is not None:
+            check_active()
+        uc_key = str(source.get("uc_key") or "")
+        label = str(source.get("run_dir_label") or "")
+        if label not in artifact_identities:
+            artifact_identities[label] = _artifact_identity(private_root, label)
+        artifact_identity = artifact_identities[label]
+        source_digest = _source_digest(source)
+        prior = existing.get(uc_key) or {}
+        characterization = prior.get("characterization")
+        if (
+            prior.get("source_digest") == source_digest
+            and prior.get("artifact_identity") == artifact_identity
+            and isinstance(characterization, dict)
+        ):
+            rows_by_key[uc_key] = characterization
+            cache_items[uc_key] = prior
+            cache_hits += 1
+        else:
+            if prior:
+                invalidated += 1
+            bootstrapped = None
+            snapshot_row = snapshot_rows.get(uc_key)
+            if (
+                snapshot_row is not None
+                and snapshot_mtime_ns > 0
+                and _epoch_to_ns(source.get("updated_at")) <= snapshot_mtime_ns
+                and int(artifact_identity.get("mtime_ns") or 0)
+                <= snapshot_mtime_ns
+                and (
+                    not label or artifact_identity.get("state") == "available"
+                )
+            ):
+                bootstrapped = _bootstrap_characterization(snapshot_row)
+            if bootstrapped is not None:
+                rows_by_key[uc_key] = bootstrapped
+                cache_items[uc_key] = {
+                    "artifact_identity": artifact_identity,
+                    "characterization": bootstrapped,
+                    "source_digest": source_digest,
+                }
+                snapshot_hits += 1
+            else:
+                misses.append(source)
+        if progress is not None and (index == total or index % 500 == 0):
+            progress("incremental_sources_classified", index, total)
+
+    recomputed = _characterize_reject_rows(
+        private_root,
+        misses,
+        progress=(
+            None
+            if progress is None
+            else lambda stage, completed, stage_total: progress(
+                f"incremental_miss:{stage}", completed, stage_total
+            )
+        ),
+        check_active=check_active,
+    )
+    source_by_key = {str(row.get("uc_key") or ""): row for row in misses}
+    for row in recomputed:
+        uc_key = str(row.get("uc_key") or "")
+        source = source_by_key[uc_key]
+        label = str(source.get("run_dir_label") or "")
+        rows_by_key[uc_key] = row
+        cache_items[uc_key] = {
+            "artifact_identity": artifact_identities[label],
+            "characterization": row,
+            "source_digest": _source_digest(source),
+        }
+
+    ordered = [rows_by_key[str(row.get("uc_key") or "")] for row in source_rows]
+    changed = cache_items != existing
+    if changed:
+        if check_active is not None:
+            check_active()
+        _atomic_write_reject_cache(
+            cache_path,
+            {
+                "schema": REJECT_CACHE_SCHEMA,
+                "classifier_version": REJECT_CLASSIFIER_VERSION,
+                "classifier_context_digest": classifier_context_digest,
+                "bootstrap_snapshot_sha256": snapshot_sha256,
+                "items": dict(sorted(cache_items.items())),
+            },
+        )
+        if check_active is not None:
+            check_active()
+    if progress is not None:
+        progress("incremental_refresh_complete", total, total)
+    return ordered, {
+        "schema": REJECT_CACHE_SCHEMA,
+        "classifier_version": REJECT_CLASSIFIER_VERSION,
+        "sources": total,
+        "cache_hits": cache_hits,
+        "snapshot_bootstrap_hits": snapshot_hits,
+        "recomputed": len(recomputed),
+        "invalidated": invalidated,
+        "run_artifacts_total": len(artifact_identities),
+        "run_artifacts_reread": len(
+            {
+                str(row.get("run_dir_label") or "")
+                for row in misses
+                if str(row.get("run_dir_label") or "")
+            }
+        ),
+        "run_artifacts_unavailable": sum(
+            identity.get("state") != "available" and bool(label)
+            for label, identity in artifact_identities.items()
+        ),
+        "cache_written": changed,
+    }
 
 
 def summarize_characterization(rows: list[dict[str, Any]]) -> dict[str, Any]:
