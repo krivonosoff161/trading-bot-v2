@@ -707,6 +707,72 @@ def test_product_monitor_reports_advisory_degradation_without_hard_fail(
     ]
 
 
+def test_bounded_scanner_backlog_is_visible_degraded_progress(tmp_path: Path) -> None:
+    _publish_green(tmp_path)
+    publish_checkpoint(
+        tmp_path,
+        component="scanner",
+        sequence=2,
+        status="degraded",
+        metrics=scanner_metrics(
+            inputs=20,
+            fresh=0,
+            cards=0,
+            dropped=0,
+            llm_failures=0,
+            provider_failures=0,
+            budget_exhausted=True,
+            resolver_deferred=7,
+            completed_chunks=4,
+            pass_elapsed_seconds=180.0,
+        ),
+        completed_at=102.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert report["ready"] is True
+    assert report["state"] == "degraded"
+    assert report["hard_fail_reasons"] == []
+    assert report["degraded_reasons"] == ["scanner_bounded_work_deferred"]
+
+
+def test_scanner_chunk_progress_does_not_replace_completed_pass(tmp_path: Path) -> None:
+    publish_checkpoint(
+        tmp_path,
+        component="scanner_progress",
+        sequence=5,
+        status="progress",
+        metrics={"stage": "resolver_document_completed", "completed_chunks": 5},
+        completed_at=109.0,
+    )
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=1,
+        status="completed",
+        metrics={"generation_consistent": True},
+        completed_at=101.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        slo=ProductProgressSlo(scanner_seconds=10.0, farm_seconds=300.0),
+        wall_clock=lambda: 111.0,
+    ).sample()
+
+    assert report["ready"] is False
+    assert report["state"] == "failed"
+    assert report["hard_fail_reasons"] == [
+        "scanner_product_progress_startup_timeout"
+    ]
+
+
 def test_product_monitor_hard_fails_completed_paper_pipeline_cycle_error(
     tmp_path: Path,
 ) -> None:

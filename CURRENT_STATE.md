@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-10
-- Verified against: `b98d1bf57e4de3df29fb0a531a4d76ec9cf40bad`
+- Verified against: `f2d7ebf6392c6ccd694c847f0fdd15dc340e2c69`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -20,7 +20,7 @@ model conversations, recipients, credentials, or workstation-specific state.
 
 | Capability | Status | Evidence ceiling |
 |---|---|---|
-| Public research ingestion | implemented bounded | Adapters and degraded modes are tested; continuous provider availability is not proved. |
+| Public research ingestion | implemented bounded | Adapters and degraded modes are tested. Canonical scanner passes bound article resolution by both per-fetch and total wall budgets, publish progress only after completed documents, preserve deferred rows in the durable buffer, and expose bounded deferral as degraded rather than fabricating a signal. Continuous provider availability is not proved. |
 | Strategy Lab and experiment registry | implemented bounded | Bounded scheduling, lineage, and candidate records exist; a long reliability window remains open. |
 | Deterministic simulation | implemented bounded | Declared truth tiers and synthetic parity are covered; full market execution fidelity is not claimed. |
 | Independent validation bridge | implemented bounded | `honest-backtest` can try to falsify a candidate; a pass means only not rejected. |

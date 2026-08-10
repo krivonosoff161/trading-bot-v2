@@ -89,7 +89,7 @@ for the same owner or delivery resource.
 | Component | Command | Effects and limits |
 |---|---|---|
 | Public-news contour | `bat\public_news_loop.bat` | Public/news network and optional delivery surface; not trade authority. |
-| Scanner contour | `bat\news_scanner_loop.bat` | Public intake and bounded outcome resolution; not farm or execution authority. |
+| Scanner contour | `bat\news_scanner_loop.bat` | Public intake with bounded pass/article-resolution budgets and durable deferred work; not farm or execution authority. |
 | Scanner status | `bat\news_scanner_status.bat` | Read-only status. |
 | Telegram analyzer contour | `bat\start_telegram_bot.bat` | Human-facing analyzer only; no farm or execution authority. |
 

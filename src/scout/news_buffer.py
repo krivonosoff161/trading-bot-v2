@@ -15,10 +15,13 @@ import datetime as dt
 import hashlib
 import ipaddress
 import json
+import math
 import socket
 import sqlite3
 import sys
+import time
 from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -280,12 +283,35 @@ def _fallback_newspaper(url: str) -> dict | None:
         return None
 
 
-def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) -> dict:
+def resolve_pending(
+    limit: int = 50,
+    path: Path = DB_PATH,
+    dry: bool = False,
+    *,
+    max_wall_seconds: float | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict:
     """Turn raw_items into machine_docs. Does not call LLM."""
     init_db(path)
     GN.reset_pass_counter()     # сброс cap перед каждым resolve-проходом
     resolved = failed = skipped = 0
     gn_resolved = gn_failed = 0
+    processed = 0
+    budget_exhausted = False
+    stop_requested = False
+    started_at = monotonic()
+    wall_budget = (
+        float(max_wall_seconds) if max_wall_seconds is not None else None
+    )
+    if wall_budget is not None and not math.isfinite(wall_budget):
+        raise ValueError("max_wall_seconds must be finite")
+    deadline = (
+        started_at + max(0.0, wall_budget)
+        if wall_budget is not None
+        else None
+    )
     ts = now_iso()
     with connect(path) as conn:
         rows = conn.execute(
@@ -297,7 +323,14 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
             """,
             (STATUS_NEW, STATUS_FAILED_RETRY, limit),
         ).fetchall()
-        for row in rows:
+        for index, row in enumerate(rows):
+            if should_stop is not None and should_stop():
+                stop_requested = True
+                break
+            remaining = None if deadline is None else deadline - monotonic()
+            if remaining is not None and remaining <= 0.0:
+                budget_exhausted = True
+                break
             raw = json.loads(row["raw_json"] or "{}")
             url = row["url"] or ""
             title = row["title"] or ""
@@ -329,7 +362,18 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
                     error = "sec_extract_failed"   # честный фолбэк = title_only
             elif not dry and url and len(text) < 500 and not raw.get("asset"):
                 if GN.is_google_news_url(url):
-                    real = GN.decode_google_news_url(url) or GN.resolve_google_news_url(url)
+                    resolve_timeout = (
+                        GN.DEFAULT_TIMEOUT_SECONDS
+                        if remaining is None
+                        else max(1, min(GN.DEFAULT_TIMEOUT_SECONDS, int(remaining)))
+                    )
+                    real = GN.decode_google_news_url(url)
+                    if not real:
+                        real = (
+                            GN.resolve_google_news_url(url)
+                            if remaining is None
+                            else GN.resolve_google_news_url(url, timeout=resolve_timeout)
+                        )
                     if real:
                         fetch_url, gn_original = real, url
                         gn_resolved += 1
@@ -337,7 +381,18 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
                         gn_failed += 1
                 ok, reason = _is_safe_fetch_url(fetch_url)
                 if ok:
-                    ext = page_extract.extract(fetch_url)
+                    remaining = None if deadline is None else deadline - monotonic()
+                    extract_timeout = (
+                        None if remaining is None else max(1.0, min(15.0, remaining))
+                    )
+                    ext = (
+                        page_extract.extract(fetch_url)
+                        if extract_timeout is None
+                        else page_extract.extract(
+                            fetch_url,
+                            timeout_seconds=extract_timeout,
+                        )
+                    )
                     if ext and ext.get("text"):
                         text = ext["text"].strip()
                         ext_title = ext.get("title") or ext_title
@@ -345,7 +400,11 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
                         method = "trafilatura"
                         status = "ok" if len(text) >= 500 else "partial"
                     else:
-                        fb = _fallback_newspaper(fetch_url)
+                        fb = (
+                            _fallback_newspaper(fetch_url)
+                            if deadline is None
+                            else None
+                        )
                         if fb:
                             text = fb["text"].strip()
                             ext_title = fb.get("title") or ext_title
@@ -417,8 +476,25 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
                 failed += 1
             else:
                 resolved += 1
+            processed += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "stage": "resolve_pending",
+                        "milestone": "document_completed",
+                        "completed_chunks": processed,
+                        "selected": len(rows),
+                        "remaining_selected": max(0, len(rows) - index - 1),
+                        "elapsed_seconds": max(0.0, monotonic() - started_at),
+                    }
+                )
         skipped = max(0, limit - len(rows))
     return {"resolved": resolved, "failed_partial": failed, "skipped_capacity": skipped,
+            "selected": len(rows), "processed": processed,
+            "remaining_selected": max(0, len(rows) - processed),
+            "budget_exhausted": budget_exhausted,
+            "stop_requested": stop_requested,
+            "elapsed_seconds": max(0.0, monotonic() - started_at),
             "gn_resolved": gn_resolved, "gn_failed": gn_failed,
             "gn_pass_cap": GN.metrics().get("google_skipped_pass_cap", 0),
             "gn_metrics": GN.metrics()}   # seen/resolved/failed/429/cooldown/backoff_seconds/pass_cap
