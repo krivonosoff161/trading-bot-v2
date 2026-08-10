@@ -22,6 +22,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import time
 import uuid
 from typing import Any, Iterable, Mapping, Sequence, TextIO
 
@@ -37,6 +38,24 @@ from src.research_lab.storage_capability import (
     is_link_or_reparse,
 )
 from src.research_lab.storage_os_lock import StorageLockConflict, storage_root_lock
+
+
+_WINDOWS_REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+def _replace_with_bounded_retry(source: Path, target: Path) -> None:
+    """Preserve atomic replacement across bounded Windows sharing transients."""
+    for attempt in range(len(_WINDOWS_REPLACE_RETRY_DELAYS) + 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            transient = isinstance(exc, PermissionError) or getattr(
+                exc, "winerror", None
+            ) in {5, 32, 33}
+            if not transient or attempt == len(_WINDOWS_REPLACE_RETRY_DELAYS):
+                raise
+            time.sleep(_WINDOWS_REPLACE_RETRY_DELAYS[attempt])
 
 
 SCHEMA = "RuntimeStorageCapability.v1"
@@ -177,7 +196,7 @@ def _atomic_replace_json(path: Path, value: Mapping[str, Any]) -> None:
         stream.write(payload)
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    _replace_with_bounded_retry(temporary, path)
 
 
 def _policy_payload(policy: RuntimeStreamPolicy) -> dict[str, Any]:
@@ -527,7 +546,9 @@ def seal_oversized_active_streams(capability: RuntimeStorageCapability) -> int:
                 raise RuntimeStorageError("runtime stream path is unsafe")
             pending_dir = _pending_root(root) / policy.stream_id
             pending_dir.mkdir(parents=True, exist_ok=True)
-            os.replace(active, pending_dir / f"{uuid.uuid4().hex}.sealed")
+            _replace_with_bounded_retry(
+                active, pending_dir / f"{uuid.uuid4().hex}.sealed"
+            )
             sealed_count += 1
     return sealed_count
 
@@ -666,11 +687,14 @@ def _append_tail(root: Path, policy: RuntimeStreamPolicy, lines: Sequence[bytes]
     existing = target.read_bytes().splitlines(keepends=True) if target.exists() else []
     combined = (existing + list(lines))[-policy.tail_records :]
     temporary = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
-    with temporary.open("xb") as stream:
-        stream.writelines(combined)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, target)
+    try:
+        with temporary.open("xb") as stream:
+            stream.writelines(combined)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _replace_with_bounded_retry(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def append_runtime_lines(path: Path, lines: Sequence[bytes]) -> Path:
@@ -707,7 +731,7 @@ def append_runtime_lines(path: Path, lines: Sequence[bytes]) -> Path:
                 pending_dir = _pending_root(root) / policy.stream_id
                 pending_dir.mkdir(parents=True, exist_ok=True)
                 sealed = pending_dir / f"{uuid.uuid4().hex}.sealed"
-                os.replace(path, sealed)
+                _replace_with_bounded_retry(path, sealed)
     except StorageLockConflict as exc:
         raise RuntimeStorageError("runtime storage lock is unavailable") from exc
     if sealed is not None:
@@ -806,7 +830,7 @@ def archive_pending_segments(capability: RuntimeStorageCapability, *, stream_ids
                 recovered = interrupted.with_suffix(".sealed")
                 with storage_root_lock(_lock_path(root), wait_seconds=5.0):
                     if interrupted.exists() and not recovered.exists():
-                        os.replace(interrupted, recovered)
+                        _replace_with_bounded_retry(interrupted, recovered)
             except (OSError, StorageLockConflict):
                 problems.append(f"claim_recovery_failed:{policy.stream_id}")
         for sealed in sorted(pending_dir.glob("*.sealed")):
@@ -817,7 +841,7 @@ def archive_pending_segments(capability: RuntimeStorageCapability, *, stream_ids
                         continue
                     if claimed.exists():
                         continue
-                    os.replace(sealed, claimed)
+                    _replace_with_bounded_retry(sealed, claimed)
                 stat = claimed.stat()
                 observed = dt.datetime.fromtimestamp(stat.st_mtime, tz=dt.timezone.utc).isoformat()
                 manifest = catalog.register_jsonl(
@@ -846,7 +870,7 @@ def archive_pending_segments(capability: RuntimeStorageCapability, *, stream_ids
                 try:
                     with storage_root_lock(_lock_path(root), wait_seconds=5.0):
                         if claimed.exists() and not sealed.exists():
-                            os.replace(claimed, sealed)
+                            _replace_with_bounded_retry(claimed, sealed)
                 except (OSError, StorageLockConflict):
                     problems.append(f"claim_release_failed:{policy.stream_id}")
     budget = storage_budget_status(capability)

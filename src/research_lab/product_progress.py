@@ -208,8 +208,15 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     generation_consistent = bool(
         run_id and all(reference == run_id for reference in required_generation_refs)
     )
+    cycle_errors = tuple(
+        error for error in out.get("errors") or () if isinstance(error, Mapping)
+    )
     return {
-        "errors": len(out.get("errors") or ()),
+        "errors": len(cycle_errors),
+        "paper_pipeline_errors": sum(
+            str(error.get("where") or "") == "paper_signals"
+            for error in cycle_errors
+        ),
         "events_ingested": int(counters.get("events_ingested") or 0),
         "events_consumed": int(counters.get("events_consumed") or 0),
         "validation_active": int(
@@ -445,6 +452,8 @@ class ProductProgressMonitor:
                     hard_fail.append("paper_generation_stage_mismatch")
                 if int(metrics.get("operational_rows_retained") or 0):
                     hard_fail.append("technical_outcome_entered_training")
+                if int(metrics.get("paper_pipeline_errors") or 0):
+                    hard_fail.append("paper_pipeline_cycle_failed")
             components[component] = {
                 "current_run": current,
                 "sequence": int(row.get("sequence") or 0),

@@ -10,6 +10,8 @@ import time
 
 import pytest
 
+from src.research_lab import runtime_storage_rotation
+
 from scripts.strategy_lab.runtime_storage_rotation import (
     _archive_authority,
     main as storage_cli_main,
@@ -403,6 +405,34 @@ def test_concurrent_writers_rotate_without_loss_or_duplicate(tmp_path: Path) -> 
     rows = active + _rows_from_archive(archive)
     assert len(rows) == 40
     assert {row["sequence"] for row in rows} == set(range(20)) | set(range(100, 120))
+
+
+def test_tail_replace_retries_bounded_windows_sharing_transient(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _capability, source, _archive = _activated(tmp_path, cap=4096)
+    path = source / "logs" / "farm" / "cycle_log.jsonl"
+    real_replace = runtime_storage_rotation.os.replace
+    attempts = 0
+
+    def contended_replace(source_path, target_path):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 3:
+            exc = PermissionError("synthetic sharing denial")
+            exc.winerror = 5
+            raise exc
+        real_replace(source_path, target_path)
+
+    monkeypatch.setattr(runtime_storage_rotation.os, "replace", contended_replace)
+    monkeypatch.setattr(runtime_storage_rotation.time, "sleep", lambda _delay: None)
+
+    append_runtime_jsonl(path, {"schema": "farm_journal.v1", "sequence": 1})
+
+    assert attempts == 4
+    assert json.loads(path.read_text(encoding="utf-8"))["sequence"] == 1
+    tail_root = source / ".runtime-storage-v1" / "tails"
+    assert not list(tail_root.glob(".*.tmp"))
 
 
 def test_semantic_index_survives_rotation_for_lineage_and_llm_policy(tmp_path: Path) -> None:
