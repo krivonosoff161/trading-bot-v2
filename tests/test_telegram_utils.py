@@ -99,6 +99,36 @@ def test_send_photo_bytes_to_posts_exact_payload(monkeypatch):
     ) in captured["fields"]
 
 
+def test_successful_photo_ack_survives_runtime_log_sink_failure(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        async def text(self):
+            return '{"ok": true, "result": {"message_id": 654}}'
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(telegram, "bot_token", lambda: "synthetic-token")
+    monkeypatch.setattr(telegram.aiohttp, "ClientSession", FakeSession)
+    monkeypatch.setattr(
+        telegram.logger,
+        "info",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("synthetic runtime-storage sink failure")
+        ),
+    )
+
+    assert asyncio.run(telegram.send_photo_bytes_to("synthetic-recipient", b"png")) == 654
+
+
 @pytest.mark.parametrize(
     ("status", "body", "problem"),
     [

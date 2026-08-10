@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-10
-- Verified against: `b7543248e8f3f51fce9d039a8b87058953f63373`
+- Verified against: `b98d1bf57e4de3df29fb0a531a4d76ec9cf40bad`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -66,10 +66,16 @@ dependency, not by a route to live trading.
   closed. Public code provides shadow-parity,
   activation, status, and non-destructive pre-runtime rollback primitives.
 - Current-generation preview, training, lineage, outcome retest and Telegram
-  delivery now form the product boundary before historical analyst, role and
-  setup-memory maintenance. Only a completed generation-bound delivery publishes
-  farm product progress; the heavier maintenance remains fenced and fail-closed
-  after delivery instead of starving startup readiness.
+  delivery form the generation boundary before analyst, role and setup-memory
+  maintenance. An intermediate delivery checkpoint remains observable, but T+0
+  now waits for the final product-cycle checkpoint containing safe delivery,
+  advisory, analyst, memory and storage-maintenance aggregates.
+- Telegram transport success is not revoked by a later runtime-log sink error;
+  the acknowledged message id reaches the outbox. A new current-attempt ambiguity
+  fails closed, while carried ambiguous debt stays visible and blocked from
+  automatic replay. Card analysis provenance distinguishes accepted bounded LLM
+  advisory evidence from deterministic fallback and authority-none research
+  templates without granting the model price or lifecycle authority.
 - Scanner passes and completed farm cycles publish atomic, secret-free product
   checkpoints. The RCC supervises them on an independent lane: ordinary PIDs
   and heartbeats cannot establish T+0 or refresh a product SLO. Honest zero

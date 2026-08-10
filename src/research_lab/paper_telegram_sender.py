@@ -1329,6 +1329,15 @@ def send_paper_telegram_previews(
     ambiguous_messages = sum(
         1 for delivery in deliveries if delivery.status == "external_ack_ambiguous"
     )
+    carried_ambiguous_messages = sum(
+        1
+        for delivery in deliveries
+        if delivery.status == "external_ack_ambiguous"
+        and delivery.problem == "external_ack_requires_operator_recovery"
+    )
+    current_ambiguous_messages = max(
+        0, ambiguous_messages - carried_ambiguous_messages
+    )
     pending_claim_messages = sum(
         1 for delivery in deliveries if delivery.status == "pending_delivery_claim"
     )
@@ -1390,6 +1399,8 @@ def send_paper_telegram_previews(
         "error_cards": _unique_preview_count(deliveries, "error"),
         "external_ack_ambiguous": ambiguous_messages,
         "external_ack_ambiguous_messages": ambiguous_messages,
+        "external_ack_ambiguous_current_attempts": current_ambiguous_messages,
+        "external_ack_ambiguous_carried": carried_ambiguous_messages,
         "external_ack_ambiguous_cards": _unique_preview_count(
             deliveries, "external_ack_ambiguous"
         ),

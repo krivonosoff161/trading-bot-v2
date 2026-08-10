@@ -13,6 +13,22 @@ import aiohttp
 from loguru import logger
 
 
+def _log_transport_ack(message: str, *args: object) -> None:
+    """Keep a successful external ACK independent from a fallible log sink.
+
+    Telegram's response is the side-effect authority.  Runtime stdout rotation
+    is useful evidence, but a storage/tee failure after ``ok=true`` must not
+    turn the already completed external send into an unknown result for the
+    delivery outbox.  The caller persists the returned message id through its
+    own transactional boundary.
+    """
+
+    try:
+        logger.info(message, *args)
+    except Exception:  # noqa: BLE001 - an audit sink cannot revoke an external ACK
+        return
+
+
 def recipient_ref(chat_id: str) -> str:
     """Return a non-reversible local log label for a Telegram recipient."""
     return hashlib.sha256(str(chat_id).encode("utf-8")).hexdigest()[:12]
@@ -111,7 +127,7 @@ async def send_message_to(chat_id: str, text: str) -> int | None:
                 raise RuntimeError(f"Telegram ok=false: {body_text[:200]}")
 
             msg_id = body_json.get("result", {}).get("message_id")
-            logger.info(
+            _log_transport_ack(
                 "Telegram sent | recipient_ref={} msg_id={}",
                 recipient_ref(chat_id),
                 msg_id,
@@ -148,7 +164,7 @@ async def send_photo_to(chat_id: str, file_path: str, caption: str = "",
             raise RuntimeError(f"Telegram photo ok=false: {body_text[:200]}")
 
         msg_id = body_json.get("result", {}).get("message_id")
-        logger.info(
+        _log_transport_ack(
             "Telegram photo sent | recipient_ref={} msg_id={}",
             recipient_ref(chat_id),
             msg_id,
@@ -189,7 +205,7 @@ async def send_photo_bytes_to(chat_id: str, payload: bytes, caption: str = "",
             raise RuntimeError(f"Telegram photo ok=false: {body_text[:200]}")
 
         msg_id = body_json.get("result", {}).get("message_id")
-        logger.info(
+        _log_transport_ack(
             "Telegram photo sent | recipient_ref={} msg_id={}",
             recipient_ref(chat_id),
             msg_id,
