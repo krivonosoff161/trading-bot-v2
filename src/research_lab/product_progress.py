@@ -25,6 +25,75 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+@dataclass(frozen=True)
+class ProductProgressSteadyAssessment:
+    """Fail-closed interpretation shared by RCC and external canary adapters."""
+
+    state: str
+    hard_failure: str | None
+
+    @property
+    def transitioning(self) -> bool:
+        return self.state == "transitioning" and self.hard_failure is None
+
+
+def assess_post_t0_product_progress(
+    report: Mapping[str, Any],
+) -> ProductProgressSteadyAssessment:
+    """Classify a post-T+0 report without treating valid work as an outage.
+
+    A validation generation may temporarily make ``ready`` false.  That is a
+    safe transition only while both production components still belong to the
+    current run, the generation explicitly reports that it is waiting for
+    validation, and the monitor has not emitted a real SLO/invariant failure.
+    The underlying :class:`ProductProgressMonitor` remains responsible for
+    bounding the transition through real completed progress milestones.
+    """
+
+    if (
+        report.get("schema") != REPORT_SCHEMA
+        or report.get("paper_only") is not True
+        or report.get("execution_allowed") is not False
+    ):
+        return ProductProgressSteadyAssessment(
+            state="failed",
+            hard_failure="product_progress_report_invalid",
+        )
+    reasons = list(report.get("hard_fail_reasons") or ())
+    if reasons:
+        return ProductProgressSteadyAssessment(
+            state="failed",
+            hard_failure=f"product_progress:{str(reasons[0])[:140]}",
+        )
+    state = str(report.get("state") or "")
+    if report.get("ready") is True:
+        if state not in {"ready", "degraded"}:
+            return ProductProgressSteadyAssessment(
+                state="failed",
+                hard_failure="product_progress_report_inconsistent",
+            )
+        return ProductProgressSteadyAssessment(state=state, hard_failure=None)
+
+    components = _mapping(report.get("components"))
+    scanner = _mapping(components.get("scanner"))
+    farm = _mapping(components.get("farm"))
+    farm_metrics = _mapping(farm.get("metrics"))
+    if (
+        state == "starting"
+        and scanner.get("current_run") is True
+        and farm.get("current_run") is True
+        and farm_metrics.get("paper_generation_waiting") is True
+    ):
+        return ProductProgressSteadyAssessment(
+            state="transitioning",
+            hard_failure=None,
+        )
+    return ProductProgressSteadyAssessment(
+        state="failed",
+        hard_failure="product_progress_not_ready_after_t0",
+    )
+
+
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")

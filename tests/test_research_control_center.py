@@ -1368,6 +1368,7 @@ def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
     center._closing = False
     center._runtime_monitor_started_at = 100.0
     center._product_progress_ready = True
+    center._product_progress_post_t0_failure = None
     center._runtime_ready = False
     center._runtime_owner_monitor = SimpleNamespace(
         sample=lambda: SimpleNamespace(
@@ -1519,6 +1520,7 @@ def test_runtime_probe_allows_bounded_product_transition_after_t0(
     center, events = _runtime_probe_center()
     center._runtime_ready = True
     center._product_progress_ready = False
+    center._product_progress_post_t0_failure = None
     ollama_pid = center.contours["ollama"].process.pid
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 1_000.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
@@ -1537,6 +1539,35 @@ def test_runtime_probe_allows_bounded_product_transition_after_t0(
     assert sample["product_progress_ready"] is False
     assert sample["product_progress_transitioning"] is True
     assert events == []
+
+
+def test_runtime_probe_rejects_unclassified_product_loss_after_t0(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    center._runtime_ready = True
+    center._product_progress_ready = False
+    center._product_progress_post_t0_failure = "product_progress_not_ready_after_t0"
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 1_000.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(
+        MODULE,
+        "_listening_pid",
+        lambda _port, **_kwargs: center.contours["ollama"].process.pid,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    with pytest.raises(
+        MODULE.CanaryMonitorHardFailure,
+        match="product_progress_not_ready_after_t0",
+    ):
+        center._fast_runtime_safety_probe()
 
 
 def test_runtime_probe_listener_loss_after_t0_is_immediate_hard_failure(
