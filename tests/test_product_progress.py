@@ -707,6 +707,36 @@ def test_product_monitor_reports_advisory_degradation_without_hard_fail(
     ]
 
 
+def test_research_cards_without_validated_setups_are_reported_honestly(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path)
+    farm_path = tmp_path / "state" / "product_progress" / "farm.json"
+    payload = json.loads(farm_path.read_text(encoding="utf-8"))
+    payload["metrics"].update(
+        {
+            "preview_rendered": 10,
+            "research_observation_cards": 10,
+            "validated_setup_cards": 0,
+            "analysis_llm_linked": 0,
+            "analysis_template": 10,
+            "analyst_input_rows": 0,
+        }
+    )
+    farm_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+
+    assert report["ready"] is True
+    assert report["state"] == "degraded"
+    assert report["hard_fail_reasons"] == []
+    assert report["degraded_reasons"] == ["no_current_validated_paper_setup"]
+
+
 def test_bounded_scanner_backlog_is_visible_degraded_progress(tmp_path: Path) -> None:
     _publish_green(tmp_path)
     publish_checkpoint(

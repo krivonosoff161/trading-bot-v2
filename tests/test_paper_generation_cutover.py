@@ -676,7 +676,9 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
         "validation_bound_members"
     ] == 1
     assert args.paper_generation_run_id == "run-current"
-    assert runtime.failures_checked == 4
+    # The post-delivery chain now checks liveness around the two formerly
+    # unbounded analyst/role-maintenance stages as well as the generation chain.
+    assert runtime.failures_checked == 6
 
 
 def test_farm_v2_preview_mismatch_fails_closed_before_training(tmp_path, monkeypatch):

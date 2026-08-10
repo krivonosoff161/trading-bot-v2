@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 from src.research_lab import system_analyst_cycle
 from src.research_lab.farm_tasks_db import FarmTasksDB
@@ -107,6 +110,94 @@ def test_dispatch_preview_is_read_only(tmp_path):
     assert summary["apply"] is False
     assert not (tmp_path / "state" / "role_work_queue").exists()
     tasks.close()
+
+
+def test_exact_environment_ids_do_not_scan_unrelated_historical_requests(
+    tmp_path, monkeypatch
+):
+    import src.research_lab.role_environment_dispatch as dispatch_module
+
+    current_id = "env_" + "1" * 24
+    historical_id = "env_" + "2" * 24
+    base = tmp_path / "state" / "role_environments" / "farm"
+    state = base / "_state"
+    _write_json(
+        base / f"{current_id}.json",
+        {
+            "schema": "RoleEnvironmentCandidate.v1",
+            "environment_id": current_id,
+            "recipient": "farm",
+            "task_spec": {
+                "schema": "RoleTaskSpec.v1",
+                "paper_generation_run_id": "run-current",
+            },
+        },
+    )
+    _write_json(
+        state / f"{current_id}.json",
+        {"status": "request_accepted"},
+    )
+    _write_json(base / f"{historical_id}.json", {"must_not_be_read": True})
+    _write_json(state / f"{historical_id}.json", {"must_not_be_read": True})
+    reads = []
+    original_read = dispatch_module._read_json
+
+    def observed_read(path):
+        reads.append(Path(path).name)
+        if historical_id in Path(path).name:
+            raise AssertionError("historical request was scanned")
+        return original_read(path)
+
+    monkeypatch.setattr(dispatch_module, "_read_json", observed_read)
+    tasks = FarmTasksDB(":memory:")
+    try:
+        summary = dispatch_role_environments(
+            tmp_path,
+            tasks,
+            apply=False,
+            expected_generation_run_id="run-current",
+            environment_ids_by_role={"farm": [current_id]},
+        )
+    finally:
+        tasks.close()
+
+    assert summary["by_role"]["farm"]["seen"] == 1
+    assert all(historical_id not in name for name in reads)
+
+
+def test_dispatch_liveness_failure_prevents_side_effects(tmp_path):
+    current_id = "env_" + "3" * 24
+    base = tmp_path / "state" / "role_environments" / "farm"
+    _write_json(
+        base / f"{current_id}.json",
+        {
+            "schema": "RoleEnvironmentCandidate.v1",
+            "environment_id": current_id,
+            "recipient": "farm",
+            "task_spec": {
+                "schema": "RoleTaskSpec.v1",
+                "paper_generation_run_id": "run-current",
+            },
+        },
+    )
+    _write_json(base / "_state" / f"{current_id}.json", {"status": "request_accepted"})
+    tasks = FarmTasksDB(":memory:")
+    try:
+        with pytest.raises(RuntimeError, match="synthetic stop"):
+            dispatch_role_environments(
+                tmp_path,
+                tasks,
+                apply=True,
+                expected_generation_run_id="run-current",
+                environment_ids_by_role={"farm": [current_id]},
+                check_active=lambda: (_ for _ in ()).throw(
+                    RuntimeError("synthetic stop")
+                ),
+            )
+    finally:
+        tasks.close()
+
+    assert not (tmp_path / "state" / "role_work_queue").exists()
 
 
 def test_reconcile_projects_completed_role_work_into_analyst_inbox(tmp_path):

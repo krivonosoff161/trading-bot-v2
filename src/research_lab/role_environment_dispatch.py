@@ -8,8 +8,10 @@ deterministic gate and untouched evaluation contract.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from src.research_lab.farm_tasks_db import FarmTasksDB
@@ -20,6 +22,7 @@ from src.research_lab.trade_thesis_supervisor import replay_symbol_fsm
 
 
 SCHEMA = "RoleEnvironmentDispatch.v1"
+_ENVIRONMENT_ID_RE = re.compile(r"env_[0-9a-f]{24}\Z")
 
 
 def _read_json(path: Path) -> Any:
@@ -50,13 +53,30 @@ def _accepted_rows(
     recipient: str,
     *,
     expected_generation_run_id: str | None = None,
+    environment_ids: Iterable[str] | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> list[dict[str, Any]]:
     base = resolve_private_child(private_root, "state", "role_environments", recipient)
     state_dir = base / "_state"
     rows: list[dict[str, Any]] = []
     if not base.exists() or not state_dir.exists():
         return rows
-    for path in sorted(base.glob("env_*.json")):
+    if environment_ids is None:
+        paths = sorted(base.glob("env_*.json"))
+    else:
+        paths = []
+        seen: set[str] = set()
+        for raw_id in environment_ids:
+            environment_id = str(raw_id or "")
+            if environment_id in seen or not _ENVIRONMENT_ID_RE.fullmatch(environment_id):
+                continue
+            seen.add(environment_id)
+            path = base / f"{environment_id}.json"
+            if path.is_file():
+                paths.append(path)
+    for path in paths:
+        if check_active is not None:
+            check_active()
         state = _read_json(state_dir / path.name)
         candidate = _read_json(path)
         if not isinstance(state, dict) or not isinstance(candidate, dict):
@@ -279,10 +299,13 @@ def dispatch_role_environments(
     limit_per_role: int = 20,
     expected_generation_run_id: str | None = None,
     evidence_database_path: Path | str | None = None,
+    environment_ids_by_role: Mapping[str, Iterable[str]] | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "schema": "RoleEnvironmentDispatchSummary.v1",
         "by_role": {},
+        "environment_ids": {},
         "paper_only": True,
         "execution_allowed": False,
         "apply": bool(apply),
@@ -291,11 +314,20 @@ def dispatch_role_environments(
     }
     for recipient in ("farm", "validator", "trader"):
         counters = {"seen": 0, "queued": 0, "deduped": 0, "completed": 0, "waiting": 0}
+        processed_ids: list[str] = []
         for row in _accepted_rows(
             private_root,
             recipient,
             expected_generation_run_id=expected_generation_run_id,
+            environment_ids=(
+                environment_ids_by_role.get(recipient, ())
+                if environment_ids_by_role is not None
+                else None
+            ),
+            check_active=check_active,
         )[: max(0, int(limit_per_role))]:
+            if check_active is not None:
+                check_active()
             counters["seen"] += 1
             if not apply:
                 counters["waiting"] += 1
@@ -314,8 +346,10 @@ def dispatch_role_environments(
             _write_json(
                 _dispatch_path(private_root, recipient, row["environment_id"]), result
             )
+            processed_ids.append(str(row["environment_id"]))
             counters[result["status"]] = counters.get(result["status"], 0) + 1
         summary["by_role"][recipient] = counters
+        summary["environment_ids"][recipient] = processed_ids
     return summary
 
 
@@ -325,6 +359,8 @@ def reconcile_role_work_results(
     *,
     apply: bool,
     expected_generation_run_id: str | None = None,
+    environment_ids_by_role: Mapping[str, Iterable[str]] | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Project completed recipient work into a bounded System Analyst inbox."""
     inbox: list[dict[str, Any]] = []
@@ -333,7 +369,25 @@ def reconcile_role_work_results(
         directory = dispatch_root / recipient
         if not directory.exists():
             continue
-        for path in sorted(directory.glob("env_*.json")):
+        if environment_ids_by_role is None:
+            paths = sorted(directory.glob("env_*.json"))
+        else:
+            paths = []
+            seen: set[str] = set()
+            for raw_id in environment_ids_by_role.get(recipient, ()):
+                environment_id = str(raw_id or "")
+                if (
+                    environment_id in seen
+                    or not _ENVIRONMENT_ID_RE.fullmatch(environment_id)
+                ):
+                    continue
+                seen.add(environment_id)
+                path = directory / f"{environment_id}.json"
+                if path.is_file():
+                    paths.append(path)
+        for path in paths:
+            if check_active is not None:
+                check_active()
             dispatch = _read_json(path)
             if not isinstance(dispatch, dict):
                 continue

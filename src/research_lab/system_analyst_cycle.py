@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import datetime as dt
 import json
 from pathlib import Path
@@ -16,6 +17,7 @@ from src.research_lab.outcome_learning import (
 )
 from src.research_lab.role_environment import (
     accept_role_request,
+    current_generation_role_requests,
     materialize_role_environment,
     recoverable_role_requests,
 )
@@ -425,9 +427,12 @@ def run_system_analyst_cycle(
     now: str | None = None,
     max_feedback: int = DEFAULT_MAX_FEEDBACK_PER_CYCLE,
     expected_generation_run_id: str | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     if max_feedback < 1:
         raise ValueError("max_feedback must be positive")
+    if check_active is not None:
+        check_active()
     training_evidence = load_current_training_evidence(private_root)
     actual_generation_run_id = str(
         training_evidence.get("paper_generation_run_id") or ""
@@ -437,26 +442,37 @@ def run_system_analyst_cycle(
         or actual_generation_run_id != str(expected_generation_run_id)
     ):
         raise ValueError("system analyst training evidence generation mismatch")
-    all_payloads = feedback_payloads_from_outcomes(
-        training_evidence["items"], load_outcome_reviews(private_root)
+    if check_active is not None:
+        check_active()
+    training_rows = [
+        row for row in training_evidence.get("items") or [] if isinstance(row, dict)
+    ]
+    all_payloads = (
+        feedback_payloads_from_outcomes(training_rows, load_outcome_reviews(private_root))
+        if training_rows
+        else []
     )
-    all_payloads.extend(
-        feedback_payloads_from_system_results(
-            _read_jsonl(
-                Path(private_root)
-                / "state"
-                / "derived"
-                / "system_analyst_result_inbox.jsonl"
-            ),
-            _read_jsonl(
-                Path(private_root)
-                / "state"
-                / "llm_advice"
-                / "system_analyst_drafts.jsonl"
-            ),
-            expected_generation_run_id=expected_generation_run_id,
+    result_rows = _read_jsonl(
+        Path(private_root)
+        / "state"
+        / "derived"
+        / "system_analyst_result_inbox.jsonl"
+    )
+    if result_rows:
+        all_payloads.extend(
+            feedback_payloads_from_system_results(
+                result_rows,
+                _read_jsonl(
+                    Path(private_root)
+                    / "state"
+                    / "llm_advice"
+                    / "system_analyst_drafts.jsonl"
+                ),
+                expected_generation_run_id=expected_generation_run_id,
+            )
         )
-    )
+    if check_active is not None:
+        check_active()
     payloads = sorted(
         all_payloads,
         key=lambda payload: str(
@@ -474,6 +490,7 @@ def run_system_analyst_cycle(
         "rejection_reasons": {},
         "role_environment_candidates": {},
         "accepted_role_requests": {},
+        "accepted_environment_ids": {},
         "training_evidence": {
             key: value for key, value in training_evidence.items() if key != "items"
         },
@@ -489,6 +506,8 @@ def run_system_analyst_cycle(
         return summary
     gate_now = now or utc_now()
     for payload in payloads:
+        if check_active is not None:
+            check_active()
         try:
             feedback = build_feedback(payload, now=gate_now)
         except ValueError as exc:
@@ -501,17 +520,41 @@ def run_system_analyst_cycle(
         route_feedback(private_root, feedback)
         summary["routed"] += 1
     for recipient in ("farm", "validator", "trader"):
-        rows = materialize_role_environment(private_root, recipient=recipient)
-        summary["role_environment_candidates"][recipient] = len(rows)
-        recoverable = recoverable_role_requests(private_root, recipient)
-        summary["accepted_role_requests"][recipient] = sum(
-            1
-            for row in recoverable
-            if accept_role_request(
+        if check_active is not None:
+            check_active()
+        recovery_rows = (
+            current_generation_role_requests(
                 private_root,
                 recipient=recipient,
-                environment_id=str(row["environment_id"]),
-            ).get("status")
-            == "request_accepted"
+                generation_run_id=actual_generation_run_id,
+            )
+            if expected_generation_run_id
+            else recoverable_role_requests(private_root, recipient)
         )
+        rows = materialize_role_environment(
+            private_root,
+            recipient=recipient,
+            expected_generation_run_id=(
+                actual_generation_run_id if expected_generation_run_id else None
+            ),
+        )
+        rows_by_id = {
+            str(row["environment_id"]): row for row in (*recovery_rows, *rows)
+        }
+        summary["role_environment_candidates"][recipient] = len(rows_by_id)
+        accepted_ids: list[str] = []
+        for environment_id, row in rows_by_id.items():
+            if check_active is not None:
+                check_active()
+            if row.get("status") not in {"candidate", "request_accepted"}:
+                continue
+            accepted = accept_role_request(
+                private_root,
+                recipient=recipient,
+                environment_id=environment_id,
+            )
+            if accepted.get("status") == "request_accepted":
+                accepted_ids.append(environment_id)
+        summary["accepted_role_requests"][recipient] = len(accepted_ids)
+        summary["accepted_environment_ids"][recipient] = accepted_ids
     return summary

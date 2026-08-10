@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-10
-- Verified against: `538f5f4aa0283c96a513e1650c94c62df22878c7`
+- Verified against: `c5615acd689e4a4af49c6e5ee4913fd0d6b187e0`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -75,6 +75,12 @@ dependency, not by a route to live trading.
   maintenance. An intermediate delivery checkpoint remains observable, but T+0
   now waits for the final product-cycle checkpoint containing safe delivery,
   advisory, analyst, memory and storage-maintenance aggregates.
+- The post-delivery analyst hot path skips empty outcome/draft sources, routes
+  only bounded current-generation feedback, and hands exact environment IDs to
+  role dispatch and reconciliation. Historical role-environment directories
+  remain immutable evidence rather than a startup work queue. Stage milestones
+  and stop/claim checks make this maintenance interruptible without publishing a
+  premature farm-ready checkpoint.
 - Telegram transport success is not revoked by a later runtime-log sink error;
   the acknowledged message id reaches the outbox. A new current-attempt ambiguity
   fails closed, while carried ambiguous debt stays visible and blocked from
@@ -96,6 +102,10 @@ dependency, not by a route to live trading.
   RCC and external canary adapters consume the same classifier: only an explicit
   current-run validation wait without hard-fail reasons is transitional, while
   every other non-ready report remains fail-closed.
+- Product checkpoints distinguish validated PFR setups, authority-none research
+  observation cards and actual analyst inputs. Ten rendered research images with
+  no current validated setup are therefore reported as degraded research output,
+  not as ten validated signals or ten learned outcomes.
 - Canonical buffered scanner passes now have separate total-pass and article-
   resolution wall budgets. Network extraction receives the remaining bounded
   timeout, the unbounded archive fallback is excluded from this canonical mode,
