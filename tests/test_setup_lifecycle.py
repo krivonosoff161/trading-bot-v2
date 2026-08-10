@@ -4,9 +4,11 @@
 import json
 from pathlib import Path
 
+from src.research_lab import setup_lifecycle
 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
 from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
 from src.research_lab.setup_lifecycle import derive_setup_lifecycle, summarize_setup_lifecycle
+from src.research_lab.validation_generation import CurrentGenerationSnapshot
 
 
 def _unique(tasks: FarmTasksDB, uc_key: str, *, hard_status: str = "", candidate_id: str = "c1") -> str:
@@ -108,3 +110,105 @@ def test_lifecycle_reports_only_completed_input_and_row_chunks(tmp_path):
     assert ("validation_verdicts_loaded", 1, 1) in events
     assert ("unique_candidates_loaded", 1, 1) in events
     assert ("lifecycle_rows_derived", 1, 1) in events
+
+
+def test_current_generation_snapshot_is_loaded_once_without_historical_card_scan(
+    tmp_path, monkeypatch
+):
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    uc_key = "BTC::1h::momentum_breakout::ph::fp"
+    validation_id = _unique(tasks, uc_key)
+    tasks.close()
+    card_dir = tmp_path / "setup_library" / "cards"
+    card_dir.mkdir(parents=True)
+    for index in range(50):
+        (card_dir / f"stale-{index}.json").write_text("{}", encoding="utf-8")
+    identity = {
+        "candidate_id": validation_id,
+        "symbol": "BTC",
+        "timeframe": "1h",
+        "strategy_id": "momentum_breakout",
+    }
+    snapshot = CurrentGenerationSnapshot(
+        "ready",
+        "generation-current",
+        {
+            validation_id: {
+                "request": (
+                    tmp_path / "request.json",
+                    {**identity, "metrics": {"uc_key": uc_key}},
+                ),
+                "report": (tmp_path / "report.json", identity),
+                "verdict": (
+                    tmp_path / "verdict.json",
+                    {**identity, "hard_status": "PAPER_FORWARD_READY"},
+                ),
+                "setup_card": (
+                    tmp_path / "card.json",
+                    {
+                        **identity,
+                        "setup_id": f"setup-{validation_id}",
+                        "paper_forward_ready": True,
+                    },
+                ),
+            }
+        },
+        1,
+    )
+    calls = 0
+
+    def load_once(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return snapshot
+
+    original_glob = Path.glob
+
+    def guarded_glob(path, pattern):
+        if path == card_dir:
+            raise AssertionError("current generation must not scan historical cards")
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(setup_lifecycle, "load_current_generation_snapshot", load_once)
+    monkeypatch.setattr(Path, "glob", guarded_glob)
+
+    row = derive_setup_lifecycle(tmp_path)[0]
+
+    assert calls == 1
+    assert row["validation_candidate_id"] == validation_id
+    assert row["setup_card_exists"] is True
+    assert row["paper_forward_ready"] is True
+
+
+def test_pending_generation_does_not_fall_back_to_historical_cards(
+    tmp_path, monkeypatch
+):
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    _unique(tasks, "BTC::1h::momentum_breakout::ph::fp")
+    tasks.close()
+    card_dir = tmp_path / "setup_library" / "cards"
+    card_dir.mkdir(parents=True)
+    (card_dir / "stale.json").write_text(
+        json.dumps({"candidate_id": "stale", "paper_forward_ready": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        setup_lifecycle,
+        "load_current_generation_snapshot",
+        lambda *_a, **_k: CurrentGenerationSnapshot(
+            "pending", "generation-next", {}, 0
+        ),
+    )
+    original_glob = Path.glob
+
+    def guarded_glob(path, pattern):
+        if path == card_dir:
+            raise AssertionError("pending generation cannot consult historical cards")
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", guarded_glob)
+
+    row = derive_setup_lifecycle(tmp_path)[0]
+
+    assert row["setup_card_exists"] is False
+    assert row["paper_forward_ready"] is False

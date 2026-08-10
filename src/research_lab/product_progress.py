@@ -203,7 +203,15 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     generation_waiting = generation_state == "waiting_validation_generation"
     required_generation_refs = tuple(
         str(payload.get("paper_generation_run_id") or "")
-        for payload in (bridge, queue, observer, preview, training, outcome_generation)
+        for payload in (
+            bridge,
+            queue,
+            observer,
+            preview,
+            delivery,
+            training,
+            outcome_generation,
+        )
     )
     generation_consistent = bool(
         run_id and all(reference == run_id for reference in required_generation_refs)

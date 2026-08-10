@@ -23,7 +23,6 @@ import os
 import re
 import sys
 import time
-import traceback
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -46,6 +45,7 @@ from src.utils.llm_formatter import generate_premium_analysis, premium_vision_st
 from src.utils.signal_event_log import record_manual_analysis_event, record_signal_event  # noqa: E402
 from src.utils.telegram_audit import record_message_audit  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
+from src.research_lab.telegram_bot_health import publish_health  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -522,10 +522,9 @@ async def _run_premium_analysis(chat_id: str, image_path: str, category: str) ->
                 },
             )
         except Exception as _le:
-            print(f"[premium_log] error: {_le}")
-    except Exception:
-        tb = traceback.format_exc()
-        print(f"ERROR _run_premium_analysis | chat_id={chat_id}\n{tb}")
+            print(f"[premium_log] error: {type(_le).__name__}")
+    except Exception as exc:
+        print(f"ERROR _run_premium_analysis | type={type(exc).__name__}")
         try:
             await _send(chat_id, "Произошла ошибка. Попробуй позже.")
         except Exception:
@@ -668,10 +667,10 @@ async def _check_subscription_expiry() -> None:
                 ]},
             )
             mark_reminded(chat_id, today_str)
-            print(f"Subscription reminder sent to {chat_id} (1 day left)")
+            print("Subscription reminder sent (1 day left)")
             await asyncio.sleep(0.5)
-        except Exception as e:
-            print(f"Subscription reminder failed | chat={chat_id} | {e}")
+        except Exception as exc:
+            print(f"Subscription reminder failed | type={type(exc).__name__}")
 
 
 async def _subscription_reminder_loop() -> None:
@@ -694,9 +693,8 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
 
         async with _ANALYSIS_SEM:
             await _run_analysis(chat_id, image_path, symbol, captured_at)
-    except Exception:
-        tb = traceback.format_exc()
-        print(f"ERROR _run_and_deliver | chat_id={chat_id} symbol={symbol}\n{tb}")
+    except Exception as exc:
+        print(f"ERROR _run_and_deliver | symbol={symbol} | type={type(exc).__name__}")
         try:
             await _send(chat_id, "Произошла ошибка при анализе. Попробуй позже.")
         except Exception:
@@ -814,7 +812,10 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
                 message_id=summary_message_id,
             )
         except Exception as _event_error:
-            print(f"[signal_event/manual] error | symbol={symbol} err={_event_error}")
+            print(
+                f"[signal_event/manual] error | symbol={symbol} "
+                f"type={type(_event_error).__name__}"
+            )
         entry_signal = ctx.get("entry_signal", "")
         if entry_signal == "ENTRY":
             try:
@@ -827,7 +828,10 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
                     source="manual",
                 )
             except Exception as _e:
-                print(f"[signal_log/manual] error | symbol={symbol} err={_e}")
+                print(
+                    f"[signal_log/manual] error | symbol={symbol} "
+                    f"type={type(_e).__name__}"
+                )
         else:
             # Log NO_TRADE manual requests for live funnel analysis
             try:
@@ -910,9 +914,8 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             style = ctx.get("trade_style") or ctx.get("trade_style_hint") or ""
             await _send_feedback_entry_buttons(chat_id, entry_id, symbol, style)
 
-    except Exception:
-        tb = traceback.format_exc()
-        print(f"ERROR _run_analysis | chat_id={chat_id} symbol={symbol}\n{tb}")
+    except Exception as exc:
+        print(f"ERROR _run_analysis | symbol={symbol} | type={type(exc).__name__}")
         raise
 
 
@@ -1419,9 +1422,8 @@ async def _scanner_loop() -> None:
                     pair, captured_at, limit=100,
                     send_telegram=False, output_dir=scan_dir,
                 )
-            except Exception:
-                err = traceback.format_exc().strip().splitlines()[-1]
-                _scan_log(f"  ОШИБКА {pair}: {err}")
+            except Exception as exc:
+                _scan_log(f"  ОШИБКА {pair}: {type(exc).__name__}")
                 continue
 
             if result is None:
@@ -1447,7 +1449,10 @@ async def _scanner_loop() -> None:
                         if png_path.exists():
                             await send_photo_to(chat_id, str(png_path))
                     except Exception as _send_err:
-                        _scan_log(f"  [{pair}] ошибка отправки {chat_id}: {_send_err}")
+                        _scan_log(
+                            f"  [{pair}] ошибка отправки recipient: "
+                            f"{type(_send_err).__name__}"
+                        )
                     await asyncio.sleep(0.3)
                 _scan_log(
                     f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам | "
@@ -1461,7 +1466,9 @@ async def _scanner_loop() -> None:
                         source="scanner",
                     )
                 except Exception as _e:
-                    _scan_log(f"  [signal_log] ошибка записи: {_e}")
+                    _scan_log(
+                        f"  [signal_log] ошибка записи: {type(_e).__name__}"
+                    )
                 # Auto-execute on operator demo account is an explicit legacy opt-in.
                 # AUTO_TRADE alone is not enough to import or call the money path.
                 if _auto_execute_opt_in():
@@ -1527,7 +1534,10 @@ async def _scanner_loop() -> None:
                         try:
                             await _send(chat_id, fade_msg)
                         except Exception as _e:
-                            _scan_log(f"  [{pair}] FADE ошибка отправки {chat_id}: {_e}")
+                            _scan_log(
+                                f"  [{pair}] FADE ошибка отправки recipient: "
+                                f"{type(_e).__name__}"
+                            )
                         await asyncio.sleep(0.2)
                     last_fade_sent[pair] = hour_bucket
                     _scan_log(f"  {pair} — BB FADE {_dir} → отправлено {len(active)} клиентам")
@@ -1584,8 +1594,11 @@ async def _scanner_loop() -> None:
         next_run = _next_quarter(now)
         await asyncio.sleep(max(1.0, (next_run - now).total_seconds()))
 
-      except Exception:
-        _scan_log(f"  [scanner_loop] необработанная ошибка:\n{traceback.format_exc().strip()}")
+      except Exception as exc:
+        _scan_log(
+            "  [scanner_loop] необработанная ошибка: "
+            f"{type(exc).__name__}"
+        )
         await asyncio.sleep(60)  # pause before next cycle on unexpected crash
 
 
@@ -1604,9 +1617,27 @@ async def _label_outcomes_loop() -> None:
 
 
 async def main() -> None:
+    health_root = _strategy_lab_private_root()
+    health_started_at = time.time()
+    last_poll_success_at = 0.0
+    consecutive_poll_failures = 0
     if not BOT_TOKEN:
+        publish_health(
+            health_root,
+            state="failed",
+            started_at=health_started_at,
+            updated_at=time.time(),
+            failure_type="configuration_missing",
+        )
         print("ERROR: TELEGRAM_BOT_TOKEN not set in .env")
         return
+
+    publish_health(
+        health_root,
+        state="starting",
+        started_at=health_started_at,
+        updated_at=time.time(),
+    )
 
     TEMP_DIR.mkdir(exist_ok=True)
     USERS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -1634,18 +1665,52 @@ async def main() -> None:
                     timeout=30,
                     allowed_updates=["message", "callback_query"],
                 )
+                last_poll_success_at = time.time()
+                consecutive_poll_failures = 0
+                publish_health(
+                    health_root,
+                    state="ready",
+                    started_at=health_started_at,
+                    updated_at=last_poll_success_at,
+                    last_success_at=last_poll_success_at,
+                )
                 for update in result.get("result", []):
                     offset = update["update_id"] + 1
                     await handle_update(update)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                print(f"Poll error:\n{traceback.format_exc()}")
+            except Exception as exc:
+                consecutive_poll_failures += 1
+                publish_health(
+                    health_root,
+                    state="degraded",
+                    started_at=health_started_at,
+                    updated_at=time.time(),
+                    last_success_at=last_poll_success_at,
+                    consecutive_failures=consecutive_poll_failures,
+                    failure_type=type(exc).__name__,
+                )
+                winerror = getattr(exc, "winerror", None)
+                if winerror is None:
+                    cause = getattr(exc, "__cause__", None)
+                    winerror = getattr(cause, "winerror", None)
+                suffix = f" winerror={int(winerror)}" if winerror is not None else ""
+                print(f"Poll error: {type(exc).__name__}{suffix}")
                 await asyncio.sleep(3)
     finally:
-        global _SESSION
-        if _SESSION and not _SESSION.closed:
-            await _SESSION.close()
+        try:
+            publish_health(
+                health_root,
+                state="stopped",
+                started_at=health_started_at,
+                updated_at=time.time(),
+                last_success_at=last_poll_success_at,
+                consecutive_failures=consecutive_poll_failures,
+            )
+        finally:
+            global _SESSION
+            if _SESSION and not _SESSION.closed:
+                await _SESSION.close()
 
 
 def _setup_rotating_log() -> None:

@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-09
-- Verified against: `c3441eb6faddb0f66aded77b4f8008f571afcc34`
+- Verified: 2026-08-10
+- Verified against: `b7543248e8f3f51fce9d039a8b87058953f63373`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -65,6 +65,11 @@ dependency, not by a route to live trading.
   snapshot, missing cutover, stale fence, stage failure, or preview mismatch fails
   closed. Public code provides shadow-parity,
   activation, status, and non-destructive pre-runtime rollback primitives.
+- Current-generation preview, training, lineage, outcome retest and Telegram
+  delivery now form the product boundary before historical analyst, role and
+  setup-memory maintenance. Only a completed generation-bound delivery publishes
+  farm product progress; the heavier maintenance remains fenced and fail-closed
+  after delivery instead of starving startup readiness.
 - Scanner passes and completed farm cycles publish atomic, secret-free product
   checkpoints. The RCC supervises them on an independent lane: ordinary PIDs
   and heartbeats cannot establish T+0 or refresh a product SLO. Honest zero
@@ -85,6 +90,10 @@ dependency, not by a route to live trading.
   exception type, BAT wrappers preserve the real exit code, and the startup
   adapter rejects a dead or PID-reused process generation instead of waiting
   through the full cold-start budget.
+- RCC readiness now requires an identity-matched, fresh successful Telegram
+  `getUpdates` poll. A live bot PID without a working poll remains
+  `provider_waiting` during the bounded startup budget and fails closed at the
+  deadline; a stale poll after T+0 is a hard failure.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies

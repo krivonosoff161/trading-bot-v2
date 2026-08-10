@@ -1,14 +1,14 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.09"
+version: "2026.08.10"
 status: current
-verified_date: "2026-08-09"
+verified_date: "2026-08-10"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: c3441eb6faddb0f66aded77b4f8008f571afcc34
+  trading-bot-v2: b7543248e8f3f51fce9d039a8b87058953f63373
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -228,10 +228,12 @@ modules:
       - src/research_lab/rcc_startup_evidence.py
       - src/research_lab/windows_listener_probe.py
       - src/research_lab/product_progress.py
+      - src/research_lab/telegram_bot_health.py
       - tests/test_research_control_center.py
       - tests/test_rcc_preheartbeat_startup.py
       - tests/test_windows_listener_probe.py
       - tests/test_product_progress.py
+      - tests/test_telegram_bot_health.py
     missing_evidence: a green 48-hour canary proving the shared RCC/external post-T+0 classifier, product-stage SLO, bounded validation transitions and generation freshness on the private runtime
     next_gate: separate owner-authorized operational launch with process, database, and product-progress lanes all green
     authority: separately_owner_gated
