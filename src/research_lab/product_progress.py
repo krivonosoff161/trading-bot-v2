@@ -402,7 +402,11 @@ class ProductProgressMonitor:
         harness.  The accepted startup report therefore carries the immutable
         launch-time boundary into the steady-state monitor.  Replacing that
         boundary with the later T+0 observation can make the very checkpoint
-        that established readiness look pre-run and must fail closed.
+        that established readiness look pre-run and must fail closed.  A newer
+        generation may legitimately enter the already bounded post-T+0
+        ``transitioning`` state before this adapter starts; monotonic component
+        sequences and the shared steady-state policy distinguish that race from
+        a regression or unbounded loss of readiness.
         """
 
         observed_at = float(t0_observed_at)
@@ -456,7 +460,8 @@ class ProductProgressMonitor:
                 raise ProductProgressTransitionError(
                     "product progress regressed during the T+0 transition"
                 )
-        if current.get("ready") is not True:
+        transition = assess_post_t0_product_progress(current)
+        if transition.hard_failure is not None:
             raise ProductProgressTransitionError(
                 "product progress changed before the T+0 transition completed"
             )
