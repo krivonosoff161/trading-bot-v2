@@ -445,6 +445,45 @@ def _run_main_paper_derived_chain(
     )
 
 
+def _require_current_paper_generation(
+    stage: str,
+    payload: dict,
+    *,
+    run_id: str,
+    nested: str | None = None,
+) -> None:
+    evidence = payload.get(nested) if nested else payload
+    evidence = evidence if isinstance(evidence, dict) else {}
+    if (
+        evidence.get("current_generation_compatible") is not True
+        or str(evidence.get("paper_generation_run_id") or "") != run_id
+    ):
+        raise RuntimeError(f"{stage} is not bound to current v2 generation")
+
+
+def _publish_farm_product_checkpoint(private_root: Path, out: dict) -> None:
+    """Publish only a completed, generation-bound product boundary."""
+
+    from src.research_lab.product_progress import farm_metrics, publish_checkpoint
+
+    completed_at = time.time()
+    metrics = farm_metrics(out)
+    publish_checkpoint(
+        private_root,
+        component="farm",
+        sequence=max(1, int(completed_at * 1_000_000)),
+        status=(
+            "waiting"
+            if metrics.get("paper_generation_waiting")
+            else "completed"
+            if not out.get("errors")
+            else "degraded"
+        ),
+        metrics=metrics,
+        completed_at=completed_at,
+    )
+
+
 def _run_v2_main_paper_derived_chain(
     args,
     private_root: Path,
@@ -521,20 +560,6 @@ def _run_v2_main_paper_derived_chain(
     )
     run_id = str(generation["run_id"])
 
-    def require_current_generation(
-        stage: str,
-        payload: dict,
-        *,
-        nested: str | None = None,
-    ) -> None:
-        evidence = payload.get(nested) if nested else payload
-        evidence = evidence if isinstance(evidence, dict) else {}
-        if (
-            evidence.get("current_generation_compatible") is not True
-            or str(evidence.get("paper_generation_run_id") or "") != run_id
-        ):
-            raise RuntimeError(f"{stage} is not bound to current v2 generation")
-
     evidence_database_path = runtime.database_path
     args.paper_generation_run_id = run_id
     out["paper_generation_v2"] = {
@@ -567,17 +592,6 @@ def _run_v2_main_paper_derived_chain(
     from src.research_lab.paper_signals.training_export import export_training_rows
     from src.research_lab.paper_lineage import build_paper_lineage
     from src.research_lab.outcome_retest_result import build_outcome_retest_results
-    from src.research_lab.system_analyst_cycle import run_system_analyst_cycle
-    from src.research_lab.role_environment_dispatch import (
-        dispatch_role_environments,
-        reconcile_role_work_results,
-    )
-    from src.research_lab.trading_policy_calibration import (
-        build_trading_policy_calibration,
-    )
-    from src.research_lab.paper_product_quality_report import (
-        build_paper_product_quality_report,
-    )
 
     out["paper_product_trade_ledger"] = {
         "skipped": "legacy_projection_not_authoritative_under_v2",
@@ -608,8 +622,10 @@ def _run_v2_main_paper_derived_chain(
         private_root,
         evidence_database_path=evidence_database_path,
     )
-    require_current_generation(
-        "paper training export", out["paper_signal_training_export"]
+    _require_current_paper_generation(
+        "paper training export",
+        out["paper_signal_training_export"],
+        run_id=run_id,
     )
     out["product_signal_training_export"] = {
         "skipped": "separate_legacy_product_event_source_not_paper_v2_authority",
@@ -621,22 +637,88 @@ def _run_v2_main_paper_derived_chain(
         private_root,
         evidence_database_path=evidence_database_path,
     )
-    require_current_generation("paper lineage", out["paper_lineage_index"])
+    _require_current_paper_generation(
+        "paper lineage", out["paper_lineage_index"], run_id=run_id
+    )
     out["outcome_retest_results"] = build_outcome_retest_results(
         private_root,
         evidence_database_path=evidence_database_path,
     )
-    require_current_generation(
+    _require_current_paper_generation(
         "outcome retest",
         out["outcome_retest_results"],
+        run_id=run_id,
         nested="training_evidence",
     )
+    runtime.raise_if_failed()
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "milestone": "delivery_inputs_ready",
+            "paper_generation_run_id": run_id,
+        },
+    )
+
+
+def _run_v2_post_delivery_maintenance_chain(
+    args,
+    private_root: Path,
+    *,
+    tasks: FarmTasksDB,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+    out: dict,
+) -> None:
+    """Run bounded analyst maintenance after generation-bound delivery."""
+
+    runtime = args.paper_generation_runtime
+    runtime.raise_if_failed()
+    run_id = str((out.get("paper_generation_v2") or {}).get("run_id") or "")
+    if not run_id:
+        raise RuntimeError("post-delivery maintenance requires a current v2 generation")
+    _require_current_paper_generation(
+        "paper Telegram delivery",
+        out.get("paper_telegram_delivery") or {},
+        run_id=run_id,
+    )
+    evidence_database_path = runtime.database_path
+
+    from src.research_lab.paper_product_quality_report import (
+        build_paper_product_quality_report,
+    )
+    from src.research_lab.role_environment_dispatch import (
+        dispatch_role_environments,
+        reconcile_role_work_results,
+    )
+    from src.research_lab.system_analyst_cycle import run_system_analyst_cycle
+    from src.research_lab.trading_policy_calibration import (
+        build_trading_policy_calibration,
+    )
+
     out["system_analyst_feedback"] = run_system_analyst_cycle(
         private_root,
         apply=apply,
         expected_generation_run_id=run_id,
     )
-    require_current_generation("system analyst", out["system_analyst_feedback"])
+    _require_current_paper_generation(
+        "system analyst", out["system_analyst_feedback"], run_id=run_id
+    )
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "milestone": "system_analyst_completed",
+            "paper_generation_run_id": run_id,
+        },
+    )
     out["role_environment_dispatch"] = dispatch_role_environments(
         private_root,
         tasks,
@@ -645,22 +727,39 @@ def _run_v2_main_paper_derived_chain(
         expected_generation_run_id=run_id,
         evidence_database_path=evidence_database_path,
     )
-    require_current_generation("role dispatch", out["role_environment_dispatch"])
+    _require_current_paper_generation(
+        "role dispatch", out["role_environment_dispatch"], run_id=run_id
+    )
     out["role_work_result_reconciliation"] = reconcile_role_work_results(
         private_root,
         tasks,
         apply=apply,
         expected_generation_run_id=run_id,
     )
-    require_current_generation(
-        "role result reconciliation", out["role_work_result_reconciliation"]
+    _require_current_paper_generation(
+        "role result reconciliation",
+        out["role_work_result_reconciliation"],
+        run_id=run_id,
+    )
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "milestone": "role_maintenance_completed",
+            "paper_generation_run_id": run_id,
+        },
     )
     out["trading_policy_calibration"] = build_trading_policy_calibration(
         private_root,
         evidence_database_path=evidence_database_path,
     )
-    require_current_generation(
-        "trading policy calibration", out["trading_policy_calibration"]
+    _require_current_paper_generation(
+        "trading policy calibration",
+        out["trading_policy_calibration"],
+        run_id=run_id,
     )
     out["setup_outcome_memory_refresh"] = _refresh_setup_outcome_memory(
         args,
@@ -670,16 +769,20 @@ def _run_v2_main_paper_derived_chain(
         cycle_started_at=cycle_started_at,
         evidence_database_path=evidence_database_path,
     )
-    require_current_generation(
-        "setup outcome memory", out["setup_outcome_memory_refresh"]
+    _require_current_paper_generation(
+        "setup outcome memory",
+        out["setup_outcome_memory_refresh"],
+        run_id=run_id,
     )
     runtime.raise_if_failed()
     out["paper_product_quality_report"] = build_paper_product_quality_report(
         private_root,
         evidence_database_path=evidence_database_path,
     )
-    require_current_generation(
-        "paper product quality", out["paper_product_quality_report"]
+    _require_current_paper_generation(
+        "paper product quality",
+        out["paper_product_quality_report"],
+        run_id=run_id,
     )
     _write_loop_status(
         private_root,
@@ -2501,6 +2604,36 @@ def _run_once(
                         out["paper_telegram_delivery"]["config_error"] = (
                             delivery_config["config_error"]
                         )
+                    if getattr(args, "paper_evidence_v2_required", False):
+                        run_id = str(
+                            (out.get("paper_generation_v2") or {}).get("run_id") or ""
+                        )
+                        _require_current_paper_generation(
+                            "paper Telegram delivery",
+                            out["paper_telegram_delivery"],
+                            run_id=run_id,
+                        )
+                        _write_loop_status(
+                            private_root,
+                            stage="paper_generation_v2",
+                            apply=apply,
+                            loop=loop,
+                            cycle_started_at=cycle_started_at,
+                            details={
+                                "milestone": "generation_delivery_completed",
+                                "paper_generation_run_id": run_id,
+                            },
+                        )
+                        _publish_farm_product_checkpoint(private_root, out)
+                        _run_v2_post_delivery_maintenance_chain(
+                            args,
+                            private_root,
+                            tasks=tasks,
+                            apply=apply,
+                            loop=loop,
+                            cycle_started_at=cycle_started_at,
+                            out=out,
+                        )
                 except Exception as exc:  # noqa: BLE001 - compatibility path is best effort
                     if getattr(args, "paper_evidence_v2_required", False):
                         raise
@@ -2660,24 +2793,7 @@ def _run_once(
         },
     )
     if apply:
-        from src.research_lab.product_progress import farm_metrics, publish_checkpoint
-
-        completed_at = time.time()
-        metrics = farm_metrics(out)
-        publish_checkpoint(
-            private_root,
-            component="farm",
-            sequence=max(1, int(completed_at * 1_000_000)),
-            status=(
-                "waiting"
-                if metrics.get("paper_generation_waiting")
-                else "completed"
-                if not out.get("errors")
-                else "degraded"
-            ),
-            metrics=metrics,
-            completed_at=completed_at,
-        )
+        _publish_farm_product_checkpoint(private_root, out)
     return out
 
 

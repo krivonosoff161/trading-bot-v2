@@ -16,6 +16,10 @@ from typing import Any, Callable
 from src.research_lab.farm_tasks_db import tasks_db_path
 from src.research_lab.paper_journal import read_paper_outcomes
 from src.research_lab.validation_handoff import validation_state
+from src.research_lab.validation_generation import (
+    CurrentGenerationSnapshot,
+    load_current_generation_snapshot,
+)
 
 HARD_FAILED = {
     "HARD_REJECT",
@@ -133,20 +137,16 @@ def _load_unique_candidates(
 def _request_contexts(
     private_root: Path,
     *,
+    generation: CurrentGenerationSnapshot | None = None,
     progress: LifecycleProgress | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    from src.research_lab.validation_generation import (
-        current_candidate_ids,
-        read_current_validation_artifact,
-    )
-
     by_candidate: dict[str, dict[str, Any]] = {}
     candidate_to_uc: dict[str, str] = {}
-    active_ids = current_candidate_ids(private_root)
-    if active_ids is not None:
+    if generation is not None:
+        active_ids = sorted(generation.payloads) if generation.usable else []
         total = len(active_ids)
         for index, cid in enumerate(active_ids, start=1):
-            data = read_current_validation_artifact(private_root, cid, "request") or {}
+            data = generation.payloads[cid]["request"][1]
             if progress is not None and (index == total or index % 100 == 0):
                 progress("validation_requests_loaded", index, total)
             if not data:
@@ -189,19 +189,15 @@ def _request_contexts(
 def _verdicts(
     private_root: Path,
     *,
+    generation: CurrentGenerationSnapshot | None = None,
     progress: LifecycleProgress | None = None,
 ) -> dict[str, str]:
-    from src.research_lab.validation_generation import (
-        current_candidate_ids,
-        read_current_validation_artifact,
-    )
-
     out: dict[str, str] = {}
-    active_ids = current_candidate_ids(private_root)
-    if active_ids is not None:
+    if generation is not None:
+        active_ids = sorted(generation.payloads) if generation.usable else []
         total = len(active_ids)
         for index, cid in enumerate(active_ids, start=1):
-            data = read_current_validation_artifact(private_root, cid, "verdict") or {}
+            data = generation.payloads[cid]["verdict"][1]
             if data:
                 out[cid] = str(data.get("hard_status") or "")
             if progress is not None and (index == total or index % 100 == 0):
@@ -224,17 +220,27 @@ def _verdicts(
 def _cards(
     private_root: Path,
     *,
+    generation: CurrentGenerationSnapshot | None = None,
     progress: LifecycleProgress | None = None,
 ) -> dict[str, dict[str, Any]]:
-    from src.research_lab.validation_generation import read_current_setup_card
-
     out: dict[str, dict[str, Any]] = {}
+    if generation is not None:
+        active_ids = sorted(generation.payloads) if generation.usable else []
+        total = len(active_ids)
+        for index, cid in enumerate(active_ids, start=1):
+            data = generation.payloads[cid]["setup_card"][1]
+            out[cid] = data
+            if progress is not None and (index == total or index % 100 == 0):
+                progress("setup_cards_loaded", index, total)
+        if progress is not None and not active_ids:
+            progress("setup_cards_loaded", 0, 0)
+        return out
     cards_dir = private_root / "setup_library" / "cards"
     if not cards_dir.exists():
         return out
     paths = list(cards_dir.glob("*.json"))
     for index, path in enumerate(paths, start=1):
-        data = read_current_setup_card(private_root, path) or {}
+        data = _read_json(path)
         cid = str(data.get("candidate_id") or "")
         if cid:
             out[cid] = data
@@ -323,10 +329,33 @@ def derive_setup_lifecycle(
     progress: LifecycleProgress | None = None,
 ) -> list[dict[str, Any]]:
     private_root = Path(private_root)
-    reqs, candidate_to_uc = _request_contexts(private_root, progress=progress)
+    generation = load_current_generation_snapshot(
+        private_root,
+        progress=(
+            None
+            if progress is None
+            else lambda stage, completed, total: progress(
+                f"validation_{stage}", completed, total
+            )
+        ),
+    )
+    current_generation = None if generation.status == "legacy_absent" else generation
+    reqs, candidate_to_uc = _request_contexts(
+        private_root,
+        generation=current_generation,
+        progress=progress,
+    )
     uc_to_validation = {uc: cid for cid, uc in candidate_to_uc.items()}
-    verdicts = _verdicts(private_root, progress=progress)
-    cards = _cards(private_root, progress=progress)
+    verdicts = _verdicts(
+        private_root,
+        generation=current_generation,
+        progress=progress,
+    )
+    cards = _cards(
+        private_root,
+        generation=current_generation,
+        progress=progress,
+    )
     paper = _paper_by_uc(private_root, candidate_to_uc, progress=progress)
     oi_micro = _oi_micro_families()
     rows: list[dict[str, Any]] = []

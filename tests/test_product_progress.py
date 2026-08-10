@@ -526,6 +526,10 @@ def test_farm_metrics_requires_complete_same_generation_chain() -> None:
                 "paper_generation_run_id": run,
                 "rendered": 1,
             },
+            "paper_telegram_delivery": {
+                "paper_generation_run_id": run,
+                "sent": 1,
+            },
             "paper_signal_training_export": {
                 "paper_generation_run_id": run,
                 "rows": 1,
@@ -542,6 +546,26 @@ def test_farm_metrics_requires_complete_same_generation_chain() -> None:
     assert metrics["producer_active_executable_signals"] == 4
     assert metrics["producer_validation_bound_members"] == 1
     assert metrics["producer_research_only_excluded"] == 3
+
+
+def test_farm_metrics_rejects_delivery_from_another_generation() -> None:
+    run = "run-current"
+    metrics = farm_metrics(
+        {
+            "paper_generation_v2": {"run_id": run},
+            "main_paper_bridge": {"paper_generation_run_id": run},
+            "main_paper_runtime_queue": {"paper_generation_run_id": run},
+            "main_paper_runtime_observation": {"paper_generation_run_id": run},
+            "paper_telegram_preview": {"paper_generation_run_id": run},
+            "paper_telegram_delivery": {"paper_generation_run_id": "run-stale"},
+            "paper_signal_training_export": {"paper_generation_run_id": run},
+            "outcome_retest_results": {
+                "training_evidence": {"paper_generation_run_id": run}
+            },
+        }
+    )
+
+    assert metrics["generation_consistent"] is False
 
 
 def test_farm_metrics_exposes_paper_pipeline_cycle_failure_without_payload() -> None:

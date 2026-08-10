@@ -1382,17 +1382,34 @@ def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
             resources=("canonical_farm", "strategy_lab_worker"),
         )
     )
-    center._read_cached_json = lambda _path: {
-        "schema": "ProcessLeaseSupervisorStatus.v1",
-        "state": "running",
-        "updated_at": MODULE.time.time(),
-        "owner_pid": owner_pid,
-        "owner_started_at": owner_started_at,
-        "fencing_token": owner_fence,
-        "lease_expires_at": MODULE.time.time() + 90.0,
-        "paper_only": True,
-        "execution_allowed": False,
-    }
+    def read_status(path):
+        if Path(path).name == "telegram_bot_health.json":
+            now = MODULE.time.time()
+            return {
+                "schema": "TelegramBotHealth.v1",
+                "pid": center.contours["telegram_bot"].process.pid,
+                "state": "ready",
+                "started_at": now - 1.0,
+                "updated_at": now,
+                "last_success_at": now,
+                "consecutive_failures": 0,
+                "failure_type": "",
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        return {
+            "schema": "ProcessLeaseSupervisorStatus.v1",
+            "state": "running",
+            "updated_at": MODULE.time.time(),
+            "owner_pid": owner_pid,
+            "owner_started_at": owner_started_at,
+            "fencing_token": owner_fence,
+            "lease_expires_at": MODULE.time.time() + 90.0,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    center._read_cached_json = read_status
     return center, events
 
 
@@ -1486,6 +1503,110 @@ def test_runtime_probe_sets_t0_only_after_listener_and_owner_are_ready(
     assert center._runtime_ready is True
     assert len(events) == 1
     assert "T+0 READY" in events[0][2]
+
+
+def test_runtime_probe_waits_for_real_telegram_poll_before_t0(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, events = _runtime_probe_center()
+    original_read = center._read_cached_json
+    center._read_cached_json = lambda path: (
+        {} if Path(path).name == "telegram_bot_health.json" else original_read(path)
+    )
+    ollama_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    sample = center._fast_runtime_safety_probe()
+
+    assert sample["state"] == "provider_waiting"
+    assert sample["telegram_poll_state"] == "starting"
+    assert sample["ready"] is False
+    assert center._runtime_ready is False
+    assert events == []
+
+
+def test_runtime_probe_fails_closed_when_telegram_never_polls(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    original_read = center._read_cached_json
+    center._read_cached_json = lambda path: (
+        {} if Path(path).name == "telegram_bot_health.json" else original_read(path)
+    )
+    ollama_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(
+        MODULE.time,
+        "monotonic",
+        lambda: 100.0 + MODULE.RUNTIME_STARTUP_BUDGET_SECONDS + 1.0,
+    )
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    with pytest.raises(
+        MODULE.CanaryMonitorHardFailure,
+        match="telegram_bot_poll_unready",
+    ):
+        center._fast_runtime_safety_probe()
+
+
+def test_runtime_probe_fails_closed_on_stale_telegram_poll_after_t0(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    center._runtime_ready = True
+    original_read = center._read_cached_json
+
+    def stale_health(path):
+        if Path(path).name != "telegram_bot_health.json":
+            return original_read(path)
+        now = MODULE.time.time()
+        return {
+            "schema": "TelegramBotHealth.v1",
+            "pid": center.contours["telegram_bot"].process.pid,
+            "state": "degraded",
+            "started_at": now - 300.0,
+            "updated_at": now,
+            "last_success_at": now - MODULE.TELEGRAM_BOT_POLL_STALE_SECONDS - 1.0,
+            "consecutive_failures": 3,
+            "failure_type": "ClientConnectorError",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    center._read_cached_json = stale_health
+    ollama_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 500.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    with pytest.raises(
+        MODULE.CanaryMonitorHardFailure,
+        match="telegram_bot_poll_stale",
+    ):
+        center._fast_runtime_safety_probe()
 
 
 def test_runtime_probe_does_not_set_t0_before_real_product_progress(

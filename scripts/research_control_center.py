@@ -43,6 +43,7 @@ from src.research_lab.product_progress import (
 )
 from src.research_lab.rcc_startup_evidence import RccStartupEvidenceWriter
 from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
+from src.research_lab.telegram_bot_health import assess_health, status_path
 from src.research_lab.windows_listener_probe import (
     ListenerProbeStageEvent,
     WindowsListenerProbeError,
@@ -96,6 +97,7 @@ STATUS_CACHE_SECONDS = 1.0
 HEARTBEAT_INTERVAL_SECONDS = 5.0
 RUNTIME_STARTUP_BUDGET_SECONDS = 600.0
 PROCESS_LEASE_SUPERVISOR_MAX_AGE_SECONDS = 50.0
+TELEGRAM_BOT_POLL_STALE_SECONDS = 120.0
 
 
 def _python(*args: str) -> tuple[str, ...]:
@@ -1505,6 +1507,20 @@ class ControlCenter(tk.Tk):
         if stop_intent_fresh and not self._closing:
             raise CanaryMonitorHardFailure("canonical_stop_intent_during_runtime")
 
+        telegram = self.contours["telegram_bot"]
+        telegram_assessment = assess_health(
+            self._read_cached_json(status_path(PRIVATE_ROOT)),
+            expected_pid=telegram.process.pid if telegram.process is not None else 0,
+            run_started_at=wall_started_at,
+            now=time.time(),
+            startup_budget_seconds=RUNTIME_STARTUP_BUDGET_SECONDS,
+            stale_seconds=TELEGRAM_BOT_POLL_STALE_SECONDS,
+            require_ready=self._runtime_ready,
+        )
+        if telegram_assessment.hard_failure:
+            raise CanaryMonitorHardFailure(telegram_assessment.hard_failure)
+        telegram_poll_ready = telegram_assessment.ready
+
         product_ready = bool(self._product_progress_ready)
         product_post_t0_failure = self._product_progress_post_t0_failure
         product_transitioning = bool(
@@ -1529,6 +1545,7 @@ class ControlCenter(tk.Tk):
             and owner.ready
             and listener_ready
             and supervisor_ready
+            and telegram_poll_ready
             and (product_ready or self._runtime_ready)
         )
         if ready and not self._runtime_ready:
@@ -1537,8 +1554,8 @@ class ControlCenter(tk.Tk):
                 (
                     self.selected_key,
                     "log",
-                    "T+0 READY: canonical profile, product progress, Ollama "
-                    "listener, and identity-matched fenced farm owner are green",
+                    "T+0 READY: canonical profile, Telegram poll, product progress, "
+                    "Ollama listener, and identity-matched fenced farm owner are green",
                 )
             )
         state = (
@@ -1552,6 +1569,8 @@ class ControlCenter(tk.Tk):
             if not listener_ready
             else "process_starting"
             if not supervisor_ready
+            else "provider_waiting"
+            if not telegram_poll_ready
             else "product_starting"
             if not product_ready
             else owner.state
@@ -1564,6 +1583,10 @@ class ControlCenter(tk.Tk):
             "lease_supervisor_state": supervisor_state or "pending",
             "lease_supervisor_age_seconds": supervisor_age,
             "ollama_listener_ready": listener_ready,
+            "telegram_poll_state": telegram_assessment.state,
+            "telegram_poll_success_age_seconds": (
+                telegram_assessment.success_age_seconds
+            ),
             "product_progress_ready": product_ready,
             "product_progress_transitioning": product_transitioning,
             "paper_only": True,

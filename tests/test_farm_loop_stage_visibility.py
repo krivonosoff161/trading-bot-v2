@@ -903,6 +903,43 @@ class TestPrintWarning:
 
 
 class TestCycleLogStages:
+    def test_product_checkpoint_is_generation_bound_before_historical_maintenance(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(farm_loop.time, "time", lambda: 123.0)
+        bound = {
+            "paper_generation_run_id": "run-current",
+            "current_generation_compatible": True,
+        }
+        out = {
+            "counters": {},
+            "paper_generation_v2": {
+                "state": "ready",
+                "run_id": "run-current",
+                "producer_membership": {},
+            },
+            "main_paper_bridge": bound,
+            "main_paper_runtime_queue": bound,
+            "main_paper_runtime_observation": bound,
+            "paper_telegram_preview": bound,
+            "paper_signal_training_export": bound,
+            "outcome_retest_results": {"training_evidence": bound},
+            "paper_telegram_delivery": bound,
+        }
+
+        farm_loop._publish_farm_product_checkpoint(tmp_path, out)
+
+        checkpoint = json.loads(
+            (tmp_path / "state" / "product_progress" / "farm.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert checkpoint["status"] == "completed"
+        assert checkpoint["metrics"]["generation_consistent"] is True
+        assert checkpoint["metrics"]["paper_generation_run_id"] == "run-current"
+        assert "setup_outcome_memory_refresh" not in out
+        assert "system_analyst_feedback" not in out
+
     def test_live_universe_refresh_skips_fresh_snapshot(self, tmp_path, monkeypatch) -> None:
         from src.research_lab import live_universe_selector
 

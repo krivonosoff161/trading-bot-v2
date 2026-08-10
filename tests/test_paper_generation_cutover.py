@@ -589,17 +589,19 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
         ),
     )
     monkeypatch.setattr(
-        system_analyst_cycle, "run_system_analyst_cycle", lambda *_a, **_k: bound()
+        system_analyst_cycle,
+        "run_system_analyst_cycle",
+        lambda *_a, **_k: calls.append(("analyst", None)) or bound(),
     )
     monkeypatch.setattr(
         role_environment_dispatch,
         "dispatch_role_environments",
-        lambda *_a, **_k: bound(),
+        lambda *_a, **_k: calls.append(("role_dispatch", None)) or bound(),
     )
     monkeypatch.setattr(
         role_environment_dispatch,
         "reconcile_role_work_results",
-        lambda *_a, **_k: bound(),
+        lambda *_a, **_k: calls.append(("role_reconcile", None)) or bound(),
     )
     monkeypatch.setattr(
         trading_policy_calibration,
@@ -627,23 +629,54 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
         out=out,
         provider="bounded-provider",
     )
+    assert [name for name, _path in calls] == [
+        "preview",
+        "training",
+        "lineage",
+        "outcome_retest",
+    ]
+    out["paper_telegram_delivery"] = bound()
+    calls.append(("delivery", None))
+    farm_loop._run_v2_post_delivery_maintenance_chain(
+        args,
+        tmp_path,
+        tasks=object(),
+        apply=True,
+        loop=True,
+        cycle_started_at=1.0,
+        out=out,
+    )
     expected = _FakeRuntime.database_path
     assert {name for name, _path in calls} == {
         "preview",
         "training",
         "lineage",
         "outcome_retest",
+        "delivery",
+        "analyst",
+        "role_dispatch",
+        "role_reconcile",
         "calibration",
         "memory",
         "quality",
     }
-    assert all(path == expected for _name, path in calls)
+    assert all(
+        path == expected
+        for name, path in calls
+        if name in {"preview", "training", "lineage", "outcome_retest", "calibration", "memory", "quality"}
+    )
+    assert [name for name, _path in calls].index("delivery") < [
+        name for name, _path in calls
+    ].index("analyst")
+    assert [name for name, _path in calls].index("delivery") < [
+        name for name, _path in calls
+    ].index("memory")
     assert out["paper_generation_v2"]["run_id"] == "run-current"
     assert out["paper_generation_v2"]["producer_membership"][
         "validation_bound_members"
     ] == 1
     assert args.paper_generation_run_id == "run-current"
-    assert runtime.failures_checked == 2
+    assert runtime.failures_checked == 4
 
 
 def test_farm_v2_preview_mismatch_fails_closed_before_training(tmp_path, monkeypatch):
@@ -681,6 +714,25 @@ def test_farm_v2_preview_mismatch_fails_closed_before_training(tmp_path, monkeyp
             provider="bounded-provider",
         )
     assert training_called == []
+
+
+def test_farm_v2_maintenance_cannot_start_before_generation_bound_delivery(
+    tmp_path,
+):
+    runtime = _FakeRuntime()
+    args = type("Args", (), {"paper_generation_runtime": runtime})()
+    out = {"paper_generation_v2": {"run_id": "run-current"}}
+
+    with pytest.raises(RuntimeError, match="paper Telegram delivery is not bound"):
+        farm_loop._run_v2_post_delivery_maintenance_chain(
+            args,
+            tmp_path,
+            tasks=object(),
+            apply=True,
+            loop=True,
+            cycle_started_at=1.0,
+            out=out,
+        )
 
 
 def test_farm_v2_waits_for_code_current_validation_without_side_effects(

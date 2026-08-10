@@ -64,6 +64,97 @@ def test_telegram_analysis_button_routes_to_main_menu_without_network(monkeypatc
     assert routed == ["123"]
 
 
+def test_telegram_main_publishes_real_poll_liveness_without_network(
+    tmp_path, monkeypatch
+):
+    telegram_bot = _telegram_bot_module()
+    health = []
+    polls = 0
+
+    async def no_reminders():
+        return None
+
+    async def fake_tg(*_args, **_kwargs):
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            return {"result": []}
+        raise asyncio.CancelledError
+
+    def close_background(coro, *, name):
+        assert name == "bot.subscription_reminder"
+        coro.close()
+        return object()
+
+    monkeypatch.setattr(telegram_bot, "BOT_TOKEN", "synthetic-token")
+    monkeypatch.setattr(telegram_bot, "_strategy_lab_private_root", lambda: tmp_path)
+    monkeypatch.setattr(telegram_bot, "_check_and_send_reminders", no_reminders)
+    monkeypatch.setattr(telegram_bot, "list_users", lambda: [])
+    monkeypatch.setattr(telegram_bot, "_tg", fake_tg)
+    monkeypatch.setattr(telegram_bot.asyncio, "create_task", close_background)
+    monkeypatch.setattr(
+        telegram_bot,
+        "publish_health",
+        lambda _root, **payload: health.append(payload) or payload,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(telegram_bot.main())
+
+    assert polls == 2
+    assert [row["state"] for row in health] == ["starting", "ready", "stopped"]
+    assert health[1]["last_success_at"] > 0
+    assert "synthetic-token" not in json.dumps(health)
+
+
+def test_telegram_main_closes_session_when_stopped_health_write_fails(
+    tmp_path, monkeypatch
+):
+    telegram_bot = _telegram_bot_module()
+
+    class FakeSession:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    session = FakeSession()
+    polls = 0
+
+    async def no_reminders():
+        return None
+
+    async def fake_tg(*_args, **_kwargs):
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            return {"result": []}
+        raise asyncio.CancelledError
+
+    def close_background(coro, *, name):
+        assert name == "bot.subscription_reminder"
+        coro.close()
+
+    def publish(_root, **payload):
+        if payload["state"] == "stopped":
+            raise OSError("synthetic health write failure")
+        return payload
+
+    monkeypatch.setattr(telegram_bot, "BOT_TOKEN", "synthetic-token")
+    monkeypatch.setattr(telegram_bot, "_SESSION", session)
+    monkeypatch.setattr(telegram_bot, "_strategy_lab_private_root", lambda: tmp_path)
+    monkeypatch.setattr(telegram_bot, "_check_and_send_reminders", no_reminders)
+    monkeypatch.setattr(telegram_bot, "list_users", lambda: [])
+    monkeypatch.setattr(telegram_bot, "_tg", fake_tg)
+    monkeypatch.setattr(telegram_bot.asyncio, "create_task", close_background)
+    monkeypatch.setattr(telegram_bot, "publish_health", publish)
+
+    with pytest.raises(OSError, match="synthetic health write failure"):
+        asyncio.run(telegram_bot.main())
+
+    assert session.closed is True
+
+
 def test_telegram_manual_symbol_normalizer_accepts_only_symbols():
     telegram_bot = _telegram_bot_module()
 
