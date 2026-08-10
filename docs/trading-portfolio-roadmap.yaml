@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: f2d7ebf6392c6ccd694c847f0fdd15dc340e2c69
+  trading-bot-v2: 538f5f4aa0283c96a513e1650c94c62df22878c7
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -132,6 +132,7 @@ modules:
       - scripts/strategy_lab/farm_loop.py
       - src/research_lab/farm_coordinator.py
       - tests/test_farm_loop_integration.py
+      - tests/test_farm_loop_stage_visibility.py
     missing_evidence: a completed long-duration operational reliability window
     next_gate: complete the separately authorized paper-only canary without a hard fail
     authority: paper_only

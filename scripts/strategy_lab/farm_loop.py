@@ -1600,12 +1600,25 @@ def _parse_csv(value: str, *, default: tuple[str, ...]) -> tuple[str, ...]:
     return items or default
 
 
-def _sleep_until_next_cycle(seconds: int, stop_file: str = "") -> bool:
-    deadline = time.time() + max(1, seconds)
-    while time.time() < deadline:
+def _sleep_until_next_cycle(
+    seconds: int,
+    stop_file: str = "",
+    *,
+    wake_event: threading.Event | None = None,
+) -> bool:
+    deadline = time.monotonic() + max(1, seconds)
+    while time.monotonic() < deadline:
         if stop_file and Path(stop_file).exists():
             return False
-        time.sleep(min(5.0, max(0.0, deadline - time.time())))
+        wait_seconds = min(5.0, max(0.0, deadline - time.monotonic()))
+        if wake_event is None:
+            time.sleep(wait_seconds)
+            continue
+        if wake_event.wait(wait_seconds):
+            wake_event.clear()
+            if stop_file and Path(stop_file).exists():
+                return False
+            return True
     return True
 
 
@@ -3100,6 +3113,24 @@ def _priority_worker_loop(
                         cycle_started_at=slot_started,
                         status_target="priority_worker",
                     )
+                    generation_published = bool(
+                        int(validation_maintenance.get("exported") or 0) > 0
+                        or int(
+                            validation_maintenance.get(
+                                "generation_empty_published"
+                            )
+                            or 0
+                        )
+                        > 0
+                    )
+                    wake_event = getattr(
+                        args, "product_cycle_wakeup_event", None
+                    )
+                    if generation_published and wake_event is not None:
+                        wake_event.set()
+                        validation_maintenance[
+                            "product_cycle_wakeup_requested"
+                        ] = True
                 slot = _run_priority_slot(
                     args, worker_tasks, profiles, policy, private_root
                 )
@@ -3602,6 +3633,7 @@ def main() -> None:
     lease_heartbeat = None
     paper_generation_runtime = None
     priority_stop = threading.Event()
+    product_cycle_wakeup = threading.Event()
     priority_thread = None
     claim_failure_signal = None
     if apply:
@@ -3703,6 +3735,7 @@ def main() -> None:
         assert claim_failure_signal is not None
         args.canonical_owner_id = process_lease.owner_id
         args.task_claim_failure_signal = claim_failure_signal
+        args.product_cycle_wakeup_event = product_cycle_wakeup
         args.task_claim_guard_factory = _task_claim_guard_factory(
             ownership_path,
             process_lease,
@@ -3795,7 +3828,11 @@ def main() -> None:
                         "idle_poll_seconds": args.idle_poll_seconds,
                     },
                 )
-            if not _sleep_until_next_cycle(args.sleep_seconds, args.stop_file):
+            if not _sleep_until_next_cycle(
+                args.sleep_seconds,
+                args.stop_file,
+                wake_event=product_cycle_wakeup,
+            ):
                 if (
                     args.stop_file
                     and ownership_store is not None
