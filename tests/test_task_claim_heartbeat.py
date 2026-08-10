@@ -371,13 +371,20 @@ def test_transient_sqlite_writer_contention_retries_then_renews(tmp_path) -> Non
             lambda: heartbeat.snapshot()["renewal_connection_ready"]
         )
         blocker.execute("BEGIN IMMEDIATE")
+        # The implicit claim-acquired milestone may already have renewed before
+        # this writer lock was acquired.  Use a post-lock baseline so the test
+        # waits for the renewal caused by the explicit progress below.
+        before = heartbeat.snapshot()
         heartbeat.progress("canonical_candles_loaded")
         assert _wait_until(
-            lambda: heartbeat.snapshot()["renewal_contention_events"] > 0
+            lambda: heartbeat.snapshot()["renewal_contention_events"]
+            > before["renewal_contention_events"]
         )
         assert heartbeat.failure is None
         blocker.rollback()
-        assert _wait_until(lambda: heartbeat.snapshot()["renewals"] == 1)
+        assert _wait_until(
+            lambda: heartbeat.snapshot()["renewals"] > before["renewals"]
+        )
         snapshot = heartbeat.snapshot()
         assert snapshot["renewal_contention_active"] is False
         assert snapshot["last_renewal_contention"].startswith("SQLITE_")
