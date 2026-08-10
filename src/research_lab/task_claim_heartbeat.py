@@ -441,4 +441,8 @@ class TaskClaimHeartbeat:
             self._renewed_progress_sequence = progress_sequence
             self._renewals += 1
             self._claim_expires_at = float(claim_expires_at)
+            # Publish a successful renewal and the end of its contention episode
+            # as one observable state transition.  Otherwise a snapshot can see
+            # renewals incremented while contention still appears active.
+            self._renewal_contention_started_mono = None
         return True
