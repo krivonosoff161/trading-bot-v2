@@ -146,6 +146,22 @@ whole-card send. Later runs fail closed on ambiguous or crash-left `pending` rec
 This is not an exactly-once Telegram guarantee; it is a recovery boundary that
 prevents automatic duplicate sends after ambiguous external acknowledgements.
 
+A successful Telegram `ok=true` response remains authoritative even when the
+runtime stdout/audit sink fails immediately afterward. Transport helpers return the
+message id to the sender before best-effort ACK logging can affect control flow, so
+the delivery outbox can persist the external acknowledgement. Product progress
+publishes separate `current_attempts` and `carried` ambiguity counts: a new ambiguity
+fails closed, while historical operator-recovery debt remains visible and blocked
+from automatic replay.
+
+Each preview also carries explicit analysis provenance. A validation-bound card may
+reference only a separately persisted, schema-valid, accepted calculator advisory.
+If that evidence is unavailable, the card says it uses a deterministic fallback.
+Authority-none `farm_calculated` research cards use a deterministic research
+template and do not trigger an LLM call merely to decorate the notification. Raw
+advisory prose never changes subscriber-facing entry, stop, target, verdict, or
+lifecycle fields.
+
 Default mode is dry-run:
 
 ```bash

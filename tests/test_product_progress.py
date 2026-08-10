@@ -583,6 +583,130 @@ def test_farm_metrics_exposes_paper_pipeline_cycle_failure_without_payload() -> 
     assert "synthetic" not in json.dumps(metrics)
 
 
+def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
+    metrics = farm_metrics(
+        {
+            "paper_telegram_delivery": {
+                "external_ack_ambiguous_messages": 3,
+                "external_ack_ambiguous_current_attempts": 1,
+                "external_ack_ambiguous_carried": 2,
+            },
+            "paper_telegram_preview": {
+                "analysis_llm_linked": 4,
+                "analysis_template": 5,
+                "analysis_fallback": 6,
+            },
+            "calculator_advisor": {"processed": 7, "accepted": 4, "blocked": 3},
+            "agent_role_reviews": {"reviews": 8, "accepted": 7, "rejected": 1},
+            "system_analyst_feedback": {"feedback_candidates": 9, "routed": 8},
+            "setup_outcome_memory_refresh": {
+                "product_rows": 10,
+                "product_terminal_rows": 2,
+            },
+            "runtime_storage_maintenance": {"state": "ready"},
+            "product_cycle_complete": True,
+        }
+    )
+
+    assert metrics["delivery_ack_ambiguous"] == 3
+    assert metrics["delivery_ack_ambiguous_current"] == 1
+    assert metrics["delivery_ack_ambiguous_carried"] == 2
+    assert metrics["analysis_llm_linked"] == 4
+    assert metrics["analysis_template"] == 5
+    assert metrics["analysis_fallback"] == 6
+    assert metrics["calculator_processed"] == 7
+    assert metrics["calculator_accepted"] == 4
+    assert metrics["calculator_blocked"] == 3
+    assert metrics["role_reviews_requested"] == 8
+    assert metrics["role_reviews_accepted"] == 7
+    assert metrics["role_reviews_rejected"] == 1
+    assert metrics["analyst_feedback_candidates"] == 9
+    assert metrics["analyst_routed"] == 8
+    assert metrics["memory_rows"] == 10
+    assert metrics["memory_terminal_rows"] == 2
+    assert metrics["storage_maintenance_state"] == "ready"
+    assert metrics["product_cycle_complete"] is True
+
+
+def test_product_monitor_waits_for_final_product_cycle_checkpoint(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path)
+    farm_path = tmp_path / "state" / "product_progress" / "farm.json"
+    payload = json.loads(farm_path.read_text(encoding="utf-8"))
+    payload["metrics"]["product_cycle_complete"] = False
+    farm_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+
+    assert report["state"] == "starting"
+    assert report["ready"] is False
+    assert report["hard_fail_reasons"] == []
+
+
+def test_product_monitor_fails_on_current_delivery_ambiguity_not_carried_debt(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path)
+    farm_path = tmp_path / "state" / "product_progress" / "farm.json"
+    payload = json.loads(farm_path.read_text(encoding="utf-8"))
+    payload["metrics"].update(
+        {
+            "delivery_ack_ambiguous_current": 1,
+            "delivery_ack_ambiguous_carried": 2,
+        }
+    )
+    farm_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    failed = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+    assert failed["state"] == "failed"
+    assert failed["hard_fail_reasons"] == ["telegram_delivery_ack_ambiguous"]
+
+    payload["metrics"]["delivery_ack_ambiguous_current"] = 0
+    farm_path.write_text(json.dumps(payload), encoding="utf-8")
+    carried_only = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+    assert carried_only["state"] == "ready"
+    assert carried_only["hard_fail_reasons"] == []
+
+
+def test_product_monitor_reports_advisory_degradation_without_hard_fail(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path)
+    farm_path = tmp_path / "state" / "product_progress" / "farm.json"
+    payload = json.loads(farm_path.read_text(encoding="utf-8"))
+    payload["metrics"].update(
+        {"calculator_blocked": 1, "role_reviews_rejected": 2}
+    )
+    farm_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+
+    assert report["state"] == "degraded"
+    assert report["ready"] is True
+    assert report["hard_fail_reasons"] == []
+    assert report["degraded_reasons"] == [
+        "calculator_advisory_degraded",
+        "agent_role_review_degraded",
+    ]
+
+
 def test_product_monitor_hard_fails_completed_paper_pipeline_cycle_error(
     tmp_path: Path,
 ) -> None:

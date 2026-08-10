@@ -327,7 +327,11 @@ def test_preview_prefers_main_paper_trade_cards(tmp_path):
     item = data["items"][0]
     text = item["text"]
     assert item["validation_tier"] == "validated_pfr"
+    assert item["analysis_mode"] == "deterministic_fallback"
+    assert item["analysis_status"] == "llm_advisory_unavailable"
+    assert item["llm_interpretation_ref"] == ""
     assert summary["by_validation_tier"] == {"validated_pfr": 1}
+    assert summary["analysis_fallback"] == 1
     assert f"Бумажный сигнал: BTC-USDT-SWAP {DOT} 1h {DOT} LONG" in text
     assert VALIDATION in text
     assert VALIDATED_LABEL in text
@@ -382,7 +386,11 @@ def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):
     text = first["text"]
     assert first["source_signal_id"] == "opened_first"
     assert first["validation_tier"] == "farm_calculated"
+    assert first["analysis_mode"] == "deterministic_template"
+    assert first["analysis_status"] == "not_llm_eligible"
+    assert first["llm_interpretation_ref"] == ""
     assert summary["by_validation_tier"] == {"farm_calculated": 2}
+    assert summary["analysis_template"] == 2
     assert "Кандидат фермы: BTC-USDT-SWAP" in text
     assert VALIDATION in text
     assert FARM_CALCULATED_LABEL in text
@@ -392,6 +400,70 @@ def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):
     assert "Риск:" in text
     assert "research-only, not an order" not in text
     assert "execution_allowed=false" not in text
+
+
+def test_validated_preview_links_only_accepted_bounded_llm_advice(tmp_path):
+    _write_trade_snapshot(
+        tmp_path,
+        [_trade_record(feature_packet_id="feature_synthetic_1")],
+    )
+    advice_path = tmp_path / "state" / "llm_advice" / "calculator_advice.jsonl"
+    advice_path.parent.mkdir(parents=True, exist_ok=True)
+    advice_path.write_text(
+        json.dumps(
+            {
+                "schema": "CalculatorAdvice.v1",
+                "advisor_ref": "advice_synthetic_1",
+                "calculator_advice_id": "advice_synthetic_1",
+                "feature_packet_id": "feature_synthetic_1",
+                "accepted": True,
+                "paper_only": True,
+                "execution_allowed": False,
+                "advice": {
+                    "situation_class": "trend",
+                    "confidence": 0.7,
+                    "advisory_reason": "synthetic private prose must not render",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))[
+        "items"
+    ][0]
+    assert item["analysis_mode"] == "llm_advisory"
+    assert item["analysis_status"] == "accepted"
+    assert item["llm_interpretation_ref"] == "advice_synthetic_1"
+    assert item["feature_packet_id"] == "feature_synthetic_1"
+    assert summary["analysis_llm_linked"] == 1
+    assert "synthetic private prose" not in item["text"]
+    assert item["text"].count("100.5") >= 1
+
+
+def test_direct_llm_reference_without_accepted_advice_does_not_claim_link(tmp_path):
+    _write_trade_snapshot(
+        tmp_path,
+        [
+            _trade_record(
+                feature_packet_id="feature_without_advice",
+                llm_interpretation_ref="unverified_reference",
+            )
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))[
+        "items"
+    ][0]
+    assert item["analysis_mode"] == "deterministic_fallback"
+    assert item["analysis_status"] == "llm_advisory_unavailable"
+    assert item["llm_interpretation_ref"] == ""
+    assert summary["analysis_llm_linked"] == 0
 
 
 def test_preview_prefers_product_trade_ledger_before_raw_candidates(tmp_path):

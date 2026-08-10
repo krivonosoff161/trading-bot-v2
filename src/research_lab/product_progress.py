@@ -197,6 +197,11 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     delivery = _mapping(out.get("paper_telegram_delivery"))
     training = _mapping(out.get("paper_signal_training_export"))
     outcome = _mapping(out.get("outcome_retest_results"))
+    calculator = _mapping(out.get("calculator_advisor"))
+    role_reviews = _mapping(out.get("agent_role_reviews"))
+    analyst = _mapping(out.get("system_analyst_feedback"))
+    memory = _mapping(out.get("setup_outcome_memory_refresh"))
+    storage = _mapping(out.get("runtime_storage_maintenance"))
     outcome_generation = _mapping(outcome.get("training_evidence"))
     run_id = str(generation.get("run_id") or "")
     generation_state = str(generation.get("state") or "")
@@ -279,8 +284,39 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
         ),
         "delivery_pending": int(delivery.get("pending") or 0),
         "delivery_ack_ambiguous": int(
-            delivery.get("external_ack_ambiguous") or 0
+            delivery.get("external_ack_ambiguous_messages")
+            or delivery.get("external_ack_ambiguous")
+            or 0
         ),
+        "delivery_ack_ambiguous_current": int(
+            delivery.get(
+                "external_ack_ambiguous_current_attempts",
+                delivery.get("external_ack_ambiguous_messages")
+                or delivery.get("external_ack_ambiguous")
+                or 0,
+            )
+            or 0
+        ),
+        "delivery_ack_ambiguous_carried": int(
+            delivery.get("external_ack_ambiguous_carried") or 0
+        ),
+        "analysis_llm_linked": int(preview.get("analysis_llm_linked") or 0),
+        "analysis_template": int(preview.get("analysis_template") or 0),
+        "analysis_fallback": int(preview.get("analysis_fallback") or 0),
+        "calculator_processed": int(calculator.get("processed") or 0),
+        "calculator_accepted": int(calculator.get("accepted") or 0),
+        "calculator_blocked": int(calculator.get("blocked") or 0),
+        "role_reviews_requested": int(role_reviews.get("reviews") or 0),
+        "role_reviews_accepted": int(role_reviews.get("accepted") or 0),
+        "role_reviews_rejected": int(role_reviews.get("rejected") or 0),
+        "analyst_feedback_candidates": int(
+            analyst.get("feedback_candidates") or 0
+        ),
+        "analyst_routed": int(analyst.get("routed") or 0),
+        "memory_rows": int(memory.get("product_rows") or 0),
+        "memory_terminal_rows": int(memory.get("product_terminal_rows") or 0),
+        "storage_maintenance_state": str(storage.get("state") or "unknown"),
+        "product_cycle_complete": out.get("product_cycle_complete") is True,
         "outcome_rows": int(
             outcome.get("rows") or len(outcome.get("items") or ())
         ),
@@ -458,10 +494,20 @@ class ProductProgressMonitor:
                     ready = False
                 elif metrics.get("generation_consistent") is not True:
                     hard_fail.append("paper_generation_stage_mismatch")
+                if metrics.get("product_cycle_complete") is False:
+                    ready = False
                 if int(metrics.get("operational_rows_retained") or 0):
                     hard_fail.append("technical_outcome_entered_training")
                 if int(metrics.get("paper_pipeline_errors") or 0):
                     hard_fail.append("paper_pipeline_cycle_failed")
+                if int(metrics.get("delivery_ack_ambiguous_current") or 0):
+                    hard_fail.append("telegram_delivery_ack_ambiguous")
+                if str(metrics.get("storage_maintenance_state") or "") == "failed":
+                    hard_fail.append("runtime_storage_maintenance_failed")
+                if int(metrics.get("calculator_blocked") or 0):
+                    degraded.append("calculator_advisory_degraded")
+                if int(metrics.get("role_reviews_rejected") or 0):
+                    degraded.append("agent_role_review_degraded")
             components[component] = {
                 "current_run": current,
                 "sequence": int(row.get("sequence") or 0),

@@ -1501,7 +1501,11 @@ def test_partial_photo_ack_is_ambiguous_and_never_resends(tmp_path):
     )
 
     assert first["external_ack_ambiguous_messages"] == 1
+    assert first["external_ack_ambiguous_current_attempts"] == 1
+    assert first["external_ack_ambiguous_carried"] == 0
     assert second["external_ack_ambiguous_messages"] == 1
+    assert second["external_ack_ambiguous_current_attempts"] == 0
+    assert second["external_ack_ambiguous_carried"] == 1
     assert len(photo_calls) == 1
     assert len(text_calls) == 1
     outbox = json.loads(
@@ -1540,7 +1544,11 @@ def test_text_transport_exception_is_ambiguous_and_never_automatically_retried(t
     )
 
     assert first["external_ack_ambiguous_messages"] == 1
+    assert first["external_ack_ambiguous_current_attempts"] == 1
+    assert first["external_ack_ambiguous_carried"] == 0
     assert second["external_ack_ambiguous_messages"] == 1
+    assert second["external_ack_ambiguous_current_attempts"] == 0
+    assert second["external_ack_ambiguous_carried"] == 1
     assert len(text_calls) == 1
     outbox = json.loads(
         (tmp_path / "state" / "derived" / "paper_telegram_delivery_outbox.json").read_text(

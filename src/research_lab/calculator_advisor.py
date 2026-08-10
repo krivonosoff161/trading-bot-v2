@@ -20,6 +20,7 @@ from src.research_lab.llm_invocation_ledger import preflight_invocation, record_
 
 SCHEMA = "CalculatorAdvice.v1"
 PROMPT_VERSION = "calculator_advisor_v2_feature_packet_json"
+MAX_ADVICE_INDEX_BYTES = 8 * 1024 * 1024
 
 ALLOWED_KEYS = {
     "situation_class",
@@ -92,6 +93,51 @@ class CalculatorAdvice:
 
 def advice_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "llm_advice" / "calculator_advice.jsonl"
+
+
+def load_latest_calculator_advice(
+    private_root: Path,
+    feature_packet_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Load a bounded, validated index for the requested recent feature packets."""
+
+    wanted = {str(item).strip() for item in feature_packet_ids if str(item).strip()}
+    path = advice_path(private_root)
+    if not wanted or not path.is_file():
+        return {}
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            start = max(0, size - MAX_ADVICE_INDEX_BYTES)
+            handle.seek(start)
+            if start:
+                handle.readline()
+            payload = handle.read(MAX_ADVICE_INDEX_BYTES)
+    except OSError:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for raw_line in payload.splitlines():
+        try:
+            row = json.loads(raw_line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        feature_id = str(row.get("feature_packet_id") or "")
+        advice = row.get("advice")
+        if (
+            feature_id not in wanted
+            or row.get("schema") != SCHEMA
+            or row.get("accepted") is not True
+            or row.get("paper_only") is not True
+            or row.get("execution_allowed") is not False
+            or not isinstance(advice, dict)
+        ):
+            continue
+        valid, _problems = validate_advice_payload(advice)
+        if valid:
+            result[feature_id] = row
+    return result
 
 
 def normalize_advice_payload(payload: dict[str, Any]) -> dict[str, Any]:

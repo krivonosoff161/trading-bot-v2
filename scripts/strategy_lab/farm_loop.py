@@ -354,9 +354,9 @@ def _refresh_live_universe(
         }
 
 
-def _maybe_storage_maintain(private_root: Path, apply: bool) -> None:
+def _maybe_storage_maintain(private_root: Path, apply: bool) -> dict[str, Any]:
     if not apply:
-        return
+        return {"state": "dry_run", "activated": False}
     from src.research_lab.runtime_storage_rotation import (
         archive_pending_segments,
         maybe_runtime_storage_capability,
@@ -369,15 +369,36 @@ def _maybe_storage_maintain(private_root: Path, apply: bool) -> None:
         budget = storage_budget_status(capability)
         if maintenance["state"] != "ready" or budget["state"] != "ready":
             raise RuntimeError("activated runtime storage maintenance failed closed")
-        return
+        return {
+            "state": "ready",
+            "activated": True,
+            "archived": int(maintenance.get("archived") or 0),
+            "retained": int(maintenance.get("retained") or 0),
+            "budget_state": str(budget.get("state") or ""),
+            "paper_only": True,
+            "execution_allowed": False,
+        }
     try:
         from src.research_lab.farm_journal import farm_log_paths
         from src.research_lab.storage_policy import bound_farm_artifacts, maintain
 
         maintain(farm_log_paths(private_root), apply=False)
         bound_farm_artifacts(private_root, apply=False)
+        return {
+            "state": "report_only",
+            "activated": False,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
     except Exception as exc:  # noqa: BLE001 - storage hygiene must never break the loop
         print(f"  storage: skipped ({type(exc).__name__})")
+        return {
+            "state": "degraded",
+            "activated": False,
+            "problem_type": type(exc).__name__,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
 
 
 def _providers(args, apply: bool):
@@ -2781,7 +2802,7 @@ def _run_once(
         loop=loop,
         cycle_started_at=cycle_started_at,
     )
-    _maybe_storage_maintain(private_root, apply)
+    out["runtime_storage_maintenance"] = _maybe_storage_maintain(private_root, apply)
     _write_loop_status(
         private_root,
         stage="cycle_complete",
@@ -2793,6 +2814,7 @@ def _run_once(
         },
     )
     if apply:
+        out["product_cycle_complete"] = True
         _publish_farm_product_checkpoint(private_root, out)
     return out
 

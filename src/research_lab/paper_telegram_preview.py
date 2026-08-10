@@ -132,6 +132,10 @@ class PaperTelegramPreview:
     consumer_status: str
     validation_tier: str
     text: str
+    feature_packet_id: str = ""
+    analysis_mode: str = "deterministic_template"
+    analysis_status: str = "not_llm_eligible"
+    llm_interpretation_ref: str = ""
     chart_path: str = ""
     farm_geometry_profile_id: str = ""
     farm_geometry_profile_reason: str = ""
@@ -842,6 +846,59 @@ def render_preview_text(record: dict[str, Any]) -> str:
     if record.get("schema") == "PaperSignalCandidate.v1":
         return _paper_signal_text(record)
     return _consumer_text(record)
+
+
+def _analysis_contract(
+    record: dict[str, Any],
+    *,
+    tier: str,
+    advice_by_feature: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    feature_packet_id = str(record.get("feature_packet_id") or "")
+    advice = advice_by_feature.get(feature_packet_id) or {}
+    advice_ref = str(
+        advice.get("calculator_advice_id") or advice.get("advisor_ref") or ""
+    )
+    if tier != VALIDATED_TIER:
+        return {
+            "feature_packet_id": feature_packet_id,
+            "analysis_mode": "deterministic_template",
+            "analysis_status": "not_llm_eligible",
+            "llm_interpretation_ref": "",
+        }
+    if advice_ref:
+        return {
+            "feature_packet_id": feature_packet_id,
+            "analysis_mode": "llm_advisory",
+            "analysis_status": "accepted",
+            "llm_interpretation_ref": advice_ref,
+        }
+    return {
+        "feature_packet_id": feature_packet_id,
+        "analysis_mode": "deterministic_fallback",
+        "analysis_status": "llm_advisory_unavailable",
+        "llm_interpretation_ref": "",
+    }
+
+
+def _append_analysis_provenance(text: str, analysis: dict[str, str]) -> str:
+    mode = analysis["analysis_mode"]
+    if mode == "llm_advisory":
+        line = (
+            "<b>Анализ:</b> связан с проверенным LLM-advisory; "
+            "уровни и решение остаются детерминированными."
+        )
+    elif mode == "deterministic_fallback":
+        line = (
+            "<b>Анализ:</b> детерминированный шаблон; "
+            "LLM-advisory для этого сетапа пока недоступен."
+        )
+    else:
+        line = (
+            "<b>Анализ:</b> детерминированный исследовательский шаблон; "
+            "LLM не вызывается без validation-bound сетапа."
+        )
+    return f"{text}\n\n{line}"
 
 
 def validate_preview(record: dict[str, Any], text: str) -> list[str]:
@@ -1582,6 +1639,16 @@ def build_paper_telegram_preview(
             scenario_groups,
             scenario_update_groups,
         ) = _scenario_gate_rows(Path(private_root), product_filtered_rows)
+    from src.research_lab.calculator_advisor import load_latest_calculator_advice
+
+    advice_by_feature = load_latest_calculator_advice(
+        Path(private_root),
+        {
+            str(row.get("feature_packet_id") or "")
+            for row in rows
+            if str(row.get("feature_packet_id") or "")
+        },
+    )
     for row in rows:
         if (
             source_schema == "main_paper_consumer.v1"
@@ -1622,7 +1689,12 @@ def build_paper_telegram_preview(
         if len(previews) >= limit:
             break
         tier = validation_tier(row)
-        text = render_preview_text(row)
+        analysis = _analysis_contract(
+            row,
+            tier=tier,
+            advice_by_feature=advice_by_feature,
+        )
+        text = _append_analysis_provenance(render_preview_text(row), analysis)
         problems = validate_preview(row, text)
         preview_id = f"preview_{row.get('instruction_id') or row.get('paper_trade_id') or len(previews)}"
         if source_schema == "paper_signals.v1":
@@ -1647,6 +1719,10 @@ def build_paper_telegram_preview(
                 ),
                 validation_tier=tier,
                 text=text,
+                feature_packet_id=analysis["feature_packet_id"],
+                analysis_mode=analysis["analysis_mode"],
+                analysis_status=analysis["analysis_status"],
+                llm_interpretation_ref=analysis["llm_interpretation_ref"],
                 chart_path=_render_telegram_card_image(
                     Path(private_root),
                     row,
@@ -1695,6 +1771,7 @@ def build_paper_telegram_preview(
     invalid = sum(1 for preview in previews if preview.problems)
     by_validation_tier: dict[str, int] = {}
     chart_path_types: dict[str, int] = {}
+    analysis_modes: dict[str, int] = {}
     for preview in previews:
         by_validation_tier[preview.validation_tier] = (
             by_validation_tier.get(preview.validation_tier, 0) + 1
@@ -1703,6 +1780,9 @@ def build_paper_telegram_preview(
             Path(preview.chart_path).parent.name if preview.chart_path else "missing"
         )
         chart_path_types[chart_type] = chart_path_types.get(chart_type, 0) + 1
+        analysis_modes[preview.analysis_mode] = (
+            analysis_modes.get(preview.analysis_mode, 0) + 1
+        )
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schema": source_schema,
@@ -1726,6 +1806,10 @@ def build_paper_telegram_preview(
         "scenario_close_cards": len(scenario_close_cards),
         "by_validation_tier": by_validation_tier,
         "chart_path_types": dict(sorted(chart_path_types.items())),
+        "analysis_modes": dict(sorted(analysis_modes.items())),
+        "analysis_llm_linked": analysis_modes.get("llm_advisory", 0),
+        "analysis_template": analysis_modes.get("deterministic_template", 0),
+        "analysis_fallback": analysis_modes.get("deterministic_fallback", 0),
         "items": [preview.to_dict() for preview in previews],
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
