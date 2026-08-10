@@ -29,14 +29,20 @@ from src.research_lab.storage_segment_store import (
 
 def _child_abandon_root_lock(lock_path: str, ready_path: str) -> None:
     with storage_root_lock(Path(lock_path)):
-        Path(ready_path).write_text("locked", encoding="ascii")
+        _publish_child_ready(Path(ready_path))
         os._exit(0)
 
 
 def _child_hold_root_lock(lock_path: str, ready_path: str, hold_seconds: float) -> None:
     with storage_root_lock(Path(lock_path)):
-        Path(ready_path).write_text("locked", encoding="ascii")
+        _publish_child_ready(Path(ready_path))
         time.sleep(hold_seconds)
+
+
+def _publish_child_ready(path: Path) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text("locked", encoding="ascii")
+    os.replace(temporary, path)
 
 
 def _child_crash_after_append_intent(root: str, request_id: str) -> None:

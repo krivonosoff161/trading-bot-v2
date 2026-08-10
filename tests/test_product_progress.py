@@ -544,6 +544,52 @@ def test_farm_metrics_requires_complete_same_generation_chain() -> None:
     assert metrics["producer_research_only_excluded"] == 3
 
 
+def test_farm_metrics_exposes_paper_pipeline_cycle_failure_without_payload() -> None:
+    metrics = farm_metrics(
+        {
+            "errors": [
+                {"where": "true_forward", "error": "synthetic ordinary error"},
+                {"where": "paper_signals", "error": "synthetic invariant error"},
+            ]
+        }
+    )
+
+    assert metrics["errors"] == 2
+    assert metrics["paper_pipeline_errors"] == 1
+    assert "synthetic" not in json.dumps(metrics)
+
+
+def test_product_monitor_hard_fails_completed_paper_pipeline_cycle_error(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path)
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="degraded",
+        metrics={
+            "paper_generation_waiting": False,
+            "generation_consistent": True,
+            "paper_pipeline_errors": 1,
+            "operational_rows_retained": 0,
+            "validation_oldest_age_seconds": 0.0,
+            "validation_backlog_slo_seconds": 3600.0,
+        },
+        completed_at=102.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert report["ready"] is False
+    assert report["state"] == "failed"
+    assert report["hard_fail_reasons"] == ["paper_pipeline_cycle_failed"]
+
+
 def test_validation_generation_waiting_is_starting_not_stage_mismatch(
     tmp_path: Path,
 ) -> None:

@@ -141,7 +141,7 @@ def select_current_terminal_training_rows(
         and generation.get("execution_allowed") is False
         and run_id
         and account_generation_id
-        and subject_generation_ids
+        and (subject_generation_ids or not projection_items)
     )
     if not generation_ready:
         rejection_counts = (

@@ -150,3 +150,32 @@ def test_training_selector_fails_closed_when_projection_is_display_only():
         "generation_not_current_or_complete": 1
     }
     assert selected["current_generation_compatible"] is False
+
+
+def test_training_selector_accepts_completed_current_empty_generation():
+    generation = _generation() | {
+        "paper_subject_generation_ids": [],
+        "items": [],
+    }
+
+    selected = select_current_terminal_training_rows([], generation)
+
+    assert selected["items"] == []
+    assert selected["source_rows"] == 0
+    assert selected["eligible_rows"] == 0
+    assert selected["rejection_counts"] == {}
+    assert selected["paper_generation_run_id"] == "run-v2"
+    assert selected["current_generation_compatible"] is True
+    assert selected["display_only"] is False
+
+
+def test_training_selector_rejects_nonempty_projection_without_subject_identity():
+    generation = _generation() | {"paper_subject_generation_ids": []}
+
+    selected = select_current_terminal_training_rows([_training_row()], generation)
+
+    assert selected["items"] == []
+    assert selected["rejection_counts"] == {
+        "generation_not_current_or_complete": 1
+    }
+    assert selected["current_generation_compatible"] is False
