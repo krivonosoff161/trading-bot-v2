@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -91,6 +92,66 @@ def test_system_analyst_preview_does_not_write(tmp_path):
     assert feedback_payloads_from_outcomes([_training()], [_review()])
     summary = run_system_analyst_cycle(tmp_path, apply=False)
     assert summary["apply"] is False
+    assert not (tmp_path / "state").exists()
+
+
+def test_empty_current_generation_does_not_scan_historical_role_environments(
+    tmp_path, monkeypatch
+):
+    historical_root = tmp_path / "state" / "role_environments"
+    for recipient in ("farm", "validator", "trader"):
+        directory = historical_root / recipient
+        directory.mkdir(parents=True)
+        for index in range(250):
+            (directory / f"env_historical_{index:04d}.json").write_text(
+                "not part of the current generation", encoding="utf-8"
+            )
+
+    monkeypatch.setattr(
+        system_analyst_cycle,
+        "load_outcome_reviews",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("empty generation must not load outcome history")
+        ),
+    )
+    original_read_text = Path.read_text
+
+    def reject_historical_read(path, *args, **kwargs):
+        if "role_environments" in Path(path).parts:
+            raise AssertionError("historical role directory was scanned")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", reject_historical_read)
+
+    summary = run_system_analyst_cycle(
+        tmp_path,
+        apply=True,
+        expected_generation_run_id="synthetic-current-run",
+    )
+
+    assert summary["feedback_candidates"] == 0
+    assert summary["role_environment_candidates"] == {
+        "farm": 0,
+        "validator": 0,
+        "trader": 0,
+    }
+    assert summary["accepted_environment_ids"] == {
+        "farm": [],
+        "validator": [],
+        "trader": [],
+    }
+
+
+def test_liveness_failure_aborts_analyst_before_private_state_write(tmp_path):
+    with pytest.raises(RuntimeError, match="synthetic stop"):
+        run_system_analyst_cycle(
+            tmp_path,
+            apply=True,
+            check_active=lambda: (_ for _ in ()).throw(
+                RuntimeError("synthetic stop")
+            ),
+        )
+
     assert not (tmp_path / "state").exists()
 
 
@@ -185,6 +246,66 @@ def test_cycle_recovers_request_projection_after_ack_succeeded(tmp_path, monkeyp
     monkeypatch.setattr(role_environment, "_write_state", original_write)
     recovered = run_system_analyst_cycle(tmp_path, apply=True, now=FRESH_REVIEW_NOW)
     assert recovered["accepted_role_requests"]["farm"] == 1
+
+
+def test_current_generation_index_recovers_ack_state_crash_without_history_scan(
+    tmp_path, monkeypatch
+):
+    derived = tmp_path / "state" / "derived"
+    advice = tmp_path / "state" / "llm_advice"
+    derived.mkdir(parents=True)
+    advice.mkdir(parents=True)
+    training = {
+        **_training(),
+        "paper_generation_run_id": "synthetic-current-run",
+    }
+    (derived / "paper_signal_training.jsonl").write_text(
+        json.dumps(training) + "\n", encoding="utf-8"
+    )
+    (advice / "outcome_reviews.jsonl").write_text(
+        json.dumps(_review()) + "\n", encoding="utf-8"
+    )
+
+    import src.research_lab.role_environment as role_environment
+
+    original_write = role_environment._write_state
+    calls = {"count": 0}
+
+    def fail_first(path, state):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("projection failed")
+        return original_write(path, state)
+
+    monkeypatch.setattr(role_environment, "_write_state", fail_first)
+    with pytest.raises(OSError, match="projection failed"):
+        run_system_analyst_cycle(
+            tmp_path,
+            apply=True,
+            now=FRESH_REVIEW_NOW,
+            expected_generation_run_id="synthetic-current-run",
+        )
+
+    monkeypatch.setattr(role_environment, "_write_state", original_write)
+    monkeypatch.setattr(
+        system_analyst_cycle,
+        "recoverable_role_requests",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("production recovery must not scan history")
+        ),
+    )
+    recovered = run_system_analyst_cycle(
+        tmp_path,
+        apply=True,
+        now=FRESH_REVIEW_NOW,
+        expected_generation_run_id="synthetic-current-run",
+    )
+
+    assert recovered["accepted_role_requests"] == {
+        "farm": 1,
+        "validator": 1,
+        "trader": 1,
+    }
 
 
 def test_completed_role_result_creates_one_bounded_next_generation():

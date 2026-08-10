@@ -25,6 +25,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -694,11 +695,23 @@ def _run_v2_post_delivery_maintenance_chain(
     loop: bool,
     cycle_started_at: float,
     out: dict,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """Run bounded analyst maintenance after generation-bound delivery."""
 
     runtime = args.paper_generation_runtime
-    runtime.raise_if_failed()
+
+    def check_active() -> None:
+        runtime.raise_if_failed()
+        failure_signal = getattr(args, "task_claim_failure_signal", None)
+        if failure_signal is not None:
+            failure_signal.raise_if_failed()
+        if should_stop is not None and should_stop():
+            raise FarmCycleStopRequested(
+                "canonical stop requested during v2 post-delivery maintenance"
+            )
+
+    check_active()
     run_id = str((out.get("paper_generation_v2") or {}).get("run_id") or "")
     if not run_id:
         raise RuntimeError("post-delivery maintenance requires a current v2 generation")
@@ -721,11 +734,24 @@ def _run_v2_post_delivery_maintenance_chain(
         build_trading_policy_calibration,
     )
 
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "milestone": "system_analyst_started",
+            "paper_generation_run_id": run_id,
+        },
+    )
     out["system_analyst_feedback"] = run_system_analyst_cycle(
         private_root,
         apply=apply,
         expected_generation_run_id=run_id,
+        check_active=check_active,
     )
+    check_active()
     _require_current_paper_generation(
         "system analyst", out["system_analyst_feedback"], run_id=run_id
     )
@@ -740,6 +766,20 @@ def _run_v2_post_delivery_maintenance_chain(
             "paper_generation_run_id": run_id,
         },
     )
+    accepted_environment_ids = (
+        out["system_analyst_feedback"].get("accepted_environment_ids") or {}
+    )
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "milestone": "role_dispatch_started",
+            "paper_generation_run_id": run_id,
+        },
+    )
     out["role_environment_dispatch"] = dispatch_role_environments(
         private_root,
         tasks,
@@ -747,16 +787,34 @@ def _run_v2_post_delivery_maintenance_chain(
         limit_per_role=20,
         expected_generation_run_id=run_id,
         evidence_database_path=evidence_database_path,
+        environment_ids_by_role=accepted_environment_ids,
+        check_active=check_active,
     )
     _require_current_paper_generation(
         "role dispatch", out["role_environment_dispatch"], run_id=run_id
+    )
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "milestone": "role_dispatch_completed",
+            "paper_generation_run_id": run_id,
+        },
     )
     out["role_work_result_reconciliation"] = reconcile_role_work_results(
         private_root,
         tasks,
         apply=apply,
         expected_generation_run_id=run_id,
+        environment_ids_by_role=(
+            out["role_environment_dispatch"].get("environment_ids") or {}
+        ),
+        check_active=check_active,
     )
+    check_active()
     _require_current_paper_generation(
         "role result reconciliation",
         out["role_work_result_reconciliation"],
@@ -2658,7 +2716,6 @@ def _run_once(
                                 "paper_generation_run_id": run_id,
                             },
                         )
-                        _publish_farm_product_checkpoint(private_root, out)
                         _run_v2_post_delivery_maintenance_chain(
                             args,
                             private_root,
@@ -2667,6 +2724,7 @@ def _run_once(
                             loop=loop,
                             cycle_started_at=cycle_started_at,
                             out=out,
+                            should_stop=cycle_stop_requested,
                         )
                 except Exception as exc:  # noqa: BLE001 - compatibility path is best effort
                     if getattr(args, "paper_evidence_v2_required", False):
@@ -2770,6 +2828,8 @@ def _run_once(
                         out.setdefault("errors", []).append(
                             {"where": "agent_role_reviews", "error": str(exc)}
                         )
+            except FarmCycleStopRequested:
+                raise
             except _ValidationGenerationWaiting as exc:
                 out["paper_telegram_delivery"] = {
                     "skipped": "validation_generation_waiting",

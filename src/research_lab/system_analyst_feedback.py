@@ -547,7 +547,13 @@ def acknowledge_feedback(
         }, events)
 
 
-def pending_feedback(private_root: Path, recipient: str, *, limit: int = 100) -> list[dict[str, Any]]:
+def pending_feedback(
+    private_root: Path,
+    recipient: str,
+    *,
+    limit: int = 100,
+    expected_generation_run_id: str | None = None,
+) -> list[dict[str, Any]]:
     if recipient not in RECIPIENTS or not 1 <= limit <= 100:
         raise ValueError("invalid recipient or limit")
     events = _load_events(private_root)
@@ -564,7 +570,20 @@ def pending_feedback(private_root: Path, recipient: str, *, limit: int = 100) ->
         if feedback_id in superseded or (feedback_id, recipient) in acked:
             continue
         if feedback_id in feedback_by_id:
-            result.append(feedback_by_id[feedback_id])
+            feedback = feedback_by_id[feedback_id]
+            if expected_generation_run_id:
+                recommendations = feedback.get("recommendations") or []
+                generation_matches = any(
+                    isinstance(item, dict)
+                    and item.get("recipient") == recipient
+                    and isinstance(item.get("task_spec"), dict)
+                    and str(item["task_spec"].get("paper_generation_run_id") or "")
+                    == str(expected_generation_run_id)
+                    for item in recommendations
+                )
+                if not generation_matches:
+                    continue
+            result.append(feedback)
         if len(result) >= limit:
             break
     return result

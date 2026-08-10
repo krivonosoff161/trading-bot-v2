@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 from src.research_lab.lineage_contract import utc_now
@@ -104,6 +105,99 @@ def _write_state(path: Path, state: dict[str, Any]) -> None:
     tmp.replace(state_path)
 
 
+def _generation_index_path(
+    private_root: Path, recipient: str, generation_run_id: str
+) -> Path:
+    if recipient not in RECIPIENT_ACTIONS or not generation_run_id:
+        raise ValueError("valid role generation index identity is required")
+    digest = hashlib.sha256(generation_run_id.encode("utf-8")).hexdigest()[:24]
+    return resolve_private_child(
+        private_root,
+        "state",
+        "role_environments",
+        "_generation_index",
+        f"{recipient}-{digest}.json",
+    )
+
+
+def _index_role_request(private_root: Path, row: dict[str, Any]) -> None:
+    task_spec = row.get("task_spec")
+    generation_run_id = str(
+        task_spec.get("paper_generation_run_id")
+        if isinstance(task_spec, dict)
+        else ""
+    )
+    if not generation_run_id:
+        return
+    recipient = str(row.get("recipient") or "")
+    environment_id = str(row.get("environment_id") or "")
+    path = _generation_index_path(private_root, recipient, generation_run_id)
+    environment_ids: set[str] = set()
+    if path.exists():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            existing.get("schema") != "RoleEnvironmentGenerationIndex.v1"
+            or existing.get("recipient") != recipient
+            or existing.get("paper_generation_run_id") != generation_run_id
+        ):
+            raise ValueError("role generation index contract mismatch")
+        environment_ids.update(str(item) for item in existing.get("environment_ids") or ())
+    environment_ids.add(environment_id)
+    if not all(_ENVIRONMENT_ID_RE.fullmatch(item) for item in environment_ids):
+        raise ValueError("role generation index contains an invalid environment id")
+    payload = {
+        "schema": "RoleEnvironmentGenerationIndex.v1",
+        "recipient": recipient,
+        "paper_generation_run_id": generation_run_id,
+        "environment_ids": sorted(environment_ids),
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def current_generation_role_requests(
+    private_root: Path, *, recipient: str, generation_run_id: str
+) -> list[dict[str, Any]]:
+    """Load only manifest-indexed role requests for one paper generation."""
+    path = _generation_index_path(private_root, recipient, generation_run_id)
+    if not path.exists() or path.is_symlink():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        payload.get("schema") != "RoleEnvironmentGenerationIndex.v1"
+        or payload.get("recipient") != recipient
+        or payload.get("paper_generation_run_id") != generation_run_id
+    ):
+        raise ValueError("role generation index contract mismatch")
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_id in payload.get("environment_ids") or ():
+        environment_id = str(raw_id or "")
+        if environment_id in seen or not _ENVIRONMENT_ID_RE.fullmatch(environment_id):
+            raise ValueError("role generation index contains an invalid environment id")
+        seen.add(environment_id)
+        candidate_path = _candidate_path(private_root, recipient, environment_id)
+        if not candidate_path.is_file() or candidate_path.is_symlink():
+            raise ValueError("indexed role environment candidate is missing")
+        row = _effective_row(candidate_path)
+        task_spec = row.get("task_spec")
+        if (
+            not isinstance(task_spec, dict)
+            or str(task_spec.get("paper_generation_run_id") or "")
+            != generation_run_id
+        ):
+            raise ValueError("indexed role environment generation mismatch")
+        rows.append(row)
+    return rows
+
+
 def _bound_ref(path: Path, content_hash: str | None = None) -> str:
     digest = content_hash or hashlib.sha256(path.read_bytes()).hexdigest()
     return f"{path}#sha256={digest}"
@@ -190,13 +284,35 @@ def _ensure_task_spec_content_binding(
 
 
 def recoverable_role_requests(
-    private_root: Path, recipient: str
+    private_root: Path,
+    recipient: str,
+    *,
+    environment_ids: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return immutable candidates whose state projection still needs request acceptance."""
+    """Return candidates whose state projection still needs request acceptance.
+
+    Production callers pass the exact current-generation ids returned by
+    ``materialize_role_environment``.  The unbounded directory walk remains only as
+    an explicit compatibility/recovery surface; it is not suitable for a hot product
+    cycle because the directory is historical evidence, not a work queue.
+    """
     directory = environment_dir(private_root, recipient)
     if not directory.exists():
         return []
-    rows = [_effective_row(path) for path in sorted(directory.glob("env_*.json"))]
+    if environment_ids is None:
+        paths = sorted(directory.glob("env_*.json"))
+    else:
+        paths = []
+        seen: set[str] = set()
+        for raw_id in environment_ids:
+            environment_id = str(raw_id or "")
+            if environment_id in seen:
+                continue
+            seen.add(environment_id)
+            path = _candidate_path(private_root, recipient, environment_id)
+            if path.is_file():
+                paths.append(path)
+    rows = [_effective_row(path) for path in paths]
     return [row for row in rows if row.get("status") == "candidate"]
 
 
@@ -263,6 +379,7 @@ def materialize_role_environment(
     recipient: str,
     parent_environment_id: str = "",
     limit: int = 20,
+    expected_generation_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Create immutable, non-authoritative environment candidates and ACK them."""
     allowed = RECIPIENT_ACTIONS.get(recipient)
@@ -271,7 +388,14 @@ def materialize_role_environment(
     out_dir = environment_dir(private_root, recipient)
     out_dir.mkdir(parents=True, exist_ok=True)
     materialized: list[dict[str, Any]] = []
-    for feedback in pending_feedback(private_root, recipient, limit=limit):
+    for feedback in pending_feedback(
+        private_root,
+        recipient,
+        limit=100,
+        expected_generation_run_id=expected_generation_run_id,
+    ):
+        if len(materialized) >= max(0, int(limit)):
+            break
         recommendation = _recommendation(feedback, recipient)
         if recommendation is None or recommendation.get("action") not in allowed:
             continue
@@ -282,6 +406,10 @@ def materialize_role_environment(
         task_spec.setdefault("source_ref", str(feedback["feedback_id"]))
         task_spec.setdefault("generation", 0)
         _ensure_task_spec_content_binding(task_spec, feedback, recipient=recipient)
+        if expected_generation_run_id and str(
+            task_spec.get("paper_generation_run_id") or ""
+        ) != str(expected_generation_run_id):
+            continue
         task_spec.setdefault("adaptive_trial_id", adaptive_trial_id(task_spec))
         basis: dict[str, Any] = {
             "feedback_id": str(feedback["feedback_id"]),
@@ -465,6 +593,15 @@ def accept_role_request(
         raise ValueError("role request contract mismatch")
     if row.get("status") != "candidate":
         if row.get("status") == "request_accepted":
+            _index_role_request(private_root, row)
+            acknowledge_feedback(
+                private_root,
+                feedback_id=str(row["feedback_id"]),
+                recipient=recipient,
+                ack_id=f"request-ack::{environment_id}",
+                disposition="request_accepted",
+                applied_artifact_refs=(_bound_ref(path),),
+            )
             return row
         raise ValueError("role request is no longer a candidate")
     if row.get("proposed_action") not in RECIPIENT_ACTIONS[recipient]:
@@ -477,6 +614,10 @@ def accept_role_request(
         "deterministic_gate_result": "recipient_contract_passed",
         "accepted_at": utc_now(),
     }
+    # The compact generation index is written before the two-step ledger/state
+    # transition.  It makes an ACK->state crash recoverable by exact id without
+    # turning the immutable historical directory into a hot work queue.
+    _index_role_request(private_root, row)
     acknowledge_feedback(
         private_root,
         feedback_id=str(row["feedback_id"]),

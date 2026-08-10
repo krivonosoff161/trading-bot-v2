@@ -210,8 +210,10 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     calculator = _mapping(out.get("calculator_advisor"))
     role_reviews = _mapping(out.get("agent_role_reviews"))
     analyst = _mapping(out.get("system_analyst_feedback"))
+    analyst_training = _mapping(analyst.get("training_evidence"))
     memory = _mapping(out.get("setup_outcome_memory_refresh"))
     storage = _mapping(out.get("runtime_storage_maintenance"))
+    preview_tiers = _mapping(preview.get("by_validation_tier"))
     outcome_generation = _mapping(outcome.get("training_evidence"))
     run_id = str(generation.get("run_id") or "")
     generation_state = str(generation.get("state") or "")
@@ -286,6 +288,12 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
         "data_gap": int(observer.get("data_gap") or 0),
         "genuine_no_market_data": int(observer.get("genuine_no_market_data") or 0),
         "preview_rendered": int(preview.get("rendered") or 0),
+        "validated_setup_cards": int(preview_tiers.get("validated_pfr") or 0),
+        "research_observation_cards": int(
+            preview.get("research_observation_items")
+            or preview_tiers.get("farm_calculated")
+            or 0
+        ),
         "delivery_sent": int(
             delivery.get("sent_messages") or delivery.get("sent") or 0
         ),
@@ -323,6 +331,7 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
             analyst.get("feedback_candidates") or 0
         ),
         "analyst_routed": int(analyst.get("routed") or 0),
+        "analyst_input_rows": int(analyst_training.get("eligible_rows") or 0),
         "memory_rows": int(memory.get("product_rows") or 0),
         "memory_terminal_rows": int(memory.get("product_terminal_rows") or 0),
         "storage_maintenance_state": str(storage.get("state") or "unknown"),
@@ -523,6 +532,13 @@ class ProductProgressMonitor:
                     degraded.append("calculator_advisory_degraded")
                 if int(metrics.get("role_reviews_rejected") or 0):
                     degraded.append("agent_role_review_degraded")
+                if (
+                    int(metrics.get("validated_setup_cards") or 0) == 0
+                    and int(metrics.get("research_observation_cards") or 0) > 0
+                ):
+                    degraded.append("no_current_validated_paper_setup")
+                if int(metrics.get("analysis_fallback") or 0):
+                    degraded.append("validated_card_llm_advisory_unavailable")
             components[component] = {
                 "current_run": current,
                 "sequence": int(row.get("sequence") or 0),
