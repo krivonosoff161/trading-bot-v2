@@ -240,6 +240,78 @@ def test_green_t0_transition_preserves_launch_boundary(tmp_path: Path) -> None:
     ).sample()["ready"] is False
 
 
+def test_green_t0_transition_accepts_new_bounded_generation_in_progress(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    startup = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="waiting",
+        metrics={
+            "validation_oldest_age_seconds": 0.0,
+            "validation_backlog_slo_seconds": 3600.0,
+            "generation_consistent": False,
+            "paper_generation_waiting": True,
+            "product_cycle_complete": True,
+            "operational_rows_retained": 0,
+        },
+        completed_at=103.0,
+    )
+
+    steady = ProductProgressMonitor.from_green_t0_report(
+        tmp_path,
+        t0_report=startup,
+        t0_observed_at=102.0,
+        wall_clock=lambda: 104.0,
+    )
+
+    report = steady.sample()
+    assert steady.run_started_at == 100.0
+    assert report["state"] == "starting"
+    assert report["ready"] is False
+    assert assess_post_t0_product_progress(report).transitioning is True
+
+
+def test_green_t0_transition_rejects_new_unbounded_generation_state(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    startup = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="waiting",
+        metrics={
+            "validation_oldest_age_seconds": 0.0,
+            "validation_backlog_slo_seconds": 3600.0,
+            "generation_consistent": False,
+            "paper_generation_waiting": False,
+            "product_cycle_complete": True,
+            "operational_rows_retained": 0,
+        },
+        completed_at=103.0,
+    )
+
+    with pytest.raises(ProductProgressTransitionError, match="changed"):
+        ProductProgressMonitor.from_green_t0_report(
+            tmp_path,
+            t0_report=startup,
+            t0_observed_at=102.0,
+        )
+
+
 def test_t0_transition_rejects_pre_run_or_rebased_report(tmp_path: Path) -> None:
     _publish_green(tmp_path, completed_at=99.0)
     pre_run = ProductProgressMonitor(
