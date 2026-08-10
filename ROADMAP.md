@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-10
-- Verified against: `f2d7ebf6392c6ccd694c847f0fdd15dc340e2c69`
+- Verified against: `538f5f4aa0283c96a513e1650c94c62df22878c7`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -39,6 +39,11 @@ dependency, not by a route to live trading.
   idempotent current-code `ready_empty` generation after its active/fence check;
   pending, invalid, unavailable, and ambiguous states remain fail-closed. This
   path does not rescan the full historical validation corpus.
+- A completed priority-worker validation generation now raises a one-shot
+  product-cycle wakeup. The foreground farm loop consumes it before its normal
+  180-second cadence, then immediately re-verifies and propagates the new
+  generation. Stop intents remain higher priority and the bounded startup
+  deadline is not extended.
 - Paper runtime consumers share one content-verified current-generation
   snapshot per cycle, load only manifest-named active cards, and expose explicit
   pending/stale/empty/invalid availability states. Signal evaluation retains the

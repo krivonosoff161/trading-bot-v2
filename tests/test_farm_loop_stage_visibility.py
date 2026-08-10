@@ -69,6 +69,7 @@ def test_priority_worker_drains_validation_before_producing_more_work(
     monkeypatch, tmp_path
 ) -> None:
     seen = {"validation": 0, "slots": 0}
+    product_wakeup = threading.Event()
 
     class FakeTasks:
         on_transition = None
@@ -84,7 +85,7 @@ def test_priority_worker_drains_validation_before_producing_more_work(
     def fake_validation(*_args, **kwargs):
         seen["validation"] += 1
         assert kwargs["status_target"] == "priority_worker"
-        return {"validated": 2}
+        return {"validated": 2, "exported": 2}
 
     def fake_slot(*_args, **_kwargs):
         seen["slots"] += 1
@@ -110,6 +111,7 @@ def test_priority_worker_drains_validation_before_producing_more_work(
             run_validation=True,
             busy_slot_seconds=0.1,
             idle_poll_seconds=0.1,
+            product_cycle_wakeup_event=product_wakeup,
         ),
         {},
         {},
@@ -118,6 +120,7 @@ def test_priority_worker_drains_validation_before_producing_more_work(
     )
 
     assert seen == {"validation": 1, "slots": 1}
+    assert product_wakeup.is_set()
 
 
 def test_claim_failure_signal_stops_worker_and_interrupts_foreground(tmp_path) -> None:
@@ -1113,6 +1116,28 @@ class TestCycleLogStages:
         stop_file.write_text("stop", encoding="utf-8")
 
         assert farm_loop._sleep_until_next_cycle(600, str(stop_file)) is False
+
+    def test_validation_generation_wakeup_bypasses_full_cycle_cadence(self) -> None:
+        wake_event = threading.Event()
+        wake_event.set()
+
+        assert farm_loop._sleep_until_next_cycle(
+            180,
+            wake_event=wake_event,
+        ) is True
+        assert wake_event.is_set() is False
+
+    def test_stop_intent_wins_over_generation_wakeup(self, tmp_path) -> None:
+        stop_file = tmp_path / "STOP_FARM_FULL_CYCLE.txt"
+        stop_file.write_text("stop", encoding="utf-8")
+        wake_event = threading.Event()
+        wake_event.set()
+
+        assert farm_loop._sleep_until_next_cycle(
+            180,
+            str(stop_file),
+            wake_event=wake_event,
+        ) is False
 
     def test_smoke_caps_skip_forward_and_new_paper_generation(self, tmp_path, monkeypatch) -> None:
         from src.research_lab.paper_signals import cycle as paper_cycle

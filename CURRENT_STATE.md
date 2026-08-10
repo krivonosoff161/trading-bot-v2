@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-10
-- Verified against: `f2d7ebf6392c6ccd694c847f0fdd15dc340e2c69`
+- Verified against: `538f5f4aa0283c96a513e1650c94c62df22878c7`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -31,6 +31,11 @@ model conversations, recipients, credentials, or workstation-specific state.
 | Evidence/storage capability | implemented bounded | Content-bound archives, synthetic migration, and plan-digest-bound backup retention exist. An off-by-default exact-root capability now seals bounded farm stdout, journals, lineage, invocation metadata, and selected derived audit streams at writer boundaries; it uses the same content-addressed catalog, releases sources only after restore proof, retains compact recent/semantic projections, and fails closed on archive or budget loss. Its shared OS lock applies one monotonic wait budget across both in-process and interprocess contention, so a short concurrent contour write is retried while a persistent holder still fails closed. Private activation endurance remains operationally unproved. |
 | Paper-card delivery | implemented bounded | Preview, deduplication, and guarded delivery exist; recipients, content, and acknowledgement state stay private. A successful Telegram response is authoritative even if the runtime log sink fails immediately afterward; the returned message id still reaches the delivery outbox. Current-attempt and carried ambiguous ACK counts are separate so a new failure stops the canary while historical operator-recovery debt remains blocked from replay. |
 | Execution denial boundary | implemented | No supported entrypoint grants live order authority. |
+
+Priority validation publication now wakes the canonical full product cycle
+immediately after a new current generation is atomically complete. This avoids
+waiting the ordinary 180-second cadence before paper consumers can verify the
+new authority; a stop intent still wins and startup deadlines are unchanged.
 
 The detailed ownership, evidence paths, missing proof, and next gate for every
 row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md).
