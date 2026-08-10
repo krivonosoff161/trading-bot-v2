@@ -383,6 +383,8 @@ class _JobLeaseHeartbeat:
             with self._state_lock:
                 self._claim_expires_at = float(claim_expires_at)
                 self._renewals += 1
+                # Keep success and contention-clear atomic for observers.
+                self._renewal_contention_started_mono = None
             self._clear_active_contention()
             return True
         return False

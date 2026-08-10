@@ -299,7 +299,9 @@ def test_job_heartbeat_retries_real_sqlite_contention_before_claim_deadline(
         time.sleep(0.01)
 
     heartbeat.assert_active(stage="test")
-    assert heartbeat.snapshot()["renewals"] >= 1
+    renewed = heartbeat.snapshot()
+    assert renewed["renewals"] >= 1
+    assert renewed["renewal_contention_active"] is False
     heartbeat.stop()
     blocker.close()
     conn.close()
