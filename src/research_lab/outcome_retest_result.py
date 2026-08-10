@@ -124,9 +124,16 @@ def _iso_from_epoch(value: Any) -> str:
     return dt.datetime.fromtimestamp(timestamp, tz=dt.timezone.utc).isoformat()
 
 
-def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
+def build_outcome_retest_results(
+    private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     private_root = Path(private_root)
-    training_evidence = load_current_training_evidence(private_root)
+    training_evidence = load_current_training_evidence(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
     training_index = _training_index(training_evidence["items"])
     latest: dict[str, dict[str, Any]] = {}
     unreadable = 0

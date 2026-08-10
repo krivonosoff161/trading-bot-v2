@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import os
 import threading
 from argparse import Namespace
 from pathlib import Path
@@ -17,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.strategy_lab import farm_loop
-from src.research_lab import farm_journal
+from src.research_lab import farm_journal, product_progress
 from src.research_lab.farm_coordinator import PriorityWorkerFatalError
 
 
@@ -265,6 +266,52 @@ def test_loop_status_transient_windows_contention_recovers(
     assert attempts == 3
     assert json.loads(target.read_text(encoding="utf-8"))["stage"] == "paper_signals"
     assert farm_loop._loop_status_publisher(tmp_path).consecutive_failures == 0
+
+
+def test_production_farm_milestone_survives_product_progress_contention(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    progress_target = (
+        tmp_path / "state" / "product_progress" / "farm_progress.json"
+    )
+    real_replace = os.replace
+    attempts = 0
+
+    def flaky_replace(source, target):
+        nonlocal attempts
+        if Path(target) == progress_target:
+            attempts += 1
+            if attempts <= 2:
+                exc = PermissionError("synthetic product-progress sharing denial")
+                exc.winerror = 5
+                raise exc
+        real_replace(source, target)
+
+    farm_loop._LOOP_STATUS_PUBLISHERS.clear()
+    monkeypatch.setattr(product_progress.os, "replace", flaky_replace)
+    monkeypatch.setattr(product_progress.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(farm_loop.time, "time", lambda: 100.0)
+
+    assert farm_loop._write_loop_status(
+        tmp_path,
+        stage="paper_generation_v2",
+        apply=True,
+        loop=True,
+        cycle_started_at=90.0,
+        details={"milestone": "generation_promoted", "completed": 1, "total": 1},
+    )
+
+    checkpoint = json.loads(progress_target.read_text(encoding="utf-8"))
+    assert attempts == 3
+    assert checkpoint["status"] == "progress"
+    assert checkpoint["metrics"] == {
+        "completed": 1,
+        "milestone": "generation_promoted",
+        "stage": "paper_generation_v2",
+        "total": 1,
+    }
+    assert not list(progress_target.parent.glob(".*.tmp"))
 
 
 def test_durable_farm_milestones_advance_process_lease_progress(
