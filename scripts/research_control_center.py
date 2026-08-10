@@ -1500,14 +1500,19 @@ class ControlCenter(tk.Tk):
             raise CanaryMonitorHardFailure("canonical_stop_intent_during_runtime")
 
         product_ready = bool(self._product_progress_ready)
-        if not product_ready and elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS:
+        product_transitioning = bool(self._runtime_ready and not product_ready)
+        if (
+            not product_ready
+            and not self._runtime_ready
+            and elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS
+        ):
             raise CanaryMonitorHardFailure("product_progress_startup_timeout")
         ready = (
             contours_ready
             and owner.ready
             and listener_ready
             and supervisor_ready
-            and product_ready
+            and (product_ready or self._runtime_ready)
         )
         if ready and not self._runtime_ready:
             self._runtime_ready = True
@@ -1520,7 +1525,9 @@ class ControlCenter(tk.Tk):
                 )
             )
         state = (
-            "ready"
+            "product_transitioning"
+            if product_transitioning and ready
+            else "ready"
             if ready
             else "process_starting"
             if not contours_ready
@@ -1541,6 +1548,7 @@ class ControlCenter(tk.Tk):
             "lease_supervisor_age_seconds": supervisor_age,
             "ollama_listener_ready": listener_ready,
             "product_progress_ready": product_ready,
+            "product_progress_transitioning": product_transitioning,
             "paper_only": True,
             "execution_allowed": False,
         }

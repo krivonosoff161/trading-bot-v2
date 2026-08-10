@@ -143,6 +143,7 @@ class PaperTelegramPreview:
     paper_subject_generation_id: str = ""
     terminal_lifecycle_event_id: str = ""
     account_generation_id: str = ""
+    research_observation_generation_id: str = ""
     problems: list[str] = field(default_factory=list)
     card_template_version: str = CARD_TEMPLATE_VERSION
     paper_only: bool = True
@@ -181,6 +182,21 @@ def _trade_thesis_snapshot_path(private_root: Path) -> Path:
 
 def _paper_signal_snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_signals.json"
+
+
+def research_observation_generation_id(private_root: Path) -> str:
+    """Content identity for the non-authoritative farm-card source.
+
+    This identity is a delivery freshness envelope only.  It never grants paper,
+    validation, training, execution, or account authority.
+    """
+
+    path = _paper_signal_snapshot_path(Path(private_root))
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+    return f"research_observation_{digest}"
 
 
 def _jsonl_path(private_root: Path) -> Path:
@@ -1449,6 +1465,29 @@ def build_paper_telegram_preview(
         else "main_paper_trade_ledger.v1"
     )
     authority_present = bool(generation["authority_database_exists"])
+    research_generation_id = ""
+    research_records_read = 0
+    if authority_present:
+        research_rows, research_source_path = _load_paper_signal_candidates(
+            _paper_signal_snapshot_path(private_root)
+        )
+        existing_signal_ids = {
+            str(row.get("source_signal_id") or row.get("signal_id") or "")
+            for row in rows
+        }
+        research_rows = [
+            row
+            for row in research_rows
+            if str(row.get("source") or "") == "farm"
+            and str(row.get("signal_id") or "") not in existing_signal_ids
+        ]
+        research_records_read = len(research_rows)
+        if research_rows and research_source_path is not None:
+            research_generation_id = research_observation_generation_id(private_root)
+            if research_generation_id:
+                for row in research_rows:
+                    row["_research_observation_generation_id"] = research_generation_id
+                rows.extend(research_rows)
     if (
         not authority_present
         and rows
@@ -1630,6 +1669,9 @@ def build_paper_telegram_preview(
                     row.get("terminal_lifecycle_event_id") or ""
                 ),
                 account_generation_id=str(row.get("account_generation_id") or ""),
+                research_observation_generation_id=str(
+                    row.get("_research_observation_generation_id") or ""
+                ),
                 problems=problems,
             )
         )
@@ -1698,6 +1740,12 @@ def build_paper_telegram_preview(
         "generation_status": str(generation.get("generation_status") or ""),
         "current_generation_compatible": bool(generation.get("current")),
         "display_only": not bool(generation.get("current")),
+        "research_observation_generation_id": research_generation_id,
+        "research_observation_items": sum(
+            1 for preview in previews if preview.research_observation_generation_id
+        ),
+        "research_observation_records_read": research_records_read,
+        "research_observation_authority": "none",
     }
     out_snapshot.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

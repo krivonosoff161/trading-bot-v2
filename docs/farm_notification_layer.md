@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified: 2026-08-10
+- Verified against: `db816737bf610f58b0e1d7243647049061ee6e75`
 - Scope: visibility, preview, paper delivery, ACK, and duplicate boundaries
 - Evidence: [paper delivery tests](../tests/test_paper_telegram_sender.py)
 - Residual risks: external delivery acknowledgement can remain ambiguous.
@@ -56,7 +56,17 @@ that state. Notifications are an output edge, never an input to compute or money
 
 ## Paper Telegram Preview
 
-`paper_telegram_preview` reads accepted paper instructions after the chain:
+`paper_telegram_preview` has two deliberately unequal inputs after Paper Evidence v2
+activation:
+
+- validation-bound `pfr_farm` subjects come from the current v2 projection and retain
+  its exact paper-generation run identity;
+- broad `farm` observations remain outside v2 paper/account/lifecycle/training authority
+  but may be rendered as visibly labelled `farm_calculated` research cards. Their source
+  snapshot receives a separate SHA-256 freshness identity with authority `none`, which
+  the sender recomputes immediately before delivery.
+
+The validated chain is:
 
 ```text
 farm_loop --run-paper-signals
@@ -73,8 +83,10 @@ The preview validates operator-card text and writes:
 - `state/derived/paper_telegram_preview.jsonl`
 - `state/derived/paper_telegram_preview.json`
 
-It does not send a network request. It also does not promote a signal, mutate a queue, or
-enable execution.
+It does not send a network request. A research card does not become a v2 producer member,
+paper subject, account event, lifecycle event, training row, validation verdict, or order.
+If its source snapshot changes after rendering, the whole mixed preview fails closed before
+delivery. The preview never promotes a signal, mutates a queue, or enables execution.
 
 ## Paper Telegram Sender
 

@@ -1160,12 +1160,34 @@ def send_paper_telegram_previews(
     generation_block_reason = ""
     if expected_run_id:
         source_run_id = str(source.get("paper_generation_run_id") or "")
+        source_research_generation_id = str(
+            source.get("research_observation_generation_id") or ""
+        )
         if source.get("current_generation_compatible") is not True:
             generation_block_reason = "preview_generation_not_current"
         elif source_run_id != expected_run_id:
             generation_block_reason = "preview_generation_run_mismatch"
-        elif any(
-            str(item.get("paper_generation_run_id") or "") != expected_run_id
+        elif source_research_generation_id:
+            from src.research_lab.paper_telegram_preview import (
+                research_observation_generation_id,
+            )
+
+            if (
+                research_observation_generation_id(Path(private_root))
+                != source_research_generation_id
+            ):
+                generation_block_reason = "research_preview_generation_stale"
+        if not generation_block_reason and any(
+            not (
+                str(item.get("paper_generation_run_id") or "") == expected_run_id
+                or (
+                    not str(item.get("paper_generation_run_id") or "")
+                    and str(item.get("validation_tier") or "") == "farm_calculated"
+                    and bool(source_research_generation_id)
+                    and str(item.get("research_observation_generation_id") or "")
+                    == source_research_generation_id
+                )
+            )
             for item in items
         ):
             generation_block_reason = "preview_item_generation_run_mismatch"

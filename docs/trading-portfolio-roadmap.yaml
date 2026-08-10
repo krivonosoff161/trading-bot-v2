@@ -232,7 +232,7 @@ modules:
       - tests/test_rcc_preheartbeat_startup.py
       - tests/test_windows_listener_probe.py
       - tests/test_product_progress.py
-    missing_evidence: a green 48-hour canary proving product-stage SLO and generation freshness on the private runtime
+    missing_evidence: a green 48-hour canary proving product-stage SLO, bounded post-T+0 validation transitions and generation freshness on the private runtime
     next_gate: separate owner-authorized operational launch with process, database, and product-progress lanes all green
     authority: separately_owner_gated
     public_private_boundary: supervisor code is public; process identities, ports, heartbeats, and runtime evidence are private
@@ -271,7 +271,7 @@ modules:
     public_private_boundary: capability code, schemas, and synthetic fixtures are public; storage roots, plans, manifests, and payloads are private
   - module_id: delivery
     owner_repository: trading-bot-v2
-    purpose: render and optionally deliver deduplicated paper-only cards after lifecycle decisions
+    purpose: render and optionally deliver deduplicated paper-only cards, keeping validated v2 authority separate from content-bound authority-none farm research cards
     status: implemented_bounded
     dependencies: [paper_observation]
     implemented_evidence:
@@ -279,8 +279,8 @@ modules:
       - src/research_lab/paper_telegram_preview.py
       - tests/test_paper_telegram_sender.py
       - tests/test_paper_generation_cutover.py
-    missing_evidence: continuous delivery availability and externally unambiguous acknowledgements after private v2 cutover
-    next_gate: observe current-generation binding, delivery, and ACK state during a bounded paper canary
+    missing_evidence: continuous delivery availability, research-snapshot freshness and externally unambiguous acknowledgements after private v2 cutover
+    next_gate: observe current-generation binding, authority-none research-card freshness, delivery, and ACK state during a bounded paper canary
     authority: separately_owner_gated
     public_private_boundary: delivery contracts are public; recipients, tokens, messages, and ACK records are private
   - module_id: execution_boundary
