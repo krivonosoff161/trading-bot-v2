@@ -622,7 +622,10 @@ def _run_v2_main_paper_derived_chain(
         evidence_database_path=evidence_database_path,
     )
     require_current_generation("paper lineage", out["paper_lineage_index"])
-    out["outcome_retest_results"] = build_outcome_retest_results(private_root)
+    out["outcome_retest_results"] = build_outcome_retest_results(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
     require_current_generation(
         "outcome retest",
         out["outcome_retest_results"],

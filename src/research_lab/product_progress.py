@@ -96,13 +96,30 @@ def assess_post_t0_product_progress(
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, ensure_ascii=True, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=True, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        retry_delays = (0.05, 0.1, 0.2, 0.4, 0.8)
+        for attempt in range(len(retry_delays) + 1):
+            try:
+                os.replace(temporary, path)
+                return
+            except OSError as exc:
+                transient = isinstance(exc, PermissionError) or getattr(
+                    exc, "winerror", None
+                ) in {5, 32, 33}
+                if not transient or attempt == len(retry_delays):
+                    raise
+                time.sleep(retry_delays[attempt])
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def checkpoint_path(private_root: Path, component: str) -> Path:

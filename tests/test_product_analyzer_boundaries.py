@@ -43,6 +43,27 @@ def test_telegram_main_keyboard_surfaces_product_modes():
     assert {"🔍 Анализ", "⭐ VIP", "💡 Обучение"} <= labels
 
 
+def test_telegram_analysis_button_routes_to_main_menu_without_network(monkeypatch):
+    telegram_bot = _telegram_bot_module()
+    routed = []
+
+    async def fake_main_menu(chat_id):
+        routed.append(chat_id)
+
+    monkeypatch.setattr(telegram_bot, "is_subscribed", lambda _chat_id: True)
+    monkeypatch.setattr(telegram_bot, "get_status", lambda _chat_id: {"plan": "monthly"})
+    monkeypatch.setattr(telegram_bot, "record_message_audit", lambda **_kwargs: None)
+    monkeypatch.setattr(telegram_bot, "_send_main_menu", fake_main_menu)
+
+    asyncio.run(
+        telegram_bot.handle_update(
+            {"message": {"chat": {"id": 123, "type": "private"}, "text": "🔍 Анализ"}}
+        )
+    )
+
+    assert routed == ["123"]
+
+
 def test_telegram_manual_symbol_normalizer_accepts_only_symbols():
     telegram_bot = _telegram_bot_module()
 

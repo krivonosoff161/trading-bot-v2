@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from src.research_lab.product_progress import (
     publish_checkpoint,
     scanner_metrics,
 )
+from src.research_lab import product_progress
 
 
 def _steady_report(*, waiting: bool) -> dict[str, object]:
@@ -30,6 +32,102 @@ def _steady_report(*, waiting: bool) -> dict[str, object]:
         "paper_only": True,
         "execution_allowed": False,
     }
+
+
+def test_checkpoint_retries_transient_windows_replace_contention(
+    tmp_path: Path, monkeypatch
+) -> None:
+    real_replace = os.replace
+    attempts = 0
+
+    def contended_replace(source, target):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 3:
+            exc = PermissionError("synthetic sharing denial")
+            exc.winerror = 5
+            raise exc
+        real_replace(source, target)
+
+    monkeypatch.setattr(product_progress.os, "replace", contended_replace)
+    monkeypatch.setattr(product_progress.time, "sleep", lambda _delay: None)
+
+    publish_checkpoint(
+        tmp_path,
+        component="farm_progress",
+        sequence=1,
+        status="progress",
+        metrics={"stage": "paper_generation_v2", "milestone": "chunk_completed"},
+        completed_at=1.0,
+    )
+
+    assert attempts == 4
+    assert json.loads(
+        (tmp_path / "state" / "product_progress" / "farm_progress.json").read_text(
+            encoding="utf-8"
+        )
+    )["sequence"] == 1
+    assert not list((tmp_path / "state" / "product_progress").glob(".*.tmp"))
+
+
+def test_checkpoint_persistent_windows_contention_fails_closed_and_cleans_temp(
+    tmp_path: Path, monkeypatch
+) -> None:
+    attempts = 0
+
+    def always_contended(_source, _target):
+        nonlocal attempts
+        attempts += 1
+        exc = PermissionError("synthetic sharing denial")
+        exc.winerror = 32
+        raise exc
+
+    monkeypatch.setattr(product_progress.os, "replace", always_contended)
+    monkeypatch.setattr(product_progress.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(PermissionError, match="synthetic sharing denial"):
+        publish_checkpoint(
+            tmp_path,
+            component="farm_progress",
+            sequence=1,
+            status="progress",
+            metrics={"stage": "paper_generation_v2", "milestone": "chunk_completed"},
+            completed_at=1.0,
+        )
+
+    assert attempts == 6
+    progress_dir = tmp_path / "state" / "product_progress"
+    assert not (progress_dir / "farm_progress.json").exists()
+    assert not list(progress_dir.glob(".*.tmp"))
+
+
+def test_checkpoint_uses_unique_temporary_name_per_write(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sources = []
+    real_replace = os.replace
+
+    def observe_replace(source, target):
+        sources.append(Path(source).name)
+        real_replace(source, target)
+
+    ticks = iter((101, 102))
+    monkeypatch.setattr(product_progress.time, "time_ns", lambda: next(ticks))
+    monkeypatch.setattr(product_progress.os, "replace", observe_replace)
+
+    for sequence in (1, 2):
+        publish_checkpoint(
+            tmp_path,
+            component="farm_progress",
+            sequence=sequence,
+            status="progress",
+            metrics={"stage": "paper_generation_v2", "milestone": "chunk_completed"},
+            completed_at=float(sequence),
+        )
+
+    assert len(set(sources)) == 2
+    assert sources[0].endswith(".101.tmp")
+    assert sources[1].endswith(".102.tmp")
 
 
 def test_post_t0_pending_generation_is_bounded_transition() -> None:

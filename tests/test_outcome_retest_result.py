@@ -11,7 +11,8 @@ from src.research_lab.outcome_retest_result import build_outcome_retest_results
 
 @pytest.fixture(autouse=True)
 def _trusted_training_projection(monkeypatch):
-    def load(private_root):
+    def load(private_root, *, evidence_database_path=None):
+        del evidence_database_path
         path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
         rows = [
             json.loads(line)
@@ -34,6 +35,31 @@ def _trusted_training_projection(monkeypatch):
         }
 
     monkeypatch.setattr(outcome_retest_result, "load_current_training_evidence", load)
+
+
+def test_outcome_retest_uses_explicit_paper_evidence_database(
+    tmp_path, monkeypatch
+):
+    expected = tmp_path / "authority" / "paper-evidence.sqlite3"
+    observed = []
+
+    def load(_private_root, *, evidence_database_path=None):
+        observed.append(evidence_database_path)
+        return {
+            "items": [],
+            "paper_generation_run_id": "run-current",
+            "current_generation_compatible": True,
+        }
+
+    monkeypatch.setattr(outcome_retest_result, "load_current_training_evidence", load)
+
+    summary = build_outcome_retest_results(
+        tmp_path,
+        evidence_database_path=expected,
+    )
+
+    assert observed == [expected]
+    assert summary["training_evidence"]["paper_generation_run_id"] == "run-current"
 
 
 def _completed_retest(

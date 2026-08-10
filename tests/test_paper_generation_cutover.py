@@ -583,7 +583,10 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
     monkeypatch.setattr(
         outcome_retest_result,
         "build_outcome_retest_results",
-        lambda *_a: {"training_evidence": bound()},
+        lambda *_a, **kwargs: (
+            calls.append(("outcome_retest", kwargs.get("evidence_database_path")))
+            or {"training_evidence": bound()}
+        ),
     )
     monkeypatch.setattr(
         system_analyst_cycle, "run_system_analyst_cycle", lambda *_a, **_k: bound()
@@ -629,6 +632,7 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
         "preview",
         "training",
         "lineage",
+        "outcome_retest",
         "calibration",
         "memory",
         "quality",
