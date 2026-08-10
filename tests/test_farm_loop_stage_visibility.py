@@ -1394,7 +1394,16 @@ def test_production_memory_refresh_blocks_snapshot_after_owner_lease_failure(
     milestones: list[str] = []
     snapshot_written = False
 
-    def build(_root, *, progress, check_active):
+    def build(
+        _root,
+        *,
+        progress,
+        check_active,
+        reject_cache_path,
+        build_stats,
+    ):
+        assert reject_cache_path.name == "setup_outcome_memory_reject_cache.json"
+        build_stats["reject_characterization"] = {"recomputed": 10}
         check_active()
         progress("lifecycle_loaded", 10, 10)
         milestones.append("lifecycle_loaded")
@@ -1451,7 +1460,15 @@ def test_production_memory_refresh_cancels_on_stop_intent_before_snapshot(
     )
     snapshot_written = False
 
-    def build(_root, *, progress, check_active):
+    def build(
+        _root,
+        *,
+        progress,
+        check_active,
+        reject_cache_path,
+        build_stats,
+    ):
+        assert reject_cache_path.name == "setup_outcome_memory_reject_cache.json"
         check_active()
         progress("unreachable", 1, 1)
         return []
@@ -1477,3 +1494,73 @@ def test_production_memory_refresh_cancels_on_stop_intent_before_snapshot(
         )
 
     assert snapshot_written is False
+
+
+def test_production_memory_refresh_publishes_incremental_cache_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import setup_outcome_memory as memory
+
+    args = SimpleNamespace(task_claim_failure_signal=None, stop_file="")
+    product_evidence = {
+        "summary": {
+            "rows": 2,
+            "terminal_rows": 1,
+            "paper_pnl_usdt": 0.5,
+        },
+        "paper_generation_run_id": "run-v2",
+        "generation_status": "complete",
+        "current_generation_compatible": True,
+    }
+    captured: dict[str, object] = {}
+
+    def build(
+        _root,
+        *,
+        progress,
+        check_active,
+        reject_cache_path,
+        build_stats,
+    ):
+        check_active()
+        assert reject_cache_path.name == "setup_outcome_memory_reject_cache.json"
+        build_stats["reject_characterization"] = {
+            "cache_hits": 49,
+            "recomputed": 1,
+            "run_artifacts_reread": 1,
+        }
+        progress("records_built", 50, 50)
+        return []
+
+    def write_snapshot(_root, *, records, product_paper_memory):
+        captured["records"] = records
+        captured["product_paper_memory"] = product_paper_memory
+        return tmp_path / "state" / "derived" / "setup_outcome_memory.json"
+
+    monkeypatch.setattr(memory, "build_memory_index", build)
+    monkeypatch.setattr(memory, "summarize_memory", lambda _records: {"total": 50})
+    monkeypatch.setattr(
+        memory,
+        "summarize_product_training_memory",
+        lambda *_args, **_kwargs: product_evidence,
+    )
+    monkeypatch.setattr(memory, "write_memory_snapshot", write_snapshot)
+    monkeypatch.setattr(farm_loop, "_write_loop_status", lambda *_args, **_kwargs: True)
+
+    out = farm_loop._refresh_setup_outcome_memory(
+        args,
+        tmp_path,
+        apply=True,
+        loop=True,
+        cycle_started_at=100.0,
+    )
+
+    assert out["reject_characterization"] == {
+        "cache_hits": 49,
+        "recomputed": 1,
+        "run_artifacts_reread": 1,
+    }
+    assert captured["product_paper_memory"] is product_evidence
+    assert out["paper_generation_run_id"] == "run-v2"
+    assert out["current_generation_compatible"] is True

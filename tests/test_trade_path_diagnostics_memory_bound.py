@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import gc
+import json
+import os
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from src.research_lab import trade_path_diagnostics as diagnostics
 
@@ -118,3 +122,324 @@ def test_characterize_rejects_keeps_one_run_artifact_index_at_a_time(
     assert ("run_artifacts_released", 3, 3) in milestones
     assert ("rejects_characterized", 4, 4) in milestones
     assert active_checks >= len(source) + len(by_run) * 2
+
+
+def _source_row(index: int, *, label: str, updated_at: float = 1.0) -> dict[str, Any]:
+    return {
+        "uc_key": f"uc-{index}",
+        "symbol": "X",
+        "timeframe": "1h",
+        "family": "momentum_breakout",
+        "params_hash": f"ph-{index}",
+        "n_trades": 10,
+        "avg_net_pct": -0.1,
+        "regime_bucket": "",
+        "hard_status": "",
+        "validation_status": "REJECT",
+        "decision": "REJECT",
+        "run_dir_label": label,
+        "updated_at": updated_at,
+    }
+
+
+def _write_run(tmp_path: Path, label: str, rows: list[dict[str, Any]]) -> None:
+    target = tmp_path / label / "metrics.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "params": {"id": row["params_hash"]},
+                        "metrics": {"n_trades": 10, "avg_net_pct": -0.1},
+                        "trades": [],
+                    }
+                    for row in rows
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_incremental_reject_cache_skips_unchanged_historical_run_artifacts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [
+        _source_row(0, label="runs/a"),
+        _source_row(1, label="runs/a"),
+        _source_row(2, label="runs/b"),
+    ]
+    _write_run(tmp_path, "runs/a", source[:2])
+    _write_run(tmp_path, "runs/b", source[2:])
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    # Keep the result lookup deterministic without coupling this cache test to
+    # the public params-hash implementation.
+    calls: list[str] = []
+
+    def load_run(_root: Path, label: str):
+        calls.append(label)
+        members = [row for row in source if row["run_dir_label"] == label]
+        return {
+            row["params_hash"]: {
+                "metrics": {"n_trades": 10, "avg_net_pct": -0.1},
+                "trades": [],
+            }
+            for row in members
+        }
+
+    monkeypatch.setattr(diagnostics, "_index_run_results", load_run)
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+
+    first, first_stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+    calls.clear()
+    second, second_stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+
+    assert [row["uc_key"] for row in first] == [row["uc_key"] for row in second]
+    assert first_stats["recomputed"] == 3
+    assert first_stats["run_artifacts_reread"] == 2
+    assert second_stats["cache_hits"] == 3
+    assert second_stats["recomputed"] == 0
+    assert second_stats["run_artifacts_reread"] == 0
+    assert second_stats["cache_written"] is False
+    assert calls == []
+
+
+def test_incremental_reject_cache_matches_full_characterization_on_cache_miss(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [
+        _source_row(0, label="runs/a"),
+        _source_row(1, label="runs/a"),
+    ]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+
+    def load_run(_root: Path, _label: str):
+        return {
+            "ph-0": {
+                "metrics": {"n_trades": 10, "avg_net_pct": -0.1},
+                "trades": [],
+            },
+            "ph-1": {
+                "metrics": {"n_trades": 2, "avg_net_pct": 0.2},
+                "trades": [],
+            },
+        }
+
+    monkeypatch.setattr(diagnostics, "_index_run_results", load_run)
+    metrics = tmp_path / "runs" / "a" / "metrics.json"
+    metrics.parent.mkdir(parents=True, exist_ok=True)
+    metrics.write_text("{}", encoding="utf-8")
+
+    full = diagnostics.characterize_rejects(tmp_path)
+    incremental, stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=tmp_path / "state" / "derived" / "reject-cache.json",
+    )
+
+    assert incremental == full
+    assert stats["recomputed"] == len(full)
+
+
+def test_incremental_reject_cache_invalidates_classifier_context_change(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [_source_row(0, label="")]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", lambda: set())
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+    first, _first_stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+
+    monkeypatch.setattr(
+        diagnostics,
+        "oi_micro_families",
+        lambda: {"momentum_breakout"},
+    )
+    second, second_stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+
+    assert first[0]["reject_subreason"] == "confirmed_bad"
+    assert second[0]["reject_subreason"] == "missing_oi_micro"
+    assert second_stats["cache_hits"] == 0
+    assert second_stats["recomputed"] == 1
+
+
+def test_incremental_reject_cache_bootstraps_old_snapshot_and_rereads_only_delta(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    old = [
+        _source_row(index, label="runs/old", updated_at=1.0)
+        for index in range(2_000)
+    ]
+    new = [_source_row(2_000, label="runs/new", updated_at=30.0)]
+    source = old + new
+    _write_run(tmp_path, "runs/old", old)
+    _write_run(tmp_path, "runs/new", new)
+    snapshot = tmp_path / "state" / "derived" / "setup_outcome_memory.json"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "uc_key": row["uc_key"],
+                        "symbol": row["symbol"],
+                        "timeframe": row["timeframe"],
+                        "family": row["family"],
+                        "regime_bucket": "",
+                        "hard_status": "",
+                        "rejection_reason": "confirmed_bad",
+                        "n_trades": 10,
+                        "baseline_net": -0.1,
+                        "avg_mfe_pct": 0.0,
+                        "avg_mae_pct": 0.0,
+                        "avg_capture_ratio": 0.0,
+                    }
+                    for row in old
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(tmp_path / "runs/old" / "metrics.json", (10.0, 10.0))
+    os.utime(snapshot, (20.0, 20.0))
+    os.utime(tmp_path / "runs/new" / "metrics.json", (30.0, 30.0))
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    calls: list[str] = []
+
+    def load_run(_root: Path, label: str):
+        calls.append(label)
+        return {
+            "ph-2000": {
+                "metrics": {"n_trades": 10, "avg_net_pct": -0.1},
+                "trades": [],
+            }
+        }
+
+    monkeypatch.setattr(diagnostics, "_index_run_results", load_run)
+
+    rows, stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=tmp_path / "state" / "derived" / "reject-cache.json",
+        bootstrap_snapshot_path=snapshot,
+    )
+
+    assert len(rows) == 2_001
+    assert stats["snapshot_bootstrap_hits"] == 2_000
+    assert stats["recomputed"] == 1
+    assert stats["run_artifacts_reread"] == 1
+    assert calls == ["runs/new"]
+
+
+def test_incremental_reject_cache_invalidates_one_changed_run_group(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [
+        _source_row(0, label="runs/a"),
+        _source_row(1, label="runs/a"),
+        _source_row(2, label="runs/b"),
+    ]
+    _write_run(tmp_path, "runs/a", source[:2])
+    _write_run(tmp_path, "runs/b", source[2:])
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    calls: list[str] = []
+
+    def load_run(_root: Path, label: str):
+        calls.append(label)
+        return {
+            row["params_hash"]: {
+                "metrics": {"n_trades": 10, "avg_net_pct": -0.1},
+                "trades": [],
+            }
+            for row in source
+            if row["run_dir_label"] == label
+        }
+
+    monkeypatch.setattr(diagnostics, "_index_run_results", load_run)
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+    diagnostics.characterize_rejects_incremental(tmp_path, cache_path=cache)
+    calls.clear()
+    metrics_a = tmp_path / "runs/a" / "metrics.json"
+    metrics_a.write_text(metrics_a.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+    _rows, stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+
+    assert stats["cache_hits"] == 1
+    assert stats["invalidated"] == 2
+    assert stats["recomputed"] == 2
+    assert calls == ["runs/a"]
+
+
+def test_incremental_reject_cache_publication_is_atomic_and_cancellable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [_source_row(0, label="")]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text("preserved", encoding="utf-8")
+    monkeypatch.setattr(
+        diagnostics.os,
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("synthetic replace failure")),
+    )
+
+    with pytest.raises(OSError, match="synthetic replace failure"):
+        diagnostics.characterize_rejects_incremental(tmp_path, cache_path=cache)
+
+    assert cache.read_text(encoding="utf-8") == "preserved"
+    assert not list(cache.parent.glob(".reject-cache.json.*.tmp"))
+
+
+def test_incremental_reject_cache_stop_prevents_publication(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [_source_row(index, label="") for index in range(20)]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    checks = 0
+
+    class Stopped(RuntimeError):
+        pass
+
+    def check_active() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 10:
+            raise Stopped("synthetic canonical stop")
+
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+    with pytest.raises(Stopped, match="synthetic canonical stop"):
+        diagnostics.characterize_rejects_incremental(
+            tmp_path,
+            cache_path=cache,
+            check_active=check_active,
+        )
+
+    assert not cache.exists()

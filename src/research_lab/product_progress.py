@@ -212,6 +212,7 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     analyst = _mapping(out.get("system_analyst_feedback"))
     analyst_training = _mapping(analyst.get("training_evidence"))
     memory = _mapping(out.get("setup_outcome_memory_refresh"))
+    reject_memory = _mapping(memory.get("reject_characterization"))
     storage = _mapping(out.get("runtime_storage_maintenance"))
     preview_tiers = _mapping(preview.get("by_validation_tier"))
     outcome_generation = _mapping(outcome.get("training_evidence"))
@@ -334,6 +335,17 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
         "analyst_input_rows": int(analyst_training.get("eligible_rows") or 0),
         "memory_rows": int(memory.get("product_rows") or 0),
         "memory_terminal_rows": int(memory.get("product_terminal_rows") or 0),
+        "memory_reject_cache_hits": int(reject_memory.get("cache_hits") or 0),
+        "memory_reject_snapshot_bootstrap_hits": int(
+            reject_memory.get("snapshot_bootstrap_hits") or 0
+        ),
+        "memory_reject_recomputed": int(reject_memory.get("recomputed") or 0),
+        "memory_run_artifacts_reread": int(
+            reject_memory.get("run_artifacts_reread") or 0
+        ),
+        "memory_run_artifacts_unavailable": int(
+            reject_memory.get("run_artifacts_unavailable") or 0
+        ),
         "storage_maintenance_state": str(storage.get("state") or "unknown"),
         "product_cycle_complete": out.get("product_cycle_complete") is True,
         "outcome_rows": int(

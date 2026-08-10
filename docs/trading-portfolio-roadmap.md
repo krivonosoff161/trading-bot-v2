@@ -2,9 +2,9 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-09
-- Verified against: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
-- Trading repository SHA: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
+- Verified: 2026-08-10
+- Verified against: `ee927237e6ba0f1e49261cdf6030bb4f5401401e`
+- Trading repository SHA: `ee927237e6ba0f1e49261cdf6030bb4f5401401e`
 - Validator repository SHA: `0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6`
 - Scope: public-safe ownership, capability, evidence, and authority map
 - Evidence: [machine source](trading-portfolio-roadmap.yaml) and
@@ -44,7 +44,7 @@ execution -> outside the supported portfolio and separately owner-gated
 | Module | Owner | Status | Authority | Proven boundary | Next gate |
 |---|---|---|---|---|---|
 | Research ingestion | `trading-bot-v2` | implemented bounded | none | Public inputs; collected data stays private. | Prove lineage and degraded behavior in a bounded canary. |
-| Strategy Lab | `trading-bot-v2` | implemented bounded | paper only | Schedules research; cannot place orders. | Complete the long-duration reliability window. |
+| Strategy Lab | `trading-bot-v2` | implemented bounded | paper only | Schedules research without orders; derived setup memory invalidates only changed classifier/source/artifact-bound history instead of rereading every run each cycle. | Complete the long-duration reliability window and observe bounded cache invalidation. |
 | Experiment registry | `trading-bot-v2` | implemented | none | Public schemas; private rows and rankings. | Preserve lineage compatibility. |
 | Deterministic simulation | `trading-bot-v2` | implemented bounded | none | Declared scenario truth tiers, not market fidelity. | Add only evidence-backed dimensions. |
 | Skeptical validation | `honest-backtest` | implemented bounded | none | A pass means not rejected, never profitable. | Maintain the versioned bridge and untouched evidence. |

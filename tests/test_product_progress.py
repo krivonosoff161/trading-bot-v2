@@ -602,6 +602,13 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
             "setup_outcome_memory_refresh": {
                 "product_rows": 10,
                 "product_terminal_rows": 2,
+                "reject_characterization": {
+                    "cache_hits": 26,
+                    "snapshot_bootstrap_hits": 27,
+                    "recomputed": 3,
+                    "run_artifacts_reread": 1,
+                    "run_artifacts_unavailable": 2,
+                },
             },
             "runtime_storage_maintenance": {"state": "ready"},
             "product_cycle_complete": True,
@@ -624,6 +631,11 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
     assert metrics["analyst_routed"] == 8
     assert metrics["memory_rows"] == 10
     assert metrics["memory_terminal_rows"] == 2
+    assert metrics["memory_reject_cache_hits"] == 26
+    assert metrics["memory_reject_snapshot_bootstrap_hits"] == 27
+    assert metrics["memory_reject_recomputed"] == 3
+    assert metrics["memory_run_artifacts_reread"] == 1
+    assert metrics["memory_run_artifacts_unavailable"] == 2
     assert metrics["storage_maintenance_state"] == "ready"
     assert metrics["product_cycle_complete"] is True
 

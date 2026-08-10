@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-10
-- Verified against: `c5615acd689e4a4af49c6e5ee4913fd0d6b187e0`
+- Verified against: `ee927237e6ba0f1e49261cdf6030bb4f5401401e`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -81,6 +81,14 @@ dependency, not by a route to live trading.
   remain immutable evidence rather than a startup work queue. Stage milestones
   and stop/claim checks make this maintenance interruptible without publishing a
   premature farm-ready checkpoint.
+- Setup-outcome memory no longer rereads every historical run artifact in each
+  product cycle. Its derived cache binds the deterministic reject-taxonomy
+  version and context, every candidate source digest, and the bounded
+  run-artifact stat identity. A previous complete snapshot bootstraps only
+  unchanged pre-snapshot rows; changed groups use the ordinary classifier and
+  atomic cache publication. Cache hits, bootstrap hits, invalidations,
+  recomputations, rereads, and unavailable artifacts remain visible in product
+  progress, while current-generation training selection stays authoritative.
 - Telegram transport success is not revoked by a later runtime-log sink error;
   the acknowledged message id reaches the outbox. A new current-attempt ambiguity
   fails closed, while carried ambiguous debt stays visible and blocked from

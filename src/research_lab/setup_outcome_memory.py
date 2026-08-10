@@ -36,7 +36,12 @@ from src.research_lab.paper_projection_reader import (
     select_current_terminal_training_rows,
 )
 from src.research_lab.setup_lifecycle import HARD_FAILED, derive_setup_lifecycle
-from src.research_lab.trade_path_diagnostics import POWER_FLOOR, characterize_rejects
+from src.research_lab.trade_path_diagnostics import (
+    POWER_FLOOR,
+    REJECT_CLASSIFIER_VERSION,
+    characterize_rejects,
+    characterize_rejects_incremental,
+)
 
 ELIGIBLE_LITE = {"FORWARD_PAPER", "REGIME_SPECIFIC"}
 
@@ -842,6 +847,8 @@ def build_memory_index(
     *,
     progress: MemoryProgress | None = None,
     check_active: Callable[[], None] | None = None,
+    reject_cache_path: Path | None = None,
+    build_stats: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """One unified outcome record per unique candidate (derived; never written back to source)."""
     private_root = Path(private_root)
@@ -863,9 +870,8 @@ def build_memory_index(
         progress("lifecycle_loaded", len(lifecycle), len(lifecycle))
     if check_active is not None:
         check_active()
-    subreason = {
-        r["uc_key"]: r
-        for r in characterize_rejects(
+    if reject_cache_path is None:
+        reject_rows = characterize_rejects(
             private_root,
             progress=(
                 None
@@ -878,7 +884,37 @@ def build_memory_index(
             ),
             check_active=check_active,
         )
-    }
+        reject_stats = {
+            "schema": "RejectCharacterizationFullScan.v1",
+            "sources": len(reject_rows),
+            "cache_hits": 0,
+            "snapshot_bootstrap_hits": 0,
+            "recomputed": len(reject_rows),
+            "invalidated": 0,
+            "cache_written": False,
+        }
+    else:
+        reject_rows, reject_stats = characterize_rejects_incremental(
+            private_root,
+            cache_path=Path(reject_cache_path),
+            bootstrap_snapshot_path=Path(private_root)
+            / "state"
+            / "derived"
+            / "setup_outcome_memory.json",
+            progress=(
+                None
+                if progress is None
+                else lambda stage, completed, total: progress(
+                    f"rejects:{stage}",
+                    completed,
+                    total,
+                )
+            ),
+            check_active=check_active,
+        )
+    if build_stats is not None:
+        build_stats["reject_characterization"] = reject_stats
+    subreason = {r["uc_key"]: r for r in reject_rows}
     if progress is not None:
         progress("rejects_characterized", len(subreason), len(lifecycle))
     recovered_cells = _recovered_cells(private_root)
@@ -1128,6 +1164,7 @@ def write_memory_snapshot(
     private_root: Path,
     *,
     records: list[dict[str, Any]] | None = None,
+    product_paper_memory: dict[str, Any] | None = None,
 ) -> Path:
     """Write the derived, rebuildable read-model (NOT a source of truth, never gates money)."""
     memory_records = build_memory_index(private_root) if records is None else records
@@ -1136,10 +1173,15 @@ def write_memory_snapshot(
     path = out_dir / "setup_outcome_memory.json"
     payload = {
         "schema": "setup_outcome_memory.v1",
+        "reject_classifier_version": REJECT_CLASSIFIER_VERSION,
         "disclaimer": "Derived read-model rebuilt from canonical sources. Research-only: no "
         "outcome here grants PAPER_FORWARD_READY or is a trade signal.",
         "summary": summarize_memory(memory_records),
-        "product_paper_memory": summarize_product_training_memory(private_root),
+        "product_paper_memory": (
+            summarize_product_training_memory(private_root)
+            if product_paper_memory is None
+            else product_paper_memory
+        ),
         "records": memory_records,
     }
     path.write_text(
