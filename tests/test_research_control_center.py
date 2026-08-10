@@ -1512,6 +1512,33 @@ def test_runtime_probe_does_not_set_t0_before_real_product_progress(
     assert events == []
 
 
+def test_runtime_probe_allows_bounded_product_transition_after_t0(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, events = _runtime_probe_center()
+    center._runtime_ready = True
+    center._product_progress_ready = False
+    ollama_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 1_000.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    sample = center._fast_runtime_safety_probe()
+
+    assert sample["state"] == "product_transitioning"
+    assert sample["ready"] is True
+    assert sample["product_progress_ready"] is False
+    assert sample["product_progress_transitioning"] is True
+    assert events == []
+
+
 def test_runtime_probe_listener_loss_after_t0_is_immediate_hard_failure(
     monkeypatch,
     tmp_path: Path,

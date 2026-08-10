@@ -17,9 +17,11 @@ from src.research_lab.paper_signals.store import (
     append_signal,
     load_signals_strict,
     update_signal,
+    write_state_snapshot,
 )
 from src.research_lab.paper_signals.training_export import export_training_rows
 from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
+from src.research_lab.paper_telegram_sender import send_paper_telegram_previews
 from src.research_lab.setup_outcome_memory import summarize_product_training_memory
 from src.research_lab.trading_policy_calibration import build_trading_policy_calibration
 
@@ -202,6 +204,76 @@ def test_v2_empty_generation_preserves_broad_research_observation(tmp_path):
     ).fetchone()
     assert producer["expected_member_count"] == 0
     assert store.active_subject(broad.signal_id) is None
+
+
+def test_v2_empty_generation_delivers_broad_signal_only_as_research_card(tmp_path):
+    broad = _broad_signal()
+    append_signal(tmp_path, broad)
+    write_state_snapshot(tmp_path)
+    store, lease, account = _store_and_account(tmp_path)
+    result = _run(tmp_path, store, lease, account)
+
+    preview = build_paper_telegram_preview(
+        tmp_path,
+        fetch_public_chart_candles=False,
+        evidence_database_path=store.path,
+    )
+
+    assert preview["paper_generation_run_id"] == result["run_id"]
+    assert preview["research_observation_authority"] == "none"
+    assert preview["research_observation_items"] == 1
+    assert preview["by_validation_tier"] == {"farm_calculated": 1}
+    item = preview["items"][0]
+    assert item["source_signal_id"] == broad.signal_id
+    assert item["paper_generation_run_id"] == ""
+    assert item["research_observation_generation_id"].startswith(
+        "research_observation_"
+    )
+    assert store.active_subject(broad.signal_id) is None
+
+    delivery = send_paper_telegram_previews(
+        tmp_path,
+        expected_generation_run_id=result["run_id"],
+    )
+    assert delivery["generation_block_reason"] == ""
+    assert delivery["eligible_cards"] == 1
+    assert delivery["sent_messages"] == 0
+
+    broad.status = "closed_paper"
+    broad.outcome = {"result": "take", "net_pct": 1.0}
+    update_signal(tmp_path, broad)
+    training = export_training_rows(
+        tmp_path,
+        force=True,
+        evidence_database_path=store.path,
+    )
+    assert training["rows"] == 0
+    assert training["source_terminal_rows_unbound"] == 1
+    assert training["current_generation_compatible"] is True
+
+
+def test_v2_research_card_fails_closed_when_signal_snapshot_changes(tmp_path):
+    broad = _broad_signal()
+    append_signal(tmp_path, broad)
+    write_state_snapshot(tmp_path)
+    store, lease, account = _store_and_account(tmp_path)
+    result = _run(tmp_path, store, lease, account)
+    build_paper_telegram_preview(
+        tmp_path,
+        fetch_public_chart_candles=False,
+        evidence_database_path=store.path,
+    )
+
+    broad.reason_now = "new completed farm calculation"
+    update_signal(tmp_path, broad)
+    write_state_snapshot(tmp_path)
+    delivery = send_paper_telegram_previews(
+        tmp_path,
+        expected_generation_run_id=result["run_id"],
+    )
+
+    assert delivery["generation_block_reason"] == "research_preview_generation_stale"
+    assert delivery["eligible_cards"] == 0
 
 
 def test_non_pfr_signal_cannot_self_grant_v2_authority(tmp_path):

@@ -55,12 +55,15 @@ dependency, not by a route to live trading.
   operator-activated generation authority. One outer farm identity owns the
   co-located renewable paper fence; bridge, consumer, queue, observation,
   account, and projection promote atomically. Current-generation readers,
-  training, lineage, calibration, memory, quality, and Telegram delivery bind
+  training, lineage, calibration, memory, quality, and validated Telegram delivery bind
   to the resulting run. Producer membership is restricted to validation-bound
-  `pfr_farm` signals; broad research observations are excluded from generation
-  authority even if they carry forged validation-like fields, while a malformed
-  PFR identity still fails closed. Missing cutover, stale fence, stage failure,
-  or preview mismatch fails closed. Public code provides shadow-parity,
+  `pfr_farm` signals. Broad `farm` observations remain outside generation,
+  account, lifecycle, and training authority even if they carry forged
+  validation-like fields; the existing preview may deliver them only as labelled
+  `farm_calculated` research cards under an independently rechecked content-hash
+  envelope whose authority is `none`. A malformed PFR identity, changed research
+  snapshot, missing cutover, stale fence, stage failure, or preview mismatch fails
+  closed. Public code provides shadow-parity,
   activation, status, and non-destructive pre-runtime rollback primitives.
 - Scanner passes and completed farm cycles publish atomic, secret-free product
   checkpoints. The RCC supervises them on an independent lane: ordinary PIDs
@@ -71,7 +74,9 @@ dependency, not by a route to live trading.
   launch-time product boundary into the steady monitor and re-verifies current
   component sequences, so transition between monitor adapters cannot reclassify
   the same accepted startup checkpoint as pre-run; genuine post-T+0 staleness
-  retains the existing fail-closed SLO.
+  retains the existing fail-closed SLO. A normal fail-closed validation publication
+  may temporarily move product state to `product_transitioning` after T+0; it does
+  not reuse the startup timeout while fenced worker and product progress remain live.
 - RCC startup now publishes a digest-bound attempt identity and completed stage
   before the UI heartbeat exists. Constructor failures retain only their safe
   exception type, BAT wrappers preserve the real exit code, and the startup
