@@ -77,6 +77,9 @@ dependency, not by a route to live trading.
   retains the existing fail-closed SLO. A normal fail-closed validation publication
   may temporarily move product state to `product_transitioning` after T+0; it does
   not reuse the startup timeout while fenced worker and product progress remain live.
+  RCC and external canary adapters consume the same classifier: only an explicit
+  current-run validation wait without hard-fail reasons is transitional, while
+  every other non-ready report remains fail-closed.
 - RCC startup now publishes a digest-bound attempt identity and completed stage
   before the UI heartbeat exists. Constructor failures retain only their safe
   exception type, BAT wrappers preserve the real exit code, and the startup

@@ -7,10 +7,69 @@ from src.research_lab.product_progress import (
     ProductProgressMonitor,
     ProductProgressSlo,
     ProductProgressTransitionError,
+    assess_post_t0_product_progress,
     farm_metrics,
     publish_checkpoint,
     scanner_metrics,
 )
+
+
+def _steady_report(*, waiting: bool) -> dict[str, object]:
+    return {
+        "schema": "ProductProgressReport.v1",
+        "state": "starting" if waiting else "ready",
+        "ready": not waiting,
+        "hard_fail_reasons": [],
+        "components": {
+            "scanner": {"current_run": True},
+            "farm": {
+                "current_run": True,
+                "metrics": {"paper_generation_waiting": waiting},
+            },
+        },
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+
+def test_post_t0_pending_generation_is_bounded_transition() -> None:
+    assessment = assess_post_t0_product_progress(_steady_report(waiting=True))
+
+    assert assessment.state == "transitioning"
+    assert assessment.transitioning is True
+    assert assessment.hard_failure is None
+
+
+def test_post_t0_ready_generation_is_green() -> None:
+    assessment = assess_post_t0_product_progress(_steady_report(waiting=False))
+
+    assert assessment.state == "ready"
+    assert assessment.transitioning is False
+    assert assessment.hard_failure is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (
+            {"hard_fail_reasons": ["farm_product_progress_stale"]},
+            "product_progress:farm_product_progress_stale",
+        ),
+        (
+            {"state": "starting", "ready": False, "components": {}},
+            "product_progress_not_ready_after_t0",
+        ),
+        ({"execution_allowed": True}, "product_progress_report_invalid"),
+    ],
+)
+def test_post_t0_policy_fails_closed(mutation: dict[str, object], reason: str) -> None:
+    report = _steady_report(waiting=True)
+    report.update(mutation)
+
+    assessment = assess_post_t0_product_progress(report)
+
+    assert assessment.state == "failed"
+    assert assessment.hard_failure == reason
 
 
 def _publish_green(root: Path, *, completed_at: float = 101.0) -> None:

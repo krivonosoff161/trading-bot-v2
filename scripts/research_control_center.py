@@ -37,7 +37,10 @@ from src.research_lab.canary_checkpoint_policy import (
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
 from src.research_lab.ownership import current_process_identity, probe_process_identity
 from src.research_lab.paper_generation_cutover import current_checkout_revision
-from src.research_lab.product_progress import ProductProgressMonitor
+from src.research_lab.product_progress import (
+    ProductProgressMonitor,
+    assess_post_t0_product_progress,
+)
 from src.research_lab.rcc_startup_evidence import RccStartupEvidenceWriter
 from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
 from src.research_lab.windows_listener_probe import (
@@ -825,6 +828,9 @@ class ControlCenter(tk.Tk):
         self._runtime_monitor_wall_started_at: float | None = None
         self._product_progress_monitor: ProductProgressMonitor | None = None
         self._product_progress_ready = False
+        self._product_progress_post_t0_failure: str | None = (
+            "product_progress_not_sampled"
+        )
         self._runtime_ready = False
         self._runtime_lane_states: dict[str, str] = {}
         self._runtime_probe_stage_lock = threading.Lock()
@@ -1500,7 +1506,18 @@ class ControlCenter(tk.Tk):
             raise CanaryMonitorHardFailure("canonical_stop_intent_during_runtime")
 
         product_ready = bool(self._product_progress_ready)
-        product_transitioning = bool(self._runtime_ready and not product_ready)
+        product_post_t0_failure = self._product_progress_post_t0_failure
+        product_transitioning = bool(
+            self._runtime_ready
+            and not product_ready
+            and product_post_t0_failure is None
+        )
+        if (
+            self._runtime_ready
+            and not product_ready
+            and product_post_t0_failure is not None
+        ):
+            raise CanaryMonitorHardFailure(product_post_t0_failure)
         if (
             not product_ready
             and not self._runtime_ready
@@ -1596,6 +1613,8 @@ class ControlCenter(tk.Tk):
     def _on_runtime_monitor_sample(self, sample: CanaryLaneSample) -> None:
         if sample.lane == "product_progress":
             self._product_progress_ready = bool(sample.payload.get("ready") is True)
+            assessment = assess_post_t0_product_progress(sample.payload)
+            self._product_progress_post_t0_failure = assessment.hard_failure
         prior = self._runtime_lane_states.get(sample.lane)
         self._runtime_lane_states[sample.lane] = sample.state
         if prior != sample.state:
@@ -1625,6 +1644,7 @@ class ControlCenter(tk.Tk):
         self._runtime_monitor_started_at = time.monotonic()
         self._runtime_monitor_wall_started_at = time.time()
         self._product_progress_ready = False
+        self._product_progress_post_t0_failure = "product_progress_not_sampled"
         self._product_progress_monitor = ProductProgressMonitor(
             PRIVATE_ROOT,
             run_started_at=self._runtime_monitor_wall_started_at,
@@ -1655,6 +1675,7 @@ class ControlCenter(tk.Tk):
         self._runtime_monitor_wall_started_at = None
         self._product_progress_monitor = None
         self._product_progress_ready = False
+        self._product_progress_post_t0_failure = "product_progress_not_sampled"
         self._runtime_ready = False
         self._runtime_lane_states = {}
         self._requested_profile_keys = set()

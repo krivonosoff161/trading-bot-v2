@@ -232,7 +232,7 @@ modules:
       - tests/test_rcc_preheartbeat_startup.py
       - tests/test_windows_listener_probe.py
       - tests/test_product_progress.py
-    missing_evidence: a green 48-hour canary proving product-stage SLO, bounded post-T+0 validation transitions and generation freshness on the private runtime
+    missing_evidence: a green 48-hour canary proving the shared RCC/external post-T+0 classifier, product-stage SLO, bounded validation transitions and generation freshness on the private runtime
     next_gate: separate owner-authorized operational launch with process, database, and product-progress lanes all green
     authority: separately_owner_gated
     public_private_boundary: supervisor code is public; process identities, ports, heartbeats, and runtime evidence are private
