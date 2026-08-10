@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-10
-- Verified against: `b98d1bf57e4de3df29fb0a531a4d76ec9cf40bad`
+- Verified against: `f2d7ebf6392c6ccd694c847f0fdd15dc340e2c69`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -91,6 +91,12 @@ dependency, not by a route to live trading.
   RCC and external canary adapters consume the same classifier: only an explicit
   current-run validation wait without hard-fail reasons is transitional, while
   every other non-ready report remains fail-closed.
+- Canonical buffered scanner passes now have separate total-pass and article-
+  resolution wall budgets. Network extraction receives the remaining bounded
+  timeout, the unbounded archive fallback is excluded from this canonical mode,
+  and only completed source, document, normalization, or card chunks publish
+  progress. Deferred rows remain durable and visible as degraded backlog; they
+  do not hold RCC startup indefinitely or manufacture an empty success.
 - RCC startup now publishes a digest-bound attempt identity and completed stage
   before the UI heartbeat exists. Constructor failures retain only their safe
   exception type, BAT wrappers preserve the real exit code, and the startup

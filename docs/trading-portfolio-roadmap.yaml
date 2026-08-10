@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: b98d1bf57e4de3df29fb0a531a4d76ec9cf40bad
+  trading-bot-v2: f2d7ebf6392c6ccd694c847f0fdd15dc340e2c69
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -115,6 +115,10 @@ modules:
       - src/research_lab/market_data_provider.py
       - tests/test_research_lab_market_data_provider.py
       - src/scout/trigger_enrichment.py
+      - src/scout/news_buffer.py
+      - src/scout/page_extract.py
+      - tests/test_news_buffer.py
+      - tests/test_page_extract_bounded.py
     missing_evidence: continuous completeness and availability across public providers
     next_gate: prove lineage and degraded-mode behavior over a bounded paper canary
     authority: none

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -150,7 +151,16 @@ def test_scanner_ingest_summary_includes_tg_web(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(S, "market_ctx_line", lambda: None)
     monkeypatch.setattr(S, "okx_last", lambda inst: None)
     monkeypatch.setattr(S.NB, "ingest_items", lambda items: {"inserted": len(items), "updated": 0})
-    monkeypatch.setattr(S.NB, "resolve_pending", lambda limit: {"resolved": 0})
+    monkeypatch.setattr(
+        S.NB,
+        "resolve_pending",
+        lambda limit, **kwargs: {
+            "resolved": 0,
+            "remaining_selected": 4,
+            "budget_exhausted": True,
+            "stop_requested": False,
+        },
+    )
     monkeypatch.setattr(S.NB, "normalize_pending", lambda limit: {"ready": 0, "dropped": 0})
     monkeypatch.setattr(S.NB, "ready_items", lambda limit: [])
     monkeypatch.setattr(S.J, "write_ingest", lambda rows: len(rows))
@@ -159,5 +169,25 @@ def test_scanner_ingest_summary_includes_tg_web(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(S.PS, "expire_old", lambda: {"expired": 0})
 
     import asyncio
-    asyncio.run(S.run(limit=1, dry=False, use_buffer=True))
+    asyncio.run(
+        S.run(
+            limit=1,
+            dry=False,
+            use_buffer=True,
+            max_pass_seconds=30.0,
+            resolve_max_seconds=10.0,
+        )
+    )
     assert "TG_WEB=1" in capsys.readouterr().out
+    checkpoint = json.loads(
+        (
+            tmp_path
+            / "state"
+            / "product_progress"
+            / "scanner.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert checkpoint["status"] == "degraded"
+    assert checkpoint["metrics"]["budget_exhausted"] is True
+    assert checkpoint["metrics"]["resolver_deferred"] == 4
+    assert checkpoint["metrics"]["completed_chunks"] >= 2

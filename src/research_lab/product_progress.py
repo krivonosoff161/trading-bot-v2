@@ -18,7 +18,9 @@ from typing import Any, Mapping
 
 SCHEMA = "ProductProgressCheckpoint.v1"
 REPORT_SCHEMA = "ProductProgressReport.v1"
-SAFE_COMPONENTS = frozenset({"scanner", "farm_progress", "farm"})
+SAFE_COMPONENTS = frozenset(
+    {"scanner", "scanner_progress", "farm_progress", "farm"}
+)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -174,7 +176,11 @@ def scanner_metrics(
     dropped: int,
     llm_failures: int,
     provider_failures: int,
-) -> dict[str, int]:
+    budget_exhausted: bool = False,
+    resolver_deferred: int = 0,
+    completed_chunks: int = 0,
+    pass_elapsed_seconds: float = 0.0,
+) -> dict[str, int | bool | float]:
     return {
         "inputs": int(inputs),
         "fresh": int(fresh),
@@ -182,6 +188,10 @@ def scanner_metrics(
         "dropped": int(dropped),
         "llm_failures": int(llm_failures),
         "provider_failures": int(provider_failures),
+        "budget_exhausted": bool(budget_exhausted),
+        "resolver_deferred": int(resolver_deferred),
+        "completed_chunks": int(completed_chunks),
+        "pass_elapsed_seconds": float(pass_elapsed_seconds),
     }
 
 
@@ -483,6 +493,11 @@ class ProductProgressMonitor:
                 and int(metrics.get("provider_failures") or 0) > 0
             ):
                 degraded.append("scanner_provider_degraded")
+            if component == "scanner" and (
+                metrics.get("budget_exhausted") is True
+                or int(metrics.get("resolver_deferred") or 0) > 0
+            ):
+                degraded.append("scanner_bounded_work_deferred")
             if component == "farm" and current:
                 oldest = float(metrics.get("validation_oldest_age_seconds") or 0.0)
                 backlog_slo = float(

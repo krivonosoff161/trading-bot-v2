@@ -7,16 +7,32 @@ PICK (рой 02.06): Trafilatura (Apache-2.0, keyless, CPU-only, лучший э
 Без GPU, без ключей. Часть ingestion-стека (см. SCANNER_SPEC.md).
 """
 import json
+import math
+from configparser import ConfigParser
 
 
-def extract(url: str) -> dict | None:
+def _bounded_config(trafilatura, timeout_seconds: float | None) -> ConfigParser:
+    defaults = dict(trafilatura.settings.DEFAULT_CONFIG["DEFAULT"])
+    if timeout_seconds is not None:
+        bounded = max(1, int(math.ceil(float(timeout_seconds))))
+        defaults["DOWNLOAD_TIMEOUT"] = str(bounded)
+        defaults["EXTRACTION_TIMEOUT"] = str(bounded)
+    config = ConfigParser()
+    config["DEFAULT"] = defaults
+    return config
+
+
+def extract(url: str, *, timeout_seconds: float | None = None) -> dict | None:
     """Скачать страницу и извлечь чистый текст статьи + метаданные (title/date)."""
     try:
         import trafilatura
     except ImportError:
         return {"url": url, "error": "trafilatura не установлен → pip install trafilatura"}
     try:
-        downloaded = trafilatura.fetch_url(url)
+        downloaded = trafilatura.fetch_url(
+            url,
+            config=_bounded_config(trafilatura, timeout_seconds),
+        )
         if not downloaded:
             return None
         data = trafilatura.extract(

@@ -2,11 +2,82 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.scout import news_buffer as NB  # noqa: E402
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+def test_resolver_stops_at_wall_budget_after_real_completed_chunk(
+    tmp_path, monkeypatch
+):
+    db = tmp_path / "bounded.sqlite"
+    items = [
+        {
+            "title": f"Bounded article {index}",
+            "url": f"https://example.com/article-{index}",
+            "source": "synthetic",
+            "source_class": "rss",
+            "lead_class": "LAGGING",
+        }
+        for index in range(2)
+    ]
+    assert NB.ingest_items(items, path=db)["inserted"] == 2
+    clock = _Clock()
+    calls: list[str] = []
+
+    def extract(url: str, **_kwargs):
+        calls.append(url)
+        clock.value += 3.0
+        return {"title": "done", "text": "completed chunk " * 50}
+
+    monkeypatch.setattr(NB.page_extract, "extract", extract)
+    monkeypatch.setattr(NB, "_fallback_newspaper", lambda _url: pytest.fail("fallback"))
+    progress: list[dict] = []
+    result = NB.resolve_pending(
+        limit=2,
+        path=db,
+        max_wall_seconds=2.0,
+        monotonic=clock,
+        progress_callback=progress.append,
+    )
+
+    assert result["processed"] == 1
+    assert result["remaining_selected"] == 1
+    assert result["budget_exhausted"] is True
+    assert len(calls) == 1
+    assert [row["milestone"] for row in progress] == ["document_completed"]
+    assert NB.stats(path=db)["raw"][NB.STATUS_NEW] == 1
+
+
+def test_resolver_honours_stop_before_starting_another_document(tmp_path):
+    db = tmp_path / "stopped.sqlite"
+    assert NB.ingest_items(
+        [{"title": "leave queued", "url": "https://example.com/queued"}],
+        path=db,
+    )["inserted"] == 1
+
+    result = NB.resolve_pending(
+        limit=1,
+        path=db,
+        max_wall_seconds=10.0,
+        should_stop=lambda: True,
+    )
+
+    assert result["processed"] == 0
+    assert result["stop_requested"] is True
+    assert NB.stats(path=db)["raw"][NB.STATUS_NEW] == 1
 
 
 def test_news_buffer_ingest_resolve_normalize_ready(tmp_path):

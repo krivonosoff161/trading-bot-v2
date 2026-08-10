@@ -26,8 +26,10 @@ import datetime as dt
 import email.utils
 import html
 import json
+import math
 import os
 import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -89,6 +91,8 @@ RSS_FEEDS = [   # FALLBACK (имя, url) если реестр пуст; осн�
 UA = {"User-Agent": "Mozilla/5.0 (trading-bot-v2 scanner-v0; keyless)"}
 TIMEOUT = 20
 DEFAULT_LIMIT = 3
+MAX_CANONICAL_PASS_SECONDS = 540.0
+MAX_RESOLVE_SECONDS = 240.0
 LAYER = 1                                           # V0 = крипта-история (хардкод)
 TRIGGER = "rss_headline"
 
@@ -112,6 +116,43 @@ RATE_RUB_PER_1K = 0.5          # fallback, если usage не вернул cost
 
 def env_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_seconds(name: str, default: float, ceiling: float) -> float:
+    try:
+        value = float(os.getenv(name, "") or default)
+    except ValueError:
+        value = default
+    if not math.isfinite(value):
+        value = default
+    return max(1.0, min(value, ceiling))
+
+
+def _product_root() -> Path:
+    configured = os.environ.get("TRADING_BOT_RESEARCH_ROOT", "").strip()
+    return Path(configured) if configured else _ROOT
+
+
+def _scanner_stop_requested() -> bool:
+    return (_product_root() / "state" / "STOP_NEWS_SCANNER.txt").exists()
+
+
+def _publish_scanner_progress(
+    *, stage: str, completed_chunks: int, **metrics: int | float | bool
+) -> None:
+    completed_at = dt.datetime.now(tz=dt.timezone.utc).timestamp()
+    publish_checkpoint(
+        _product_root(),
+        component="scanner_progress",
+        sequence=max(1, int(completed_at * 1_000_000)),
+        status="progress",
+        metrics={
+            "stage": stage,
+            "completed_chunks": int(completed_chunks),
+            **metrics,
+        },
+        completed_at=completed_at,
+    )
 
 
 def canonical_url(url: str) -> str:
@@ -1346,7 +1387,42 @@ async def process_item(item: dict, mline: str | None, dry: bool,
 
 
 # ── оркестрация (одиночный проход) ───────────────────────────────────────────
-async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
+async def run(
+    limit: int,
+    dry: bool,
+    use_buffer: bool = False,
+    *,
+    max_pass_seconds: float | None = None,
+    resolve_max_seconds: float | None = None,
+    monotonic=time.monotonic,
+    should_stop=None,
+) -> None:
+    pass_started = monotonic()
+    bounded_pass_seconds = max_pass_seconds
+    if bounded_pass_seconds is not None:
+        bounded_pass_seconds = float(bounded_pass_seconds)
+        if not math.isfinite(bounded_pass_seconds):
+            raise ValueError("max_pass_seconds must be finite")
+        bounded_pass_seconds = max(
+            1.0, min(bounded_pass_seconds, MAX_CANONICAL_PASS_SECONDS)
+        )
+    pass_deadline = (
+        pass_started + bounded_pass_seconds
+        if bounded_pass_seconds is not None
+        else None
+    )
+    bounded_resolve_seconds = resolve_max_seconds
+    if bounded_resolve_seconds is not None:
+        bounded_resolve_seconds = float(bounded_resolve_seconds)
+        if not math.isfinite(bounded_resolve_seconds):
+            raise ValueError("resolve_max_seconds must be finite")
+        bounded_resolve_seconds = max(
+            1.0, min(bounded_resolve_seconds, MAX_RESOLVE_SECONDS)
+        )
+    stop_requested = should_stop or _scanner_stop_requested
+    completed_chunks = 0
+    budget_exhausted = False
+    resolver_deferred = 0
     LBG.reset_session()
     J.ensure_pending_store()
     if not dry:
@@ -1457,14 +1533,69 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     leading = listings + announcement_items + sec_items + unlock_items + tactical_items + fred_items + eia_items + opec_items + earnings_items   # опережающие/прямые сигналы
     native = market_tape_items + dex_items        # native event/market feeds (COINCIDENT)
     items = leading + risk_items + native + telegram_items + rss_items          # risk/official first, then TG/native/RSS
+    if not dry:
+        completed_chunks += 1
+        _publish_scanner_progress(
+            stage="sources_completed",
+            completed_chunks=completed_chunks,
+            inputs=len(items),
+            provider_failures=provider_failures,
+        )
     if not dry and items:                         # полный аудит: лог КАЖДОГО входящего до фильтров
         J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
                          "headline": it.get("title"), "url": it.get("url")} for it in items])
     if use_buffer and not dry:
         ing = NB.ingest_items(items)
         buffer_batch = max(limit * 4, 10)
-        resolved = NB.resolve_pending(limit=buffer_batch)
-        normalized_stats = NB.normalize_pending(limit=buffer_batch)
+        remaining_pass = (
+            None if pass_deadline is None else max(0.0, pass_deadline - monotonic())
+        )
+        resolve_budget = bounded_resolve_seconds
+        if remaining_pass is not None:
+            resolve_budget = (
+                remaining_pass
+                if resolve_budget is None
+                else min(resolve_budget, remaining_pass)
+            )
+
+        def resolver_progress(progress: dict) -> None:
+            nonlocal completed_chunks
+            completed_chunks += 1
+            _publish_scanner_progress(
+                stage="resolver_document_completed",
+                completed_chunks=completed_chunks,
+                resolver_completed=int(progress.get("completed_chunks") or 0),
+                resolver_selected=int(progress.get("selected") or 0),
+                resolver_remaining=int(progress.get("remaining_selected") or 0),
+            )
+
+        resolved = (
+            NB.resolve_pending(limit=buffer_batch)
+            if max_pass_seconds is None and resolve_max_seconds is None
+            else NB.resolve_pending(
+                limit=buffer_batch,
+                max_wall_seconds=resolve_budget,
+                progress_callback=resolver_progress,
+                should_stop=stop_requested,
+                monotonic=monotonic,
+            )
+        )
+        resolver_deferred = int(resolved.get("remaining_selected") or 0)
+        budget_exhausted = bool(resolved.get("budget_exhausted"))
+        if resolved.get("stop_requested"):
+            return
+        if pass_deadline is not None and monotonic() >= pass_deadline:
+            budget_exhausted = True
+            normalized_stats = {"ready": 0, "dropped": 0}
+        else:
+            normalized_stats = NB.normalize_pending(limit=buffer_batch)
+            completed_chunks += 1
+            _publish_scanner_progress(
+                stage="normalization_completed",
+                completed_chunks=completed_chunks,
+                normalized_ready=int(normalized_stats.get("ready") or 0),
+                normalized_dropped=int(normalized_stats.get("dropped") or 0),
+            )
         fresh = NB.ready_items(limit=max(limit * 10, limit))
         print(
             f"источники: LEADING(okx_list+okx_ann+SEC+unlock+tactical+fred+eia+opec+earnings)={len(leading)} + OKX_TAPE={len(market_tape_items)} + L2_RISK={len(risk_items)} + "
@@ -1485,6 +1616,11 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     total_cost = 0.0
     for it in fresh:
         if made >= limit:
+            break
+        if stop_requested():
+            return
+        if pass_deadline is not None and monotonic() >= pass_deadline:
+            budget_exhausted = True
             break
         canon = canonical_url(it.get("url") or "")
         res = await process_item(it, mline, dry, btc_ref=btc_ref,
@@ -1527,6 +1663,13 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
             print(f"  · handled [{res['handled']}]: {res['headline'][:65]}")
             continue
         made += 1
+        completed_chunks += 1
+        if not dry:
+            _publish_scanner_progress(
+                stage="card_completed",
+                completed_chunks=completed_chunks,
+                cards=made,
+            )
         if use_buffer and doc_id and not dry:
             NB.mark_status(doc_id, NB.STATUS_ANALYZED)
         r = res["row"]
@@ -1552,15 +1695,15 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         except Exception as exc:
             print(f"  storage-maintain: {exc}")
         completed_at = dt.datetime.now(tz=dt.timezone.utc).timestamp()
-        configured_root = os.environ.get("TRADING_BOT_RESEARCH_ROOT", "").strip()
-        product_root = Path(configured_root) if configured_root else _ROOT
+        product_root = _product_root()
+        pass_elapsed_seconds = max(0.0, monotonic() - pass_started)
         publish_checkpoint(
             product_root,
             component="scanner",
             sequence=max(1, int(completed_at * 1_000_000)),
             status=(
                 "degraded"
-                if provider_failures
+                if provider_failures or budget_exhausted or resolver_deferred
                 else "idle"
                 if not fresh
                 else "completed"
@@ -1572,6 +1715,10 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
                 dropped=n_dropped,
                 llm_failures=n_llm_fail,
                 provider_failures=provider_failures,
+                budget_exhausted=budget_exhausted,
+                resolver_deferred=resolver_deferred,
+                completed_chunks=completed_chunks,
+                pass_elapsed_seconds=pass_elapsed_seconds,
             ),
             completed_at=completed_at,
         )
@@ -1584,8 +1731,32 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="плумбинг без LLM/Telegram")
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="макс карточек за проход")
     ap.add_argument("--buffer", action="store_true", help="читать события из SQLite news_buffer после ingest/resolve/normalize")
+    ap.add_argument(
+        "--max-pass-seconds",
+        type=float,
+        default=_env_seconds(
+            "SCANNER_MAX_PASS_SECONDS", 480.0, MAX_CANONICAL_PASS_SECONDS
+        ),
+        help="bounded wall budget for one canonical scanner pass",
+    )
+    ap.add_argument(
+        "--resolve-max-seconds",
+        type=float,
+        default=_env_seconds(
+            "SCANNER_RESOLVE_MAX_SECONDS", 180.0, MAX_RESOLVE_SECONDS
+        ),
+        help="bounded wall budget for article resolution inside one pass",
+    )
     args = ap.parse_args()
-    asyncio.run(run(limit=args.limit, dry=args.dry_run, use_buffer=args.buffer))
+    asyncio.run(
+        run(
+            limit=args.limit,
+            dry=args.dry_run,
+            use_buffer=args.buffer,
+            max_pass_seconds=args.max_pass_seconds,
+            resolve_max_seconds=args.resolve_max_seconds,
+        )
+    )
 
 
 if __name__ == "__main__":

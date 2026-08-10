@@ -36,7 +36,8 @@ from urllib.parse import quote, urlsplit
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 # Consent-bypass (EU-стена): без неё страница статьи = consent.google.com без sg/ts.
 _COOKIES = {"SOCS": "CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg"}
-_TIMEOUT = 20
+DEFAULT_TIMEOUT_SECONDS = 20
+_TIMEOUT = DEFAULT_TIMEOUT_SECONDS
 _URL_RE = re.compile(rb"https?://[!-~]+")          # printable-ASCII run внутри protobuf
 _SG_RE = re.compile(r'data-n-a-sg="([^"]+)"')
 _TS_RE = re.compile(r'data-n-a-ts="([^"]+)"')
