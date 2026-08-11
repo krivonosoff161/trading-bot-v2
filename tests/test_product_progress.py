@@ -784,6 +784,7 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
                 },
             },
             "runtime_storage_maintenance": {"state": "ready"},
+            "mandatory_product_cycle_complete": True,
             "product_cycle_complete": True,
         }
     )
@@ -810,15 +811,17 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
     assert metrics["memory_run_artifacts_reread"] == 1
     assert metrics["memory_run_artifacts_unavailable"] == 2
     assert metrics["storage_maintenance_state"] == "ready"
+    assert metrics["mandatory_product_cycle_complete"] is True
     assert metrics["product_cycle_complete"] is True
 
 
-def test_product_monitor_waits_for_final_product_cycle_checkpoint(
+def test_product_monitor_waits_for_mandatory_product_cycle_checkpoint(
     tmp_path: Path,
 ) -> None:
     _publish_green(tmp_path)
     farm_path = tmp_path / "state" / "product_progress" / "farm.json"
     payload = json.loads(farm_path.read_text(encoding="utf-8"))
+    payload["metrics"]["mandatory_product_cycle_complete"] = False
     payload["metrics"]["product_cycle_complete"] = False
     farm_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -830,6 +833,28 @@ def test_product_monitor_waits_for_final_product_cycle_checkpoint(
 
     assert report["state"] == "starting"
     assert report["ready"] is False
+    assert report["hard_fail_reasons"] == []
+
+
+def test_optional_advisory_work_does_not_block_mandatory_t0(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path)
+    farm_path = tmp_path / "state" / "product_progress" / "farm.json"
+    payload = json.loads(farm_path.read_text(encoding="utf-8"))
+    payload["metrics"]["mandatory_product_cycle_complete"] = True
+    payload["metrics"]["product_cycle_complete"] = False
+    payload["metrics"]["calculator_processed"] = 0
+    payload["metrics"]["role_reviews_requested"] = 0
+    farm_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 102.0,
+    ).sample()
+
+    assert report["ready"] is True
     assert report["hard_fail_reasons"] == []
 
 

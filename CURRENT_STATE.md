@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-11
-- Verified against: `ab22726012cbb95d618c43d6206f7fa786fe78b0`
+- Verified against: `53f6765887a9f4c30ca27bffe993d9d9780f2f09`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -36,6 +36,12 @@ Priority validation publication now wakes the canonical full product cycle
 immediately after a new current generation is atomically complete. This avoids
 waiting the ordinary 180-second cadence before paper consumers can verify the
 new authority; a stop intent still wins and startup deadlines are unchanged.
+
+The generation-bound delivery, analyst routing, role reconciliation, setup
+memory, calibration, and quality report now publish the mandatory product
+checkpoint before optional calculator and broad role-review LLM maintenance.
+Those advisory stages remain bounded and observable after T+0; they cannot
+consume the complete cold-start budget or grant product/trading authority.
 
 The detailed ownership, evidence paths, missing proof, and next gate for every
 row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md).

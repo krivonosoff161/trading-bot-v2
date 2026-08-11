@@ -684,8 +684,6 @@ def _run_v2_main_paper_derived_chain(
             "paper_generation_run_id": run_id,
         },
     )
-
-
 def _run_v2_post_delivery_maintenance_chain(
     args,
     private_root: Path,
@@ -874,6 +872,14 @@ def _run_v2_post_delivery_maintenance_chain(
             "paper_generation_run_id": run_id,
         },
     )
+    # Delivery, deterministic generation consumers, analyst routing, role
+    # reconciliation, calibration, setup memory, and the quality report are the
+    # mandatory paper-product boundary. Calculator and broad role-review LLM
+    # calls that follow are advisory maintenance: they remain observable and
+    # bounded by the ordinary steady-state SLO, but cannot consume the whole RCC
+    # cold-start budget before T+0.
+    out["mandatory_product_cycle_complete"] = True
+    _publish_farm_product_checkpoint(private_root, out)
 
 
 def _run_legacy_main_paper_derived_chain(

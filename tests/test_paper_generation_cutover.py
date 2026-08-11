@@ -675,6 +675,14 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
     assert out["paper_generation_v2"]["producer_membership"][
         "validation_bound_members"
     ] == 1
+    assert out["mandatory_product_cycle_complete"] is True
+    checkpoint = json.loads(
+        (tmp_path / "state" / "product_progress" / "farm.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert checkpoint["metrics"]["mandatory_product_cycle_complete"] is True
+    assert checkpoint["metrics"]["product_cycle_complete"] is False
     assert args.paper_generation_run_id == "run-current"
     # The post-delivery chain now checks liveness around the two formerly
     # unbounded analyst/role-maintenance stages as well as the generation chain.
