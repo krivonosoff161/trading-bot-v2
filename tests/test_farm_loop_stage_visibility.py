@@ -1076,9 +1076,16 @@ class TestCycleLogStages:
             ],
         )
 
-        async def fake_send_photo(chat_id: str, payload: bytes) -> int:
+        async def fake_send_photo(
+            chat_id: str,
+            payload: bytes,
+            caption: str = "",
+            parse_mode: str | None = None,
+        ) -> int:
             assert chat_id == "111"
             assert payload == b"chart-bytes"
+            assert caption == "card"
+            assert parse_mode == "HTML"
             return 43
 
         monkeypatch.setattr(telegram, "bot_token", lambda: "token")
@@ -1094,7 +1101,59 @@ class TestCycleLogStages:
         assert cfg["configured"] is True
         assert cfg["ids"] == ["111", "333"]
         assert asyncio.run(cfg["send_text"]("111", "card")) == 42
-        assert asyncio.run(cfg["send_photo"]("111", b"chart-bytes")) == 43
+        assert asyncio.run(cfg["send_photo"]("111", b"chart-bytes", "card")) == 43
+
+    def test_paper_telegram_config_marks_preconnect_failure_not_attempted(
+        self, monkeypatch
+    ) -> None:
+        from scripts import subscriptions
+        from scripts.strategy_lab import paper_telegram_transport
+        from src.research_lab.paper_telegram_sender import DeliveryNotAttempted
+        from src.utils import telegram
+
+        class SyntheticConnectorError(Exception):
+            pass
+
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, *_args, **_kwargs):
+                raise SyntheticConnectorError("synthetic pre-connect failure")
+
+        async def failed_photo(*_args, **_kwargs):
+            raise SyntheticConnectorError("synthetic pre-connect failure")
+
+        monkeypatch.setattr(
+            subscriptions,
+            "list_delivery_users",
+            lambda: [{"chat_id": "111", "status": "active"}],
+        )
+        monkeypatch.setattr(telegram, "bot_token", lambda: "token")
+        monkeypatch.setattr(telegram, "send_photo_bytes_to", failed_photo)
+        monkeypatch.setattr(
+            paper_telegram_transport.aiohttp,
+            "ClientConnectorError",
+            SyntheticConnectorError,
+        )
+        monkeypatch.setattr(
+            paper_telegram_transport.aiohttp,
+            "ClientSession",
+            FakeSession,
+        )
+
+        cfg = farm_loop._paper_telegram_delivery_config(
+            Namespace(send_paper_telegram=True),
+            apply=True,
+        )
+
+        with pytest.raises(DeliveryNotAttempted):
+            asyncio.run(cfg["send_text"]("111", "card"))
+        with pytest.raises(DeliveryNotAttempted):
+            asyncio.run(cfg["send_photo"]("111", b"chart-bytes", "card"))
 
     def test_log_cycle_records_stages_and_skipped(self, tmp_path) -> None:
         stages = farm_loop._stage_status(_args(run_worker=True), apply=True)

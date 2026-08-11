@@ -138,13 +138,18 @@ An unreadable, malformed, or structurally invalid existing outbox produces
 `paper_telegram_sent_keys.json` compatibility index follows the same fail-closed rule;
 an existing unreadable or invalid index cannot be treated as an empty delivery history.
 Atomic JSON writes flush the temporary file before replace and flush the parent
-directory where the platform supports directory handles. A photo message id is
-recorded as `external_ack_ambiguous` through that boundary before the text call begins.
-The row keeps separate `photo_status` and `text_status` values, so a failed text
-acknowledgement cannot turn a confirmed photo acknowledgement into a retryable
-whole-card send. Later runs fail closed on ambiguous or crash-left `pending` records.
-This is not an exactly-once Telegram guarantee; it is a recovery boundary that
-prevents automatic duplicate sends after ambiguous external acknowledgements.
+directory where the platform supports directory handles. A chart card is sent as one
+`sendPhoto` request with the complete operator-card text as its HTML caption. The
+sender enforces Telegram's 1024-character caption boundary before claiming or calling
+the transport; an oversized chart card fails without any external effect. The outbox
+therefore has one acknowledgement boundary instead of the former photo-then-text gap.
+A proven `ClientConnectorError` means the request was not established and is recorded
+as retryable `telegram_request_not_attempted`; a later cycle may retry the same content
+key. Timeout, malformed response, HTTP ambiguity, persistence failure after `ok=true`,
+and every other post-connect unknown remain `external_ack_ambiguous`. Later runs fail
+closed on ambiguous or crash-left `pending` records. This is not an exactly-once
+Telegram guarantee; it is a recovery boundary that prevents automatic duplicate sends
+after genuinely ambiguous external acknowledgements.
 
 A successful Telegram `ok=true` response remains authoritative even when the
 runtime stdout/audit sink fails immediately afterward. Transport helpers return the

@@ -26,6 +26,7 @@ SCHEMA = "PaperTelegramDelivery.v1"
 SUMMARY_SCHEMA = "paper_telegram_delivery.v1"
 DEFAULT_DELIVERY_TARGET = "SUBSCRIPTION_USERS"
 MAX_CHART_PAYLOAD_BYTES = 10 * 1024 * 1024
+MAX_PHOTO_CAPTION_CHARS = 1024
 REQUIRED_DISCLAIMER = "Бумажный режим: это не ордер."
 _OUTBOX_STATUSES = {
     "completed",
@@ -46,6 +47,10 @@ class DeliveryOutboxUnavailable(RuntimeError):
     def __init__(self, problem: str):
         super().__init__(problem)
         self.problem = problem
+
+
+class DeliveryNotAttempted(RuntimeError):
+    """The transport proved that no external request reached Telegram."""
 
 
 @dataclass(frozen=True)
@@ -333,7 +338,7 @@ async def _send_items(
     items: list[dict[str, Any]],
     recipient_ids: list[str],
     send_text: Callable[[str, str], Awaitable[int | None]],
-    send_photo: Callable[[str, bytes], Awaitable[int | None]] | None,
+    send_photo: Callable[[str, bytes, str], Awaitable[int | None]] | None,
     sent_keys: set[str],
     private_root: Path,
 ) -> list[PaperTelegramDelivery]:
@@ -365,7 +370,7 @@ async def _send_items(
                         status="invalid_preview",
                         problem=chart_problem or "invalid_chart_path",
                         recipient_id=recipient_id,
-                        transport_kind="telegram_photo+text",
+                        transport_kind="telegram_photo_caption",
                         chart_available=False,
                         chart_problem=chart_problem or "invalid_chart_path",
                     )
@@ -378,17 +383,31 @@ async def _send_items(
                         status="invalid_preview",
                         problem="photo_transport_not_configured",
                         recipient_id=recipient_id,
-                        transport_kind="telegram_photo+text",
+                        transport_kind="telegram_photo_caption",
                         chart_available=True,
                         chart_problem="photo_transport_not_configured",
                     )
                 )
                 continue
             transport_kind = (
-                "telegram_photo+text"
+                "telegram_photo_caption"
                 if chart_path and send_photo is not None
                 else "telegram_text"
             )
+            card_text = str(item.get("text") or "")
+            if chart_path is not None and len(card_text) > MAX_PHOTO_CAPTION_CHARS:
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="invalid_preview",
+                        problem="telegram_photo_caption_too_long",
+                        recipient_id=recipient_id,
+                        transport_kind=transport_kind,
+                        chart_available=True,
+                        chart_problem="telegram_photo_caption_too_long",
+                    )
+                )
+                continue
             identity_chart_path = chart_path if send_photo is not None else None
             try:
                 if identity_chart_path is not None:
@@ -551,49 +570,44 @@ async def _send_items(
                 )
                 if transport_chart_payload is not None and send_photo is not None:
                     photo_message_id = await send_photo(
-                        recipient_id, transport_chart_payload
+                        recipient_id, transport_chart_payload, card_text
                     )
                     if photo_message_id is None:
                         photo_status = "unacknowledged"
+                        text_status = "unacknowledged"
+                        status = "skipped_no_token"
+                        problem = "telegram_token_not_configured"
                         chart_problem = "photo_message_id_missing"
                     else:
                         chart_sent = True
                         photo_status = "acknowledged"
-                        _upsert_outbox_record(
-                            private_root,
-                            outbox,
-                            _outbox_record(
-                                item,
-                                delivery_key=delivery_key,
-                                recipient_hash=recipient_hash,
-                                status="external_ack_ambiguous",
-                                transport_kind=transport_kind,
-                                photo_message_id=photo_message_id,
-                                photo_status=photo_status,
-                                text_status="pending",
-                                problem="photo_ack_text_pending",
-                            ),
-                        )
+                        text_status = "acknowledged"
+                        message_id = photo_message_id
                 elif chart_path and send_photo is None:
                     photo_status = "transport_unavailable"
                     chart_problem = "photo_transport_not_configured"
-                message_id = await send_text(recipient_id, str(item.get("text") or ""))
-                if message_id is None:
-                    text_status = "unacknowledged"
-                    if chart_sent:
-                        status = "external_ack_ambiguous"
-                        problem = "photo_ack_text_unacknowledged"
-                    else:
+                else:
+                    message_id = await send_text(recipient_id, card_text)
+                    if message_id is None:
+                        text_status = "unacknowledged"
                         status = "skipped_no_token"
                         problem = "telegram_token_not_configured"
-                else:
-                    text_status = "acknowledged"
+                    else:
+                        text_status = "acknowledged"
+            except DeliveryNotAttempted:
+                status = "error"
+                text_status = "not_attempted"
+                if transport_chart_payload is not None:
+                    photo_status = "not_attempted"
+                problem = "telegram_request_not_attempted"
             except Exception as exc:  # noqa: BLE001 - delivery errors must be recorded, not crash the farm.
                 status = "external_ack_ambiguous"
-                text_status = "failed"
-                if chart_sent:
-                    problem = f"photo_ack_text_failed:{type(exc).__name__}"
+                if transport_chart_payload is not None:
+                    photo_status = "unknown"
+                    text_status = "unknown"
+                    problem = f"photo_caption_ack_ambiguous:{type(exc).__name__}"
                 else:
+                    text_status = "failed"
                     problem = f"text_ack_ambiguous:{type(exc).__name__}"
             if status == "sent":
                 completed_keys = sent_keys | {delivery_key}
@@ -1142,7 +1156,7 @@ def send_paper_telegram_previews(
     paper_chat_ids_count: int = 0,
     recipient_ids: list[str] | None = None,
     send_text: Callable[[str, str], Awaitable[int | None]] | None = None,
-    send_photo: Callable[[str, bytes], Awaitable[int | None]] | None = None,
+    send_photo: Callable[[str, bytes, str], Awaitable[int | None]] | None = None,
     status_digest: bool = False,
     status_digest_interval_hours: int = 12,
     now: float | None = None,
@@ -1199,11 +1213,9 @@ def send_paper_telegram_previews(
     accepted: list[dict[str, Any]] = []
     deliveries: list[PaperTelegramDelivery] = []
     status_digest_reason = ""
-    invalid = 0
     for item in items:
         ok, problem = _valid_preview(item)
         if not ok:
-            invalid += 1
             deliveries.append(
                 _delivery_from_preview(item, status="invalid_preview", problem=problem)
             )
@@ -1326,6 +1338,9 @@ def send_paper_telegram_previews(
         1 for delivery in deliveries if delivery.status.startswith("skipped")
     )
     error_messages = sum(1 for delivery in deliveries if delivery.status == "error")
+    invalid_preview_messages = sum(
+        1 for delivery in deliveries if delivery.status == "invalid_preview"
+    )
     ambiguous_messages = sum(
         1 for delivery in deliveries if delivery.status == "external_ack_ambiguous"
     )
@@ -1375,7 +1390,7 @@ def send_paper_telegram_previews(
         "records_read": len(items),
         "eligible": len(accepted),
         "eligible_cards": len(accepted),
-        "invalid_preview": invalid,
+        "invalid_preview": invalid_preview_messages,
         "dry_run": not apply,
         "configured": bool(paper_chat_configured),
         "chat_env": DEFAULT_DELIVERY_TARGET,
