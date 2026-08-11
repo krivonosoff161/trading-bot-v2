@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-11
-- Verified against: `30fb093e152b9f9113fc76ae7e763d9eda61c41a`
+- Verified against: `ab22726012cbb95d618c43d6206f7fa786fe78b0`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -115,6 +115,10 @@ dependency, not by a route to live trading.
   normal fail-closed validation publication may temporarily move product state
   to `product_transitioning` after T+0; it does not reuse the startup timeout
   while fenced worker and product progress remain live.
+- A long first farm cycle may use fresh canonical completed-chunk milestones to
+  remain in startup after the ordinary 300-second completion SLO, but the cold
+  start still fails closed at 600 seconds. Missing stage/milestone identity,
+  stale progress, or heartbeat-only activity never extends the budget.
   RCC and external canary adapters consume the same classifier: only an explicit
   current-run validation wait without hard-fail reasons is transitional, while
   every other non-ready report remains fail-closed.
