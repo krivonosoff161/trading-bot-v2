@@ -828,6 +828,9 @@ class ControlCenter(tk.Tk):
         self._runtime_owner_monitor: CanonicalOwnerSafetyMonitor | None = None
         self._runtime_monitor_started_at: float | None = None
         self._runtime_monitor_wall_started_at: float | None = None
+        self._listener_inventory_lock = threading.Lock()
+        self._listener_inventory_pid: int | None = None
+        self._listener_inventory_ready = False
         self._product_progress_monitor: ProductProgressMonitor | None = None
         self._product_progress_ready = False
         self._product_progress_post_t0_failure: str | None = (
@@ -1350,6 +1353,25 @@ class ControlCenter(tk.Tk):
                 "elapsed_seconds": event.elapsed_seconds,
             }
 
+    def _set_listener_inventory(self, pid: int | None, *, ready: bool) -> None:
+        lock = self.__dict__.get("_listener_inventory_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self.__dict__["_listener_inventory_lock"] = lock
+        with lock:
+            self.__dict__["_listener_inventory_pid"] = pid
+            self.__dict__["_listener_inventory_ready"] = bool(ready)
+
+    def _listener_inventory_snapshot(self) -> tuple[int | None, bool]:
+        lock = self.__dict__.get("_listener_inventory_lock")
+        if lock is None:
+            return None, False
+        with lock:
+            return (
+                self.__dict__.get("_listener_inventory_pid"),
+                bool(self.__dict__.get("_listener_inventory_ready", False)),
+            )
+
     @staticmethod
     def _persist_hard_fail_alert(reason: str) -> bool:
         alert = {
@@ -1478,23 +1500,15 @@ class ControlCenter(tk.Tk):
             )
         ):
             raise CanaryMonitorHardFailure("owner_not_in_canonical_rcc_tree")
-        listener_pid = _listening_pid(
-            11434,
-            stage_callback=self._record_listener_probe_stage,
-        )
         ollama = self.contours["ollama"]
+        listener_pid, listener_ready = self._listener_inventory_snapshot()
         listener_ready = bool(
-            listener_pid
+            listener_ready
+            and listener_pid
             and ollama.process is not None
             and listener_pid == ollama.process.pid
             and _same_live_process(listener_pid, ollama.started_at)
         )
-        if listener_pid and not listener_ready:
-            raise CanaryMonitorHardFailure("foreign_ollama_listener")
-        if not listener_ready and (
-            self._runtime_ready or elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS
-        ):
-            raise CanaryMonitorHardFailure("ollama_listener_unavailable")
 
         wall_started_at = time.time() - elapsed
         try:
@@ -1593,6 +1607,35 @@ class ControlCenter(tk.Tk):
             "execution_allowed": False,
         }
 
+    def _listener_runtime_safety_probe(self) -> dict[str, object]:
+        started_at = self._runtime_monitor_started_at
+        if started_at is None:
+            raise RuntimeError("runtime monitor was not initialized")
+        elapsed = max(0.0, time.monotonic() - started_at)
+        listener_pid = _listening_pid(
+            11434,
+            stage_callback=self._record_listener_probe_stage,
+        )
+        ollama = self.contours["ollama"]
+        listener_ready = bool(
+            listener_pid
+            and ollama.process is not None
+            and listener_pid == ollama.process.pid
+            and _same_live_process(listener_pid, ollama.started_at)
+        )
+        if listener_pid and not listener_ready:
+            raise CanaryMonitorHardFailure("foreign_ollama_listener")
+        if not listener_ready and (
+            self._runtime_ready or elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS
+        ):
+            raise CanaryMonitorHardFailure("ollama_listener_unavailable")
+        return {
+            "ready": listener_ready,
+            "listener_pid": listener_pid,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
     @staticmethod
     def _deep_runtime_safety_probe() -> dict[str, object]:
         sizes: dict[str, int] = {}
@@ -1634,6 +1677,16 @@ class ControlCenter(tk.Tk):
         return report
 
     def _on_runtime_monitor_sample(self, sample: CanaryLaneSample) -> None:
+        if sample.lane == "listener_inventory" and sample.state == "healthy":
+            raw_pid = sample.payload.get("listener_pid")
+            listener_pid = raw_pid if isinstance(raw_pid, int) else None
+            self._set_listener_inventory(
+                listener_pid,
+                ready=(
+                    listener_pid is not None
+                    and sample.payload.get("ready") is True
+                ),
+            )
         if sample.lane == "product_progress":
             self._product_progress_ready = bool(sample.payload.get("ready") is True)
             assessment = assess_post_t0_product_progress(sample.payload)
@@ -1666,6 +1719,7 @@ class ControlCenter(tk.Tk):
             return
         self._runtime_monitor_started_at = time.monotonic()
         self._runtime_monitor_wall_started_at = time.time()
+        self._set_listener_inventory(None, ready=False)
         self._product_progress_ready = False
         self._product_progress_post_t0_failure = "product_progress_not_sampled"
         self._product_progress_monitor = ProductProgressMonitor(
@@ -1679,6 +1733,7 @@ class ControlCenter(tk.Tk):
         )
         monitor = CanaryMonitoringService(
             fast_probe=self._fast_runtime_safety_probe,
+            listener_probe=self._listener_runtime_safety_probe,
             deep_probe=self._deep_runtime_safety_probe,
             product_probe=self._product_runtime_progress_probe,
             on_sample=self._on_runtime_monitor_sample,
@@ -1696,6 +1751,7 @@ class ControlCenter(tk.Tk):
         self._runtime_owner_monitor = None
         self._runtime_monitor_started_at = None
         self._runtime_monitor_wall_started_at = None
+        self._set_listener_inventory(None, ready=False)
         self._product_progress_monitor = None
         self._product_progress_ready = False
         self._product_progress_post_t0_failure = "product_progress_not_sampled"

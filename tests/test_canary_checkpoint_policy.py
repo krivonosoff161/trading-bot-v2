@@ -9,6 +9,7 @@ from src.research_lab.canary_checkpoint_policy import (
     CANONICAL_CANARY_CHECKPOINTS,
     CANONICAL_MONITORING_LANES,
     FINAL_QUIESCENT_CHECKPOINT,
+    CanaryLaneSample,
     CanonicalCanaryRuntimeWatchdog,
     CanaryFastSampleWatchdog,
     CanaryMonitorHardFailure,
@@ -160,6 +161,8 @@ def test_fast_safety_lane_excludes_database_snapshot() -> None:
 
     assert not lanes["fast_safety"].permits_database_snapshot
     assert lanes["fast_safety"].max_sample_gap_seconds == 15.0
+    assert not lanes["listener_inventory"].permits_database_snapshot
+    assert lanes["listener_inventory"].max_sample_gap_seconds == 90.0
     assert lanes["deep_database"].permits_database_snapshot
     assert lanes["deep_database"].max_sample_gap_seconds == 300.0
     assert not lanes["product_progress"].permits_database_snapshot
@@ -287,6 +290,98 @@ def test_blocked_deep_probe_cannot_block_fast_lane_or_hide_freshness_failure() -
     assert samples.count("fast_safety") >= 2
     assert samples.count("product_progress") >= 2
     release_deep.set()
+    assert service.stop(timeout=0.5) == ()
+
+
+def test_blocked_listener_inventory_cannot_starve_fast_authority_samples() -> None:
+    listener_entered = threading.Event()
+    release_listener = threading.Event()
+    failures: list[str] = []
+    samples: list[str] = []
+
+    def listener_probe() -> dict[str, object]:
+        listener_entered.set()
+        release_listener.wait(0.3)
+        return {"ready": True, "listener_pid": 42}
+
+    service = CanaryMonitoringService(
+        fast_probe=lambda: {"authority": "valid"},
+        listener_probe=listener_probe,
+        deep_probe=lambda: {"bounded": True},
+        product_probe=lambda: {"ready": True},
+        on_sample=lambda sample: samples.append(sample.lane),
+        on_failure=lambda lane, _assessment: failures.append(lane),
+        fast_interval_seconds=0.01,
+        listener_interval_seconds=0.01,
+        deep_interval_seconds=1.0,
+        product_interval_seconds=1.0,
+        supervisor_interval_seconds=0.005,
+    )
+    service.coordinator.watchdogs[
+        "fast_safety"
+    ].max_fast_sample_gap_seconds = 0.05
+    service.coordinator.watchdogs[
+        "listener_inventory"
+    ].max_fast_sample_gap_seconds = 0.25
+
+    service.start()
+    assert listener_entered.wait(0.1)
+    time.sleep(0.08)
+    assert failures == []
+    assert samples.count("fast_safety") >= 3
+    release_listener.set()
+    deadline = time.monotonic() + 0.3
+    while samples.count("listener_inventory") == 0 and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert samples.count("listener_inventory") >= 1
+    assert failures == []
+    assert service.stop(timeout=0.5) == ()
+
+
+def test_listener_inventory_freshness_fails_its_lane_not_fast_lane() -> None:
+    listener_entered = threading.Event()
+    release_listener = threading.Event()
+    failures: list[str] = []
+    fast_samples: list[CanaryLaneSample] = []
+
+    def listener_probe() -> dict[str, object]:
+        listener_entered.set()
+        release_listener.wait(0.3)
+        return {"ready": True}
+
+    service = CanaryMonitoringService(
+        fast_probe=lambda: {"authority": "valid"},
+        listener_probe=listener_probe,
+        deep_probe=lambda: {"bounded": True},
+        product_probe=lambda: {"ready": True},
+        on_sample=lambda sample: (
+            fast_samples.append(sample) if sample.lane == "fast_safety" else None
+        ),
+        on_failure=lambda lane, _assessment: failures.append(lane),
+        fast_interval_seconds=0.01,
+        listener_interval_seconds=0.01,
+        deep_interval_seconds=1.0,
+        product_interval_seconds=1.0,
+        supervisor_interval_seconds=0.005,
+    )
+    service.coordinator.watchdogs[
+        "fast_safety"
+    ].max_fast_sample_gap_seconds = 0.1
+    service.coordinator.watchdogs[
+        "listener_inventory"
+    ].max_fast_sample_gap_seconds = 0.05
+
+    service.start()
+    assert listener_entered.wait(0.1)
+    deadline = time.monotonic() + 0.3
+    while not failures and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert failures == ["listener_inventory"]
+    assert len(fast_samples) >= 3
+    assert all(sample.state == "healthy" for sample in fast_samples)
+    release_listener.set()
     assert service.stop(timeout=0.5) == ()
 
 

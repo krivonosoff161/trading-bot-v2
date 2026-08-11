@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-11
-- Verified against: `53f6765887a9f4c30ca27bffe993d9d9780f2f09`
+- Verified against: `30c70dd0b4f0dc416bfcd10f70c7cdfe5dce8874`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -22,9 +22,11 @@ dependency, not by a route to live trading.
   delivery all have production code and non-live tests.
 - Process ownership, monotonic fencing, renewable task/job claims, idempotent
   materialization, and coordinated fail-closed RCC shutdown have public test
-  contracts. The listener safety probe uses isolated native Windows TCP
-  inventory while retaining bounded Job Object cleanup and fail-closed
-  freshness enforcement.
+  contracts. Isolated native Windows TCP inventory has its own supervised
+  freshness lane, so a slow kernel inventory cannot starve fast process,
+  owner or fence checks. Its owned Job Object cleanup uses kill-on-close rather
+  than a synchronous termination call; repeated inventory loss and complete
+  listener identity violations remain fail-closed.
 - Validation maintenance continuously drains from the priority worker using the
   configured batch capacity, publishes durable progress only after completed
   export/check/artifact chunks, and rechecks owner/fence authority before each
