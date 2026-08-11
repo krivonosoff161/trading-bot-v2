@@ -138,7 +138,12 @@ a sanitized aggregate if a result needs discussion.
   a cold setup-memory or paper-runtime pass. It remains `starting` only when
   `farm_progress` contains a fresh canonical stage plus real completed milestone,
   and only inside the fixed 600-second cold-start ceiling. A stale, malformed,
-  or heartbeat-only progress row does not extend either deadline. The canonical
+  or heartbeat-only progress row does not extend either deadline. Once current
+  generation delivery, analyst routing, role reconciliation, setup memory,
+  calibration, and quality evidence are complete, the farm publishes a separate
+  mandatory checkpoint. Optional calculator and broad role-review LLM calls run
+  afterward under the normal steady-state progress SLO and do not block T+0.
+  Their later failure or staleness remains visible and fail-closed. The canonical
   RCC starts this supervisor
   with the paper profile: early owner/listener absence remains `starting`
   inside the bounded cold-start budget, then the first green owner/fence

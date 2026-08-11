@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-11
-- Verified against: `ab22726012cbb95d618c43d6206f7fa786fe78b0`
+- Verified against: `53f6765887a9f4c30ca27bffe993d9d9780f2f09`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -119,6 +119,9 @@ dependency, not by a route to live trading.
   remain in startup after the ordinary 300-second completion SLO, but the cold
   start still fails closed at 600 seconds. Missing stage/milestone identity,
   stale progress, or heartbeat-only activity never extends the budget.
+- T+0 binds to the mandatory generation, delivery, analyst, setup-memory and
+  quality boundary. Optional calculator and broad role-review LLM maintenance
+  continues under the steady-state SLO and cannot block initial readiness.
   RCC and external canary adapters consume the same classifier: only an explicit
   current-run validation wait without hard-fail reasons is transitional, while
   every other non-ready report remains fail-closed.

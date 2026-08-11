@@ -237,6 +237,11 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     cycle_errors = tuple(
         error for error in out.get("errors") or () if isinstance(error, Mapping)
     )
+    final_product_cycle_complete = out.get("product_cycle_complete") is True
+    mandatory_product_cycle_complete = bool(
+        out.get("mandatory_product_cycle_complete") is True
+        or final_product_cycle_complete
+    )
     return {
         "errors": len(cycle_errors),
         "paper_pipeline_errors": sum(
@@ -347,7 +352,8 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
             reject_memory.get("run_artifacts_unavailable") or 0
         ),
         "storage_maintenance_state": str(storage.get("state") or "unknown"),
-        "product_cycle_complete": out.get("product_cycle_complete") is True,
+        "mandatory_product_cycle_complete": mandatory_product_cycle_complete,
+        "product_cycle_complete": final_product_cycle_complete,
         "outcome_rows": int(
             outcome.get("rows") or len(outcome.get("items") or ())
         ),
@@ -554,7 +560,13 @@ class ProductProgressMonitor:
                     ready = False
                 elif metrics.get("generation_consistent") is not True:
                     hard_fail.append("paper_generation_stage_mismatch")
-                if metrics.get("product_cycle_complete") is False:
+                mandatory_complete = metrics.get(
+                    "mandatory_product_cycle_complete"
+                )
+                if mandatory_complete is False or (
+                    mandatory_complete is None
+                    and metrics.get("product_cycle_complete") is False
+                ):
                     ready = False
                 if int(metrics.get("operational_rows_retained") or 0):
                     hard_fail.append("technical_outcome_entered_training")
