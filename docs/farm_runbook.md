@@ -133,7 +133,12 @@ a sanitized aggregate if a result needs discussion.
   closed. The green T+0 product report carries the original launch-time run
   boundary into steady monitoring; the steady adapter must use
   `ProductProgressMonitor.from_green_t0_report`, recheck scanner/farm sequences,
-  and must not rebase that boundary to the later T+0 observation. The canonical
+  and must not rebase that boundary to the later T+0 observation. The first
+  farm final checkpoint may cross its ordinary 300-second completion SLO during
+  a cold setup-memory or paper-runtime pass. It remains `starting` only when
+  `farm_progress` contains a fresh canonical stage plus real completed milestone,
+  and only inside the fixed 600-second cold-start ceiling. A stale, malformed,
+  or heartbeat-only progress row does not extend either deadline. The canonical
   RCC starts this supervisor
   with the paper profile: early owner/listener absence remains `starting`
   inside the bounded cold-start budget, then the first green owner/fence

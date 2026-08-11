@@ -362,6 +362,8 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
 class ProductProgressSlo:
     scanner_seconds: float = 900.0
     farm_seconds: float = 300.0
+    farm_startup_max_seconds: float = 600.0
+    farm_startup_progress_stale_seconds: float = 60.0
 
 
 class ProductProgressTransitionError(RuntimeError):
@@ -494,6 +496,16 @@ class ProductProgressMonitor:
             progress_row.get("schema") == SCHEMA
             and progress_at >= self.run_started_at
         )
+        progress_age = max(0.0, now - progress_at) if progress_at else None
+        progress_metrics = _mapping(progress_row.get("metrics"))
+        farm_startup_progress_fresh = bool(
+            progress_current
+            and progress_row.get("status") == "progress"
+            and str(progress_metrics.get("stage") or "").strip()
+            and str(progress_metrics.get("milestone") or "").strip()
+            and progress_age is not None
+            and progress_age <= self.slo.farm_startup_progress_stale_seconds
+        )
         for component, limit in (
             ("scanner", self.slo.scanner_seconds),
             ("farm", self.slo.farm_seconds),
@@ -506,7 +518,14 @@ class ProductProgressMonitor:
             age = max(0.0, now - completed_at) if completed_at else None
             if not current:
                 ready = False
-                if now - self.run_started_at > limit:
+                startup_age = now - self.run_started_at
+                bounded_farm_progress = bool(
+                    component == "farm"
+                    and farm_startup_progress_fresh
+                    and startup_age
+                    <= max(limit, self.slo.farm_startup_max_seconds)
+                )
+                if startup_age > limit and not bounded_farm_progress:
                     hard_fail.append(f"{component}_product_progress_startup_timeout")
             effective_age = age
             if component == "farm" and progress_current:
@@ -567,9 +586,11 @@ class ProductProgressMonitor:
         components["farm_progress"] = {
             "current_run": progress_current,
             "sequence": int(progress_row.get("sequence") or 0),
-            "age_seconds": max(0.0, now - progress_at) if progress_at else None,
+            "age_seconds": progress_age,
             "status": str(progress_row.get("status") or "missing"),
-            "metrics": _mapping(progress_row.get("metrics")),
+            "startup_liveness_eligible": farm_startup_progress_fresh,
+            "startup_max_seconds": self.slo.farm_startup_max_seconds,
+            "metrics": progress_metrics,
         }
         return {
             "schema": REPORT_SCHEMA,

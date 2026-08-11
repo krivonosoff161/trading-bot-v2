@@ -500,6 +500,107 @@ def test_real_farm_milestone_keeps_long_cycle_live(
     assert report["components"]["farm_progress"]["current_run"] is True
 
 
+def test_real_farm_milestone_extends_initial_cycle_inside_bounded_budget(
+    tmp_path: Path,
+) -> None:
+    publish_checkpoint(
+        tmp_path,
+        component="scanner",
+        sequence=1,
+        status="completed",
+        metrics=scanner_metrics(
+            inputs=1,
+            fresh=1,
+            cards=1,
+            dropped=0,
+            llm_failures=0,
+            provider_failures=0,
+        ),
+        completed_at=101.0,
+    )
+    publish_checkpoint(
+        tmp_path,
+        component="farm_progress",
+        sequence=2,
+        status="progress",
+        metrics={
+            "stage": "setup_outcome_memory_refresh",
+            "milestone": "incremental_sources_classified",
+            "completed": 21_500,
+            "total": 26_845,
+        },
+        completed_at=404.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        slo=ProductProgressSlo(
+            scanner_seconds=900.0,
+            farm_seconds=300.0,
+            farm_startup_max_seconds=600.0,
+            farm_startup_progress_stale_seconds=60.0,
+        ),
+        wall_clock=lambda: 405.0,
+    ).sample()
+
+    assert report["state"] == "starting"
+    assert report["hard_fail_reasons"] == []
+    assert report["components"]["farm_progress"]["startup_liveness_eligible"] is True
+
+
+def test_stale_farm_milestone_cannot_extend_initial_cycle(tmp_path: Path) -> None:
+    publish_checkpoint(
+        tmp_path,
+        component="farm_progress",
+        sequence=2,
+        status="progress",
+        metrics={"stage": "paper_runtime", "milestone": "chunk_completed"},
+        completed_at=340.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        slo=ProductProgressSlo(
+            scanner_seconds=900.0,
+            farm_seconds=300.0,
+            farm_startup_max_seconds=600.0,
+            farm_startup_progress_stale_seconds=60.0,
+        ),
+        wall_clock=lambda: 405.0,
+    ).sample()
+
+    assert "farm_product_progress_startup_timeout" in report["hard_fail_reasons"]
+    assert report["components"]["farm_progress"]["startup_liveness_eligible"] is False
+
+
+def test_fresh_farm_milestone_cannot_extend_past_startup_max(tmp_path: Path) -> None:
+    publish_checkpoint(
+        tmp_path,
+        component="farm_progress",
+        sequence=2,
+        status="progress",
+        metrics={"stage": "paper_runtime", "milestone": "chunk_completed"},
+        completed_at=704.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        slo=ProductProgressSlo(
+            scanner_seconds=900.0,
+            farm_seconds=300.0,
+            farm_startup_max_seconds=600.0,
+            farm_startup_progress_stale_seconds=60.0,
+        ),
+        wall_clock=lambda: 705.0,
+    ).sample()
+
+    assert "farm_product_progress_startup_timeout" in report["hard_fail_reasons"]
+    assert report["components"]["farm_progress"]["startup_liveness_eligible"] is True
+
+
 def test_validation_generation_and_training_invariants_fail_closed(
     tmp_path: Path,
 ) -> None:
