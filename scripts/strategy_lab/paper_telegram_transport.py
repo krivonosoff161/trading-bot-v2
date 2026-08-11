@@ -23,6 +23,7 @@ def build_subscription_delivery_config(root: Path) -> dict[str, Any]:
     load_runtime_dotenv(Path(root))
 
     from scripts.subscriptions import list_delivery_users
+    from src.research_lab.paper_telegram_sender import DeliveryNotAttempted
     from src.utils.telegram import bot_token, send_photo_bytes_to
 
     ids = [
@@ -38,21 +39,36 @@ def build_subscription_delivery_config(root: Path) -> dict[str, Any]:
             return None
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-        async with aiohttp.ClientSession() as session:
-            resp = await session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10))
-            body_text = await resp.text()
-            if resp.status != 200:
-                raise RuntimeError(f"Telegram HTTP {resp.status}: {body_text[:160]}")
-            try:
-                body = await resp.json()
-            except Exception as exc:  # noqa: BLE001 - malformed Telegram body is a delivery error
-                raise RuntimeError("Telegram invalid_json") from exc
-            if not body.get("ok", True):
-                raise RuntimeError("Telegram ok=false")
-            return body.get("result", {}).get("message_id")
+        try:
+            async with aiohttp.ClientSession() as session:
+                resp = await session.post(
+                    url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                )
+                body_text = await resp.text()
+                if resp.status != 200:
+                    raise RuntimeError(f"Telegram HTTP {resp.status}: {body_text[:160]}")
+                try:
+                    body = await resp.json()
+                except Exception as exc:  # noqa: BLE001 - malformed Telegram body is a delivery error
+                    raise RuntimeError("Telegram invalid_json") from exc
+                if not body.get("ok", True):
+                    raise RuntimeError("Telegram ok=false")
+                return body.get("result", {}).get("message_id")
+        except aiohttp.ClientConnectorError as exc:
+            raise DeliveryNotAttempted("telegram connection was not established") from exc
 
-    async def send_photo(chat_id: str, payload: bytes) -> int | None:
-        return await send_photo_bytes_to(chat_id, payload)
+    async def send_photo(chat_id: str, payload: bytes, caption: str) -> int | None:
+        try:
+            return await send_photo_bytes_to(
+                chat_id,
+                payload,
+                caption=caption,
+                parse_mode="HTML",
+            )
+        except aiohttp.ClientConnectorError as exc:
+            raise DeliveryNotAttempted("telegram connection was not established") from exc
 
     configured = bool(bot_token() and ids)
     return {

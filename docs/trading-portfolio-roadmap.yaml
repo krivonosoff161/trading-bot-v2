@@ -1,14 +1,14 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.10"
+version: "2026.08.11"
 status: current
-verified_date: "2026-08-10"
+verified_date: "2026-08-11"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: ee927237e6ba0f1e49261cdf6030bb4f5401401e
+  trading-bot-v2: 30fb093e152b9f9113fc76ae7e763d9eda61c41a
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -73,8 +73,8 @@ current_documents:
   - path: docs/farm_notification_layer.md
     scope: visibility, preview, delivery, and acknowledgement boundaries
     evidence: tests/test_paper_telegram_sender.py
-    residual_risk: external acknowledgement can remain ambiguous
-    next_gate: observe delivery continuity without treating it as execution
+    residual_risk: post-connect external acknowledgement can remain ambiguous and historical operator-recovery debt is not replayable automatically
+    next_gate: observe atomic photo-caption delivery and safe pre-connect retries without treating delivery as execution
   - path: docs/farm_ownership_map.md
     scope: canonical owner, nested resource, and legacy-loop separation
     evidence: tests/test_owner_authority_cardinality.py
@@ -299,8 +299,8 @@ modules:
       - tests/test_telegram_utils.py
       - tests/test_product_progress.py
       - tests/test_paper_generation_cutover.py
-    missing_evidence: continuous delivery availability, research-snapshot freshness, final product-cycle observability and externally unambiguous acknowledgements after private v2 cutover
-    next_gate: observe current-generation binding, authority-none research-card freshness, analysis provenance, current-versus-carried ACK state and complete text-plus-photo delivery during a bounded paper canary
+    missing_evidence: continuous delivery availability, research-snapshot freshness, final product-cycle observability and externally unambiguous post-connect acknowledgements after private v2 cutover
+    next_gate: observe current-generation binding, authority-none research-card freshness, analysis provenance, current-versus-carried ACK state and atomic photo-caption delivery during a bounded paper canary
     authority: separately_owner_gated
     public_private_boundary: delivery contracts are public; recipients, tokens, messages, and ACK records are private
   - module_id: execution_boundary

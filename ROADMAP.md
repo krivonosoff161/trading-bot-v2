@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-10
-- Verified against: `ee927237e6ba0f1e49261cdf6030bb4f5401401e`
+- Verified: 2026-08-11
+- Verified against: `30fb093e152b9f9113fc76ae7e763d9eda61c41a`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -92,7 +92,11 @@ dependency, not by a route to live trading.
 - Telegram transport success is not revoked by a later runtime-log sink error;
   the acknowledged message id reaches the outbox. A new current-attempt ambiguity
   fails closed, while carried ambiguous debt stays visible and blocked from
-  automatic replay. Card analysis provenance distinguishes accepted bounded LLM
+  automatic replay. Chart cards use one photo-caption request, so a subscriber
+  cannot receive a confirmed photo followed by a missing analysis text. A
+  connection-establishment failure is classified as not attempted and may be
+  retried by a later cycle; post-connect unknown outcomes remain ambiguous. Card
+  analysis provenance distinguishes accepted bounded LLM
   advisory evidence from deterministic fallback and authority-none research
   templates without granting the model price or lifecycle authority.
 - Scanner passes and completed farm cycles publish atomic, secret-free product

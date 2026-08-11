@@ -243,7 +243,7 @@ def test_sender_uses_injected_subscriber_transport(tmp_path):
     assert all(item["recipient_hash"] not in {"111", "222"} for item in data["items"])
 
 
-def test_sender_sends_private_review_chart_before_text(tmp_path):
+def test_sender_sends_chart_and_text_as_one_photo_caption(tmp_path):
     chart_path = tmp_path / "state" / "derived" / "paper_reviews" / "sig_1.png"
     chart_path.parent.mkdir(parents=True, exist_ok=True)
     chart_path.write_bytes(b"fake-png")
@@ -257,9 +257,9 @@ def test_sender_sends_private_review_chart_before_text(tmp_path):
         text_calls.append((chat_id, text))
         return 101
 
-    async def fake_photo(chat_id, payload):
+    async def fake_photo(chat_id, payload, caption):
         events.append(("photo", chat_id))
-        photo_calls.append((chat_id, payload))
+        photo_calls.append((chat_id, payload, caption))
         return 201
 
     summary = sender.send_paper_telegram_previews(
@@ -275,12 +275,11 @@ def test_sender_sends_private_review_chart_before_text(tmp_path):
     assert summary["sent"] == 1
     assert summary["chart_available_messages"] == 1
     assert summary["chart_sent_messages"] == 1
-    assert events == [("photo", "111"), ("text", "111")]
-    assert text_calls == [
-        ("111", "<b>Бумажный сигнал</b>\nБумажный режим: это не ордер.\nАвтоисполнение выключено.")
-    ]
+    assert events == [("photo", "111")]
+    assert text_calls == []
     assert photo_calls[0][0] == "111"
     assert photo_calls[0][1] == b"fake-png"
+    assert photo_calls[0][2] == _preview()["text"]
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["chart_available"] is True
     assert data["items"][0]["chart_sent"] is True
@@ -297,7 +296,7 @@ def test_sender_does_not_mark_chart_sent_without_photo_message_id(tmp_path):
     async def fake_send(chat_id, text):
         return 101
 
-    async def fake_photo(chat_id, path):
+    async def fake_photo(chat_id, path, caption):
         return None
 
     summary = sender.send_paper_telegram_previews(
@@ -310,7 +309,7 @@ def test_sender_does_not_mark_chart_sent_without_photo_message_id(tmp_path):
         send_photo=fake_photo,
     )
 
-    assert summary["sent"] == 1
+    assert summary["sent"] == 0
     assert summary["chart_available_messages"] == 1
     assert summary["chart_sent_messages"] == 0
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
@@ -329,7 +328,7 @@ def test_sender_sends_private_legacy_base_chart(tmp_path):
     async def fake_send(chat_id, text):
         return 101
 
-    async def fake_photo(chat_id, payload):
+    async def fake_photo(chat_id, payload, caption):
         photo_calls.append((chat_id, payload))
         return 201
 
@@ -359,7 +358,7 @@ def test_sender_refuses_chart_outside_private_reviews(tmp_path):
     async def fake_send(chat_id, text):
         return 101
 
-    async def fake_photo(chat_id, path):
+    async def fake_photo(chat_id, path, caption):
         photo_calls.append((chat_id, path))
         return 201
 
@@ -1054,7 +1053,7 @@ def test_previous_content_key_in_outbox_prevents_photo_replay(tmp_path):
     )
     calls = []
 
-    async def fake_photo(chat_id, path):
+    async def fake_photo(chat_id, path, caption):
         calls.append(("photo", chat_id, path))
         return 202
 
@@ -1210,7 +1209,7 @@ def test_same_chart_path_with_changed_bytes_has_distinct_content_identity(tmp_pa
     assert first_key != second_key
 
     photo_calls = []
-    async def fake_photo(chat_id, payload):
+    async def fake_photo(chat_id, payload, caption):
         photo_calls.append((chat_id, payload))
         return 200 + len(photo_calls)
 
@@ -1264,7 +1263,7 @@ def test_chart_path_alias_for_same_bytes_has_same_content_identity(tmp_path):
 
     photo_calls = []
 
-    async def fake_photo(chat_id, payload):
+    async def fake_photo(chat_id, payload, caption):
         photo_calls.append((chat_id, payload))
         return 200 + len(photo_calls)
 
@@ -1314,7 +1313,7 @@ def test_source_chart_swap_after_capture_cannot_change_transmitted_bytes(monkeyp
     monkeypatch.setattr(sender, "_capture_chart_payload", capture_then_swap)
     calls = []
 
-    async def fake_photo(chat_id, payload):
+    async def fake_photo(chat_id, payload, caption):
         calls.append(("photo", chat_id, payload))
         return 201
 
@@ -1345,7 +1344,7 @@ def test_declared_chart_disappearance_fails_closed_without_text_replay(tmp_path)
     _write_preview_snapshot(tmp_path, [preview])
     calls = []
 
-    async def fake_photo(chat_id, payload):
+    async def fake_photo(chat_id, payload, caption):
         calls.append(("photo", chat_id, payload))
         return 201
 
@@ -1378,7 +1377,6 @@ def test_declared_chart_disappearance_fails_closed_without_text_replay(tmp_path)
     assert second["sent"] == 0
     assert calls == [
         ("photo", "111", b"initial-png-content"),
-        ("text", "111", preview["text"]),
     ]
     data = json.loads(Path(second["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["status"] == "invalid_preview"
@@ -1462,7 +1460,7 @@ def test_sender_rejects_signal_without_immutable_content_identity(tmp_path):
     assert data["items"][0]["problem"] == "missing_immutable_content_identity"
 
 
-def test_partial_photo_ack_is_ambiguous_and_never_resends(tmp_path):
+def test_atomic_photo_caption_unknown_ack_is_ambiguous_and_never_resends(tmp_path):
     chart_path = tmp_path / "state" / "derived" / "paper_reviews" / "sig_1.png"
     chart_path.parent.mkdir(parents=True, exist_ok=True)
     chart_path.write_bytes(b"fake-png")
@@ -1473,9 +1471,9 @@ def test_partial_photo_ack_is_ambiguous_and_never_resends(tmp_path):
     photo_calls = []
     text_calls = []
 
-    async def fake_photo(chat_id, payload):
-        photo_calls.append((chat_id, payload))
-        return 201
+    async def fake_photo(chat_id, payload, caption):
+        photo_calls.append((chat_id, payload, caption))
+        raise TimeoutError("synthetic unknown atomic delivery acknowledgement")
 
     async def failing_text(chat_id, text):
         text_calls.append((chat_id, text))
@@ -1507,15 +1505,94 @@ def test_partial_photo_ack_is_ambiguous_and_never_resends(tmp_path):
     assert second["external_ack_ambiguous_current_attempts"] == 0
     assert second["external_ack_ambiguous_carried"] == 1
     assert len(photo_calls) == 1
-    assert len(text_calls) == 1
+    assert len(text_calls) == 0
     outbox = json.loads(
         (tmp_path / "state" / "derived" / "paper_telegram_delivery_outbox.json").read_text(encoding="utf-8")
     )
     record = outbox["items"][0]
     assert record["status"] == "external_ack_ambiguous"
-    assert record["photo_status"] == "acknowledged"
-    assert record["photo_message_id"] == 201
-    assert record["text_status"] == "failed"
+    assert record["photo_status"] == "unknown"
+    assert record["photo_message_id"] is None
+    assert record["text_status"] == "unknown"
+    assert record["problem"] == "photo_caption_ack_ambiguous:TimeoutError"
+
+
+def test_proven_not_attempted_delivery_is_retryable_without_ambiguity(tmp_path):
+    _write_preview_snapshot(
+        tmp_path,
+        [_preview(telegram_card_id="tgcard_preconnect_retry")],
+    )
+    calls = []
+
+    async def not_attempted(chat_id, text):
+        calls.append((chat_id, text, "not_attempted"))
+        raise sender.DeliveryNotAttempted("synthetic pre-connect failure")
+
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=not_attempted,
+    )
+
+    async def acknowledged(chat_id, text):
+        calls.append((chat_id, text, "acknowledged"))
+        return 301
+
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=acknowledged,
+    )
+
+    assert first["errors"] == 1
+    assert first["external_ack_ambiguous_messages"] == 0
+    assert second["sent"] == 1
+    assert second["external_ack_ambiguous_messages"] == 0
+    assert len(calls) == 2
+
+
+def test_oversized_photo_caption_fails_before_any_transport(tmp_path):
+    chart_path = tmp_path / "state" / "derived" / "paper_reviews" / "sig_1.png"
+    chart_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_path.write_bytes(b"fake-png")
+    preview = _preview(
+        chart_path=str(chart_path),
+        telegram_card_id="tgcard_oversized_caption",
+    )
+    preview["text"] += "x" * (
+        sender.MAX_PHOTO_CAPTION_CHARS - len(preview["text"]) + 1
+    )
+    _write_preview_snapshot(tmp_path, [preview])
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append(("text", chat_id, text))
+        return 101
+
+    async def fake_photo(chat_id, payload, caption):
+        calls.append(("photo", chat_id, payload, caption))
+        return 201
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        send_photo=fake_photo,
+    )
+
+    assert calls == []
+    assert summary["invalid_preview"] == 1
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["problem"] == "telegram_photo_caption_too_long"
 
 
 def test_text_transport_exception_is_ambiguous_and_never_automatically_retried(tmp_path):
