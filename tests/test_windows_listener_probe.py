@@ -17,6 +17,7 @@ from src.research_lab.windows_listener_probe import (
     ListenerProbeStageEvent,
     ListeningSocket,
     WindowsListenerProbeError,
+    _WindowsJobTreeGuard,
     collect_windows_listeners,
 )
 
@@ -68,6 +69,45 @@ class FakeJob:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_windows_job_cleanup_uses_nonblocking_kill_on_close() -> None:
+    calls: list[int] = []
+
+    class Kernel:
+        @staticmethod
+        def CloseHandle(handle: int) -> int:
+            calls.append(handle)
+            return 1
+
+        @staticmethod
+        def TerminateJobObject(*_args) -> int:
+            raise AssertionError("synchronous TerminateJobObject must not be used")
+
+    guard = _WindowsJobTreeGuard.__new__(_WindowsJobTreeGuard)
+    guard._kernel32 = Kernel()
+    guard._handle = 123
+
+    guard.terminate_tree()
+
+    assert calls == [123]
+    assert guard._handle is None
+
+
+def test_windows_job_cleanup_fails_closed_when_handle_close_is_unproven() -> None:
+    class Kernel:
+        @staticmethod
+        def CloseHandle(_handle: int) -> int:
+            return 0
+
+    guard = _WindowsJobTreeGuard.__new__(_WindowsJobTreeGuard)
+    guard._kernel32 = Kernel()
+    guard._handle = 123
+
+    with pytest.raises(OSError, match="listener_probe_job_close_failed"):
+        guard.terminate_tree()
+
+    assert guard._handle == 123
 
 
 def _factories(

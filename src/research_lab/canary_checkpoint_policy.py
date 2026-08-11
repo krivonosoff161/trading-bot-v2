@@ -5,7 +5,7 @@ from enum import Enum
 import threading
 import time
 from types import MappingProxyType
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 
 class IntegrityEvidenceMode(str, Enum):
@@ -90,6 +90,11 @@ CANONICAL_MONITORING_LANES: tuple[CanaryMonitoringLaneSpec, ...] = (
         permits_database_snapshot=False,
     ),
     CanaryMonitoringLaneSpec(
+        name="listener_inventory",
+        max_sample_gap_seconds=90.0,
+        permits_database_snapshot=False,
+    ),
+    CanaryMonitoringLaneSpec(
         name="deep_database",
         max_sample_gap_seconds=300.0,
         permits_database_snapshot=True,
@@ -103,7 +108,9 @@ CANONICAL_MONITORING_LANES: tuple[CanaryMonitoringLaneSpec, ...] = (
 
 
 def build_monitoring_lane_watchdogs(
-    *, started_at: float
+    *,
+    started_at: float,
+    lane_specs: Sequence[CanaryMonitoringLaneSpec] = CANONICAL_MONITORING_LANES,
 ) -> Mapping[str, "CanaryFastSampleWatchdog"]:
     """Build independent freshness clocks for fast and deep monitor lanes."""
 
@@ -113,7 +120,7 @@ def build_monitoring_lane_watchdogs(
                 started_at=started_at,
                 max_fast_sample_gap_seconds=spec.max_sample_gap_seconds,
             )
-            for spec in CANONICAL_MONITORING_LANES
+            for spec in lane_specs
         }
     )
 
@@ -127,8 +134,16 @@ class CanaryMonitoringCoordinator:
     or invalidate successful process/authority samples.
     """
 
-    def __init__(self, *, started_at: float) -> None:
-        self.watchdogs = build_monitoring_lane_watchdogs(started_at=started_at)
+    def __init__(
+        self,
+        *,
+        started_at: float,
+        lane_specs: Sequence[CanaryMonitoringLaneSpec] = CANONICAL_MONITORING_LANES,
+    ) -> None:
+        self.watchdogs = build_monitoring_lane_watchdogs(
+            started_at=started_at,
+            lane_specs=lane_specs,
+        )
 
     def sample(
         self,
@@ -346,15 +361,18 @@ class CanaryMonitoringService:
         product_probe: Callable[[], Mapping[str, object]],
         on_sample: LaneSampleCallback,
         on_failure: LaneFailureCallback,
+        listener_probe: Callable[[], Mapping[str, object]] | None = None,
         started_at: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         fast_interval_seconds: float = 5.0,
+        listener_interval_seconds: float = 5.0,
         deep_interval_seconds: float = 60.0,
         product_interval_seconds: float = 30.0,
         supervisor_interval_seconds: float = 0.25,
     ) -> None:
         if min(
             fast_interval_seconds,
+            listener_interval_seconds,
             deep_interval_seconds,
             product_interval_seconds,
             supervisor_interval_seconds,
@@ -362,17 +380,29 @@ class CanaryMonitoringService:
             raise ValueError("monitoring intervals must be positive")
         self._monotonic = monotonic
         initial = float(monotonic() if started_at is None else started_at)
-        self.coordinator = CanaryMonitoringCoordinator(started_at=initial)
         self._probes = {
             "fast_safety": fast_probe,
             "deep_database": deep_probe,
             "product_progress": product_probe,
         }
+        if listener_probe is not None:
+            self._probes["listener_inventory"] = listener_probe
+        active_specs = tuple(
+            spec for spec in CANONICAL_MONITORING_LANES if spec.name in self._probes
+        )
+        self.coordinator = CanaryMonitoringCoordinator(
+            started_at=initial,
+            lane_specs=active_specs,
+        )
         self._intervals = {
             "fast_safety": float(fast_interval_seconds),
             "deep_database": float(deep_interval_seconds),
             "product_progress": float(product_interval_seconds),
         }
+        if listener_probe is not None:
+            self._intervals["listener_inventory"] = float(
+                listener_interval_seconds
+            )
         self._supervisor_interval = float(supervisor_interval_seconds)
         self._on_sample = on_sample
         self._on_failure = on_failure

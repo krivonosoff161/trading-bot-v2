@@ -137,11 +137,6 @@ class _WindowsJobTreeGuard:
             ctypes.wintypes.HANDLE,
         ]
         kernel32.AssignProcessToJobObject.restype = ctypes.wintypes.BOOL
-        kernel32.TerminateJobObject.argtypes = [
-            ctypes.wintypes.HANDLE,
-            ctypes.wintypes.UINT,
-        ]
-        kernel32.TerminateJobObject.restype = ctypes.wintypes.BOOL
         kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
         kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
         handle = kernel32.CreateJobObjectW(None, None)
@@ -181,8 +176,14 @@ class _WindowsJobTreeGuard:
             raise OSError("listener_probe_resume_failed")
 
     def terminate_tree(self) -> None:
-        if self._handle and not self._kernel32.TerminateJobObject(self._handle, 1):
-            raise OSError("listener_probe_job_terminate_failed")
+        # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE makes handle closure the bounded
+        # termination request. TerminateJobObject is synchronous and can wait
+        # behind the kernel inventory call that this cleanup must contain.
+        if self._handle:
+            handle = self._handle
+            if not self._kernel32.CloseHandle(handle):
+                raise OSError("listener_probe_job_close_failed")
+            self._handle = None
 
     def close(self) -> None:
         if self._handle:

@@ -1367,9 +1367,13 @@ def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
     center.selected_key = "paper_cards"
     center._closing = False
     center._runtime_monitor_started_at = 100.0
+    center._listener_inventory_lock = threading.Lock()
+    center._listener_inventory_pid = center.contours["ollama"].process.pid
+    center._listener_inventory_ready = True
     center._product_progress_ready = True
     center._product_progress_post_t0_failure = None
     center._runtime_ready = False
+    center._runtime_lane_states = {}
     center._runtime_owner_monitor = SimpleNamespace(
         sample=lambda: SimpleNamespace(
             state="ready",
@@ -1428,8 +1432,14 @@ def test_runtime_probe_treats_early_missing_listener_as_starting(
         (tmp_path / "absent-stop-intent",),
     )
 
+    listener = center._listener_runtime_safety_probe()
+    center._set_listener_inventory(
+        listener["listener_pid"],
+        ready=listener["ready"],
+    )
     sample = center._fast_runtime_safety_probe()
 
+    assert listener["ready"] is False
     assert sample["state"] == "listener_starting"
     assert sample["ready"] is False
     assert events == []
@@ -1468,7 +1478,7 @@ def test_runtime_probe_publishes_exact_blocked_listener_stage(
         MODULE.WindowsListenerProbeError,
         match="listener_probe_timeout",
     ):
-        center._fast_runtime_safety_probe()
+        center._listener_runtime_safety_probe()
 
     assert center._runtime_probe_stage == {
         "stage": "inventory",
@@ -1476,6 +1486,61 @@ def test_runtime_probe_publishes_exact_blocked_listener_stage(
         "monotonic_at": 105.0,
         "elapsed_seconds": 0.0,
     }
+
+
+def test_fast_runtime_probe_never_calls_listener_inventory(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 105.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(
+        MODULE,
+        "_listening_pid",
+        lambda *_args, **_kwargs: pytest.fail(
+            "fast authority lane called listener inventory"
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    sample = center._fast_runtime_safety_probe()
+
+    assert sample["ready"] is True
+    assert sample["ollama_listener_ready"] is True
+
+
+def test_listener_timeout_preserves_last_verified_identity(
+    monkeypatch,
+) -> None:
+    center, _events = _runtime_probe_center()
+    expected_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 105.0)
+
+    def timed_out(_port, *, stage_callback):
+        stage_callback(
+            MODULE.ListenerProbeStageEvent(
+                stage="inventory",
+                state="timed_out",
+                monotonic_at=105.0,
+                elapsed_seconds=8.0,
+            )
+        )
+        raise MODULE.WindowsListenerProbeError(
+            "listener_probe_timeout", stage="inventory"
+        )
+
+    monkeypatch.setattr(MODULE, "_listening_pid", timed_out)
+
+    with pytest.raises(MODULE.WindowsListenerProbeError):
+        center._listener_runtime_safety_probe()
+
+    assert center._listener_inventory_snapshot() == (expected_pid, True)
 
 
 def test_runtime_probe_sets_t0_only_after_listener_and_owner_are_ready(
@@ -1496,13 +1561,47 @@ def test_runtime_probe_sets_t0_only_after_listener_and_owner_are_ready(
         (tmp_path / "absent-stop-intent",),
     )
 
+    center._set_listener_inventory(None, ready=False)
+    pending = center._fast_runtime_safety_probe()
+    listener = center._listener_runtime_safety_probe()
+    center._set_listener_inventory(
+        listener["listener_pid"],
+        ready=listener["ready"],
+    )
     sample = center._fast_runtime_safety_probe()
 
+    assert pending["state"] == "listener_starting"
+    assert pending["ready"] is False
+    assert listener["ready"] is True
     assert sample["state"] == "ready"
     assert sample["ready"] is True
     assert center._runtime_ready is True
     assert len(events) == 1
     assert "T+0 READY" in events[0][2]
+
+
+def test_listener_cache_updates_only_after_completed_lane_sample() -> None:
+    center, _events = _runtime_probe_center()
+    expected_pid = center.contours["ollama"].process.pid
+    center._set_listener_inventory(None, ready=False)
+
+    center._on_runtime_monitor_sample(
+        SimpleNamespace(
+            lane="listener_inventory",
+            state="degraded",
+            payload={"ready": True, "listener_pid": expected_pid},
+        )
+    )
+    assert center._listener_inventory_snapshot() == (None, False)
+
+    center._on_runtime_monitor_sample(
+        SimpleNamespace(
+            lane="listener_inventory",
+            state="healthy",
+            payload={"ready": True, "listener_pid": expected_pid},
+        )
+    )
+    assert center._listener_inventory_snapshot() == (expected_pid, True)
 
 
 def test_runtime_probe_waits_for_real_telegram_poll_before_t0(
@@ -1711,7 +1810,27 @@ def test_runtime_probe_listener_loss_after_t0_is_immediate_hard_failure(
         MODULE.CanaryMonitorHardFailure,
         match="ollama_listener_unavailable",
     ):
-        center._fast_runtime_safety_probe()
+        center._listener_runtime_safety_probe()
+
+
+def test_listener_inventory_rejects_foreign_port_owner_immediately(
+    monkeypatch,
+) -> None:
+    center, _events = _runtime_probe_center()
+    expected_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 125.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(
+        MODULE,
+        "_listening_pid",
+        lambda _port, **_kwargs: expected_pid + 1,
+    )
+
+    with pytest.raises(
+        MODULE.CanaryMonitorHardFailure,
+        match="foreign_ollama_listener",
+    ):
+        center._listener_runtime_safety_probe()
 
 
 def test_runtime_probe_rejects_owner_outside_canonical_rcc_tree(

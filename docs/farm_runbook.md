@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-01
-- Verified against: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
+- Verified against: `30c70dd0b4f0dc416bfcd10f70c7cdfe5dce8874`
 - Scope: supported paper-only preflight, start, monitor, and graceful stop
 - Evidence: [RCC tests](../tests/test_research_control_center.py),
   [pre-heartbeat tests](../tests/test_rcc_preheartbeat_startup.py), and
@@ -123,7 +123,11 @@ a sanitized aggregate if a result needs discussion.
   first and only then sends CTRL_BREAK to the same verified PID/start process
   group as its bounded graceful fallback.
 - Active canary monitoring keeps fast process/authority samples independent
-  from deeper SQLite health work and completed product progress. Scanner passes
+  from Windows listener inventory, deeper SQLite health work and completed
+  product progress. Listener ownership has its own 90-second freshness lane:
+  a transient bounded inventory timeout cannot starve process/owner/fence
+  sampling, but repeated loss still fails closed. A complete foreign or missing
+  Ollama listener after T+0 remains an immediate hard failure. Scanner passes
   and farm cycles publish atomic safe aggregates only at real completion
   boundaries. The product lane requires current-run checkpoints before T+0;
   an ordinary heartbeat cannot refresh its scanner, farm, validation, or
@@ -163,7 +167,8 @@ a sanitized aggregate if a result needs discussion.
   an isolated Python child performs native Windows TCP enumeration through
   `psutil`, and its exact process tree is contained in a kill-on-close Windows
   job. Output uses a temporary file instead of inherited pipes, and timeout
-  cleanup targets only that owned job. The provider does not import project
+  cleanup closes that exact kill-on-close job instead of synchronously waiting
+  in `TerminateJobObject` behind a blocked kernel inventory call. The provider does not import project
   code and remains fail-closed on timeout, invalid output, or unproven cleanup.
   The minimal heartbeat exposes the current safe
   `runtime_probe.stage` (`spawn`, `inventory`, `cleanup`, `decode`, `complete`)
