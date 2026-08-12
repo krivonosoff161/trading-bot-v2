@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-11
-- Verified against: `30c70dd0b4f0dc416bfcd10f70c7cdfe5dce8874`
+- Verified against: `c4c3607f788996ce655cb4c650e0667dcb5c701e`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -31,6 +31,13 @@ model conversations, recipients, credentials, or workstation-specific state.
 | Evidence/storage capability | implemented bounded | Content-bound archives, synthetic migration, and plan-digest-bound backup retention exist. An off-by-default exact-root capability now seals bounded farm stdout, journals, lineage, invocation metadata, and selected derived audit streams at writer boundaries; it uses the same content-addressed catalog, releases sources only after restore proof, retains compact recent/semantic projections, and fails closed on archive or budget loss. Its shared OS lock applies one monotonic wait budget across both in-process and interprocess contention, so a short concurrent contour write is retried while a persistent holder still fails closed. Private activation endurance remains operationally unproved. |
 | Paper-card delivery | implemented bounded | Preview, deduplication, and guarded delivery exist; recipients, content, and acknowledgement state stay private. A chart card is one bounded Telegram `sendPhoto` effect whose caption contains the complete card text, eliminating the former photo-then-text partial-delivery window. Overlong captions fail before transport. A proven connection-establishment failure is retryable because no request reached Telegram; every post-connect unknown remains fail-closed. A successful Telegram response is authoritative even if the runtime log sink fails immediately afterward; the returned message id still reaches the delivery outbox. Current-attempt and carried ambiguous ACK counts are separate so a new failure stops the canary while historical operator-recovery debt remains blocked from replay. |
 | Execution denial boundary | implemented | No supported entrypoint grants live order authority. |
+
+RCC process liveness is now a strict 15-second owned-handle lane. It never
+opens SQLite, reads runtime status files, inventories listeners, walks process
+ancestry, or reopens a PID. Authority/fencing and filesystem/Telegram status
+have independent supervised freshness clocks. Every lane publishes its exact
+active stage and elapsed time in the minimal heartbeat, so a blocked I/O probe
+fails under its own name without fabricating a stopped contour.
 
 Priority validation publication now wakes the canonical full product cycle
 immediately after a new current generation is atomically complete. This avoids

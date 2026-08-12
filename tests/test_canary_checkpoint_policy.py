@@ -62,7 +62,10 @@ def test_full_integrity_is_limited_to_pre_t0_and_final_quiescence() -> None:
         assert result == {"integrity_check": "ok"}
 
     assert immediate.integrity_mode is IntegrityEvidenceMode.FULL_PRE_T0
-    assert FINAL_QUIESCENT_CHECKPOINT.integrity_mode is IntegrityEvidenceMode.FULL_QUIESCENT
+    assert (
+        FINAL_QUIESCENT_CHECKPOINT.integrity_mode
+        is IntegrityEvidenceMode.FULL_QUIESCENT
+    )
     assert calls == ["full", "full"]
 
 
@@ -70,7 +73,9 @@ def test_every_active_checkpoint_uses_only_bounded_health_signals() -> None:
     active = [item for item in CANONICAL_CANARY_CHECKPOINTS if item.name != "immediate"]
 
     assert active
-    assert all(item.integrity_mode is IntegrityEvidenceMode.BOUNDED_HEALTH for item in active)
+    assert all(
+        item.integrity_mode is IntegrityEvidenceMode.BOUNDED_HEALTH for item in active
+    )
     assert active[-1].name == "300m"
     assert active[-1].due_seconds == 18_000.0
 
@@ -90,7 +95,9 @@ def test_checkpoint_schedule_rejects_non_monotonic_elapsed_value() -> None:
 
 
 def test_fast_samples_remain_green_inside_bounded_gap() -> None:
-    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog = CanaryFastSampleWatchdog(
+        started_at=100.0, max_fast_sample_gap_seconds=45.0
+    )
     watchdog.record_fast_sample(now=110.0)
     watchdog.record_fast_sample(now=140.0)
 
@@ -101,7 +108,9 @@ def test_fast_samples_remain_green_inside_bounded_gap() -> None:
 
 
 def test_missing_fast_sample_fails_before_checkpoint_can_mask_it() -> None:
-    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog = CanaryFastSampleWatchdog(
+        started_at=100.0, max_fast_sample_gap_seconds=45.0
+    )
 
     result = watchdog.assess(now=145.1)
 
@@ -110,7 +119,9 @@ def test_missing_fast_sample_fails_before_checkpoint_can_mask_it() -> None:
 
 
 def test_stale_fast_sample_latches_one_idempotent_alert() -> None:
-    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog = CanaryFastSampleWatchdog(
+        started_at=100.0, max_fast_sample_gap_seconds=45.0
+    )
     watchdog.record_fast_sample(now=105.0)
     first = watchdog.assess(now=150.1)
     second = watchdog.assess(now=160.0)
@@ -121,7 +132,9 @@ def test_stale_fast_sample_latches_one_idempotent_alert() -> None:
 
 
 def test_late_sample_cannot_clear_latched_watchdog_failure() -> None:
-    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog = CanaryFastSampleWatchdog(
+        started_at=100.0, max_fast_sample_gap_seconds=45.0
+    )
     watchdog.assess(now=145.1)
 
     result = watchdog.record_fast_sample(now=146.0)
@@ -131,7 +144,9 @@ def test_late_sample_cannot_clear_latched_watchdog_failure() -> None:
 
 
 def test_late_completed_sample_cannot_hide_gap_without_prior_assess() -> None:
-    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog = CanaryFastSampleWatchdog(
+        started_at=100.0, max_fast_sample_gap_seconds=45.0
+    )
     watchdog.record_fast_sample(now=105.0)
 
     result = watchdog.record_fast_sample(now=150.1)
@@ -142,16 +157,22 @@ def test_late_completed_sample_cannot_hide_gap_without_prior_assess() -> None:
 
 
 def test_adapter_must_escalate_latched_watchdog_before_side_effects() -> None:
-    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog = CanaryFastSampleWatchdog(
+        started_at=100.0, max_fast_sample_gap_seconds=45.0
+    )
     watchdog.record_fast_sample(now=105.0)
     late = watchdog.record_fast_sample(now=150.1)
 
-    with pytest.raises(CanaryMonitorHardFailure, match="monitor_fast_sample_freshness_lost"):
+    with pytest.raises(
+        CanaryMonitorHardFailure, match="monitor_fast_sample_freshness_lost"
+    ):
         require_healthy_watchdog(late)
 
 
 def test_healthy_watchdog_assessment_does_not_raise() -> None:
-    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog = CanaryFastSampleWatchdog(
+        started_at=100.0, max_fast_sample_gap_seconds=45.0
+    )
 
     require_healthy_watchdog(watchdog.record_fast_sample(now=110.0))
 
@@ -161,6 +182,10 @@ def test_fast_safety_lane_excludes_database_snapshot() -> None:
 
     assert not lanes["fast_safety"].permits_database_snapshot
     assert lanes["fast_safety"].max_sample_gap_seconds == 15.0
+    assert lanes["authority_state"].permits_database_snapshot
+    assert lanes["authority_state"].max_sample_gap_seconds == 30.0
+    assert not lanes["runtime_status"].permits_database_snapshot
+    assert lanes["runtime_status"].max_sample_gap_seconds == 30.0
     assert not lanes["listener_inventory"].permits_database_snapshot
     assert lanes["listener_inventory"].max_sample_gap_seconds == 90.0
     assert lanes["deep_database"].permits_database_snapshot
@@ -273,12 +298,8 @@ def test_blocked_deep_probe_cannot_block_fast_lane_or_hide_freshness_failure() -
         product_interval_seconds=0.01,
         supervisor_interval_seconds=0.005,
     )
-    service.coordinator.watchdogs[
-        "fast_safety"
-    ].max_fast_sample_gap_seconds = 0.2
-    service.coordinator.watchdogs[
-        "deep_database"
-    ].max_fast_sample_gap_seconds = 0.05
+    service.coordinator.watchdogs["fast_safety"].max_fast_sample_gap_seconds = 0.2
+    service.coordinator.watchdogs["deep_database"].max_fast_sample_gap_seconds = 0.05
 
     service.start()
     assert deep_entered.wait(0.2)
@@ -317,9 +338,7 @@ def test_blocked_listener_inventory_cannot_starve_fast_authority_samples() -> No
         product_interval_seconds=1.0,
         supervisor_interval_seconds=0.005,
     )
-    service.coordinator.watchdogs[
-        "fast_safety"
-    ].max_fast_sample_gap_seconds = 0.05
+    service.coordinator.watchdogs["fast_safety"].max_fast_sample_gap_seconds = 0.05
     service.coordinator.watchdogs[
         "listener_inventory"
     ].max_fast_sample_gap_seconds = 0.25
@@ -365,9 +384,7 @@ def test_listener_inventory_freshness_fails_its_lane_not_fast_lane() -> None:
         product_interval_seconds=1.0,
         supervisor_interval_seconds=0.005,
     )
-    service.coordinator.watchdogs[
-        "fast_safety"
-    ].max_fast_sample_gap_seconds = 0.1
+    service.coordinator.watchdogs["fast_safety"].max_fast_sample_gap_seconds = 0.1
     service.coordinator.watchdogs[
         "listener_inventory"
     ].max_fast_sample_gap_seconds = 0.05
@@ -382,6 +399,61 @@ def test_listener_inventory_freshness_fails_its_lane_not_fast_lane() -> None:
     assert len(fast_samples) >= 3
     assert all(sample.state == "healthy" for sample in fast_samples)
     release_listener.set()
+    assert service.stop(timeout=0.5) == ()
+
+
+@pytest.mark.parametrize("blocked_lane", ("authority_state", "runtime_status"))
+def test_blocked_dependency_lane_cannot_starve_fast_process_liveness(
+    blocked_lane: str,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    failures: list[str] = []
+    fast_samples: list[CanaryLaneSample] = []
+
+    def blocked_probe() -> dict[str, object]:
+        entered.set()
+        release.wait(0.3)
+        return {"ready": True}
+
+    service = CanaryMonitoringService(
+        fast_probe=lambda: {"owned_processes": "alive"},
+        authority_probe=(
+            blocked_probe
+            if blocked_lane == "authority_state"
+            else lambda: {"ready": True}
+        ),
+        status_probe=(
+            blocked_probe
+            if blocked_lane == "runtime_status"
+            else lambda: {"ready": True}
+        ),
+        deep_probe=lambda: {"bounded": True},
+        product_probe=lambda: {"ready": True},
+        on_sample=lambda sample: (
+            fast_samples.append(sample) if sample.lane == "fast_safety" else None
+        ),
+        on_failure=lambda lane, _assessment: failures.append(lane),
+        fast_interval_seconds=0.01,
+        authority_interval_seconds=0.01,
+        status_interval_seconds=0.01,
+        deep_interval_seconds=1.0,
+        product_interval_seconds=1.0,
+        supervisor_interval_seconds=0.005,
+    )
+    service.coordinator.watchdogs["fast_safety"].max_fast_sample_gap_seconds = 0.1
+    service.coordinator.watchdogs[blocked_lane].max_fast_sample_gap_seconds = 0.05
+
+    service.start()
+    assert entered.wait(0.1)
+    deadline = time.monotonic() + 0.3
+    while not failures and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert failures == [blocked_lane]
+    assert len(fast_samples) >= 3
+    assert all(sample.state == "healthy" for sample in fast_samples)
+    release.set()
     assert service.stop(timeout=0.5) == ()
 
 
@@ -529,10 +601,7 @@ def test_external_probe_loss_fails_only_after_monotonic_freshness_deadline() -> 
     assert before_deadline.state == "degraded"
     assert before_deadline.watchdog.failure_reason is None
     assert exhausted.state == "failed"
-    assert (
-        exhausted.watchdog.failure_reason
-        == "monitor_fast_sample_freshness_lost"
-    )
+    assert exhausted.watchdog.failure_reason == "monitor_fast_sample_freshness_lost"
 
 
 def test_external_explicit_safety_violation_fails_immediately() -> None:
@@ -563,10 +632,7 @@ def test_external_complete_sample_missing_supervisor_fails_immediately() -> None
     result = monitor.sample(lambda: payload, now=100.1)
 
     assert result.state == "failed"
-    assert (
-        result.watchdog.failure_reason
-        == "process_lease_supervisor_not_ready"
-    )
+    assert result.watchdog.failure_reason == "process_lease_supervisor_not_ready"
 
 
 @pytest.mark.parametrize(

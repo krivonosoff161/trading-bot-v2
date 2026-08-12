@@ -26,7 +26,7 @@ import time
 import tkinter as tk
 from dataclasses import dataclass, field
 from tkinter import messagebox, ttk
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Mapping, TypeVar
 
 from src.research_lab.canary_checkpoint_policy import (
     CanaryLaneSample,
@@ -427,9 +427,7 @@ class ManagedContour:
             identity = probe_process_identity(self.process.pid)
         except Exception as exc:
             self._abort_unidentified_start()
-            raise RuntimeError(
-                "owned contour process identity probe failed"
-            ) from exc
+            raise RuntimeError("owned contour process identity probe failed") from exc
         if identity is None:
             self._abort_unidentified_start()
             raise RuntimeError("owned contour process identity unavailable")
@@ -689,9 +687,7 @@ def _listening_pid(
         if listener.port == port
     }
     if len(pids) > 1:
-        raise WindowsListenerProbeError(
-            "listener_probe_ambiguous_port", stage="decode"
-        )
+        raise WindowsListenerProbeError("listener_probe_ambiguous_port", stage="decode")
     return next(iter(pids), None)
 
 
@@ -831,6 +827,13 @@ class ControlCenter(tk.Tk):
         self._listener_inventory_lock = threading.Lock()
         self._listener_inventory_pid: int | None = None
         self._listener_inventory_ready = False
+        self._runtime_dependency_lock = threading.Lock()
+        self._runtime_dependencies: dict[str, dict[str, object]] = {
+            "authority_state": {"ready": False, "state": "not_sampled"},
+            "runtime_status": {"ready": False, "state": "not_sampled"},
+        }
+        self._runtime_lane_stage_lock = threading.Lock()
+        self._runtime_lane_stages: dict[str, dict[str, object]] = {}
         self._product_progress_monitor: ProductProgressMonitor | None = None
         self._product_progress_ready = False
         self._product_progress_post_t0_failure: str | None = (
@@ -1372,6 +1375,61 @@ class ControlCenter(tk.Tk):
                 bool(self.__dict__.get("_listener_inventory_ready", False)),
             )
 
+    def _set_runtime_dependency(
+        self,
+        lane: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        lock = self.__dict__.get("_runtime_dependency_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self.__dict__["_runtime_dependency_lock"] = lock
+        with lock:
+            dependencies = self.__dict__.setdefault("_runtime_dependencies", {})
+            dependencies[lane] = dict(payload)
+
+    def _runtime_dependency_snapshot(self, lane: str) -> dict[str, object]:
+        lock = self.__dict__.get("_runtime_dependency_lock")
+        if lock is None:
+            return {"ready": False, "state": "not_sampled"}
+        with lock:
+            dependencies = self.__dict__.get("_runtime_dependencies", {})
+            return dict(
+                dependencies.get(lane, {"ready": False, "state": "not_sampled"})
+            )
+
+    def _record_runtime_lane_stage(
+        self,
+        lane: str,
+        stage: str,
+        state: str,
+        *,
+        started_at: float,
+    ) -> None:
+        lock = self.__dict__.get("_runtime_lane_stage_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self.__dict__["_runtime_lane_stage_lock"] = lock
+        now = time.monotonic()
+        with lock:
+            stages = self.__dict__.setdefault("_runtime_lane_stages", {})
+            stages[lane] = {
+                "stage": str(stage)[:80],
+                "state": str(state)[:40],
+                "monotonic_at": now,
+                "elapsed_seconds": max(0.0, now - started_at),
+            }
+
+    def _runtime_lane_stage_snapshot(self) -> dict[str, dict[str, object]]:
+        lock = self.__dict__.get("_runtime_lane_stage_lock")
+        if lock is None:
+            return {}
+        with lock:
+            return {
+                lane: dict(value)
+                for lane, value in self.__dict__.get("_runtime_lane_stages", {}).items()
+            }
+
     @staticmethod
     def _persist_hard_fail_alert(reason: str) -> bool:
         alert = {
@@ -1426,9 +1484,15 @@ class ControlCenter(tk.Tk):
 
     def _fast_runtime_safety_probe(self) -> dict[str, object]:
         started_at = self._runtime_monitor_started_at
-        owner_monitor = self._runtime_owner_monitor
-        if started_at is None or owner_monitor is None:
+        if started_at is None:
             raise RuntimeError("runtime monitor was not initialized")
+        probe_started_at = time.monotonic()
+        self._record_runtime_lane_stage(
+            "fast_safety",
+            "owned_process_handles",
+            "started",
+            started_at=probe_started_at,
+        )
         elapsed = max(0.0, time.monotonic() - started_at)
         contours_ready = True
         for key in CANONICAL_PAPER_PROFILE:
@@ -1440,101 +1504,23 @@ class ControlCenter(tk.Tk):
                         f"required_contour_startup_timeout:{key}"
                     )
                 continue
-            if not item.running or not _same_live_process(
-                item.process.pid,
-                item.started_at,
-            ):
-                raise CanaryMonitorHardFailure(
-                    f"required_contour_unavailable:{key}"
-                )
-
-        owner = owner_monitor.sample()
-        supervisor = self._read_cached_json(
-            PRIVATE_ROOT / "state" / "farm_process_lease_status.json"
+            # The RCC owns this exact Popen handle. poll() checks that process
+            # generation directly and does not perform filesystem, SQLite,
+            # listener, ancestry, or whole-system process inventory work.
+            if not item.running:
+                raise CanaryMonitorHardFailure(f"required_contour_unavailable:{key}")
+        self._record_runtime_lane_stage(
+            "fast_safety",
+            "dependency_snapshots",
+            "started",
+            started_at=probe_started_at,
         )
-        supervisor_state = str(supervisor.get("state") or "")
-        supervisor_updated_at = float(supervisor.get("updated_at") or 0.0)
-        supervisor_age = (
-            max(0.0, time.time() - supervisor_updated_at)
-            if supervisor_updated_at > 0
-            else None
-        )
-        supervisor_ready = bool(
-            owner.ready
-            and supervisor.get("schema") == "ProcessLeaseSupervisorStatus.v1"
-            and supervisor_state == "running"
-            and supervisor.get("paper_only") is True
-            and supervisor.get("execution_allowed") is False
-            and supervisor_age is not None
-            and supervisor_age <= PROCESS_LEASE_SUPERVISOR_MAX_AGE_SECONDS
-            and owner.process_identity is not None
-            and int(supervisor.get("owner_pid") or 0)
-            == owner.process_identity.pid
-            and abs(
-                float(supervisor.get("owner_started_at") or 0.0)
-                - owner.process_identity.started_at
-            )
-            <= 0.001
-            and int(supervisor.get("fencing_token") or 0)
-            == int(owner.canonical_fence or 0)
-            and float(supervisor.get("lease_expires_at") or 0.0) > time.time()
-        )
-        if owner.ready and not supervisor_ready and (
-            self._runtime_ready or elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS
-        ):
-            reason = (
-                "farm_process_lease_supervisor_failed"
-                if supervisor_state == "failed"
-                else "farm_process_lease_supervisor_stale"
-                if supervisor_age is not None
-                and supervisor_age > PROCESS_LEASE_SUPERVISOR_MAX_AGE_SECONDS
-                else "farm_process_lease_supervisor_unavailable"
-            )
-            raise CanaryMonitorHardFailure(reason)
-        paper = self.contours["paper_cards"]
-        if owner.process_identity is not None and (
-            paper.process is None
-            or not _process_descends_from(
-                owner.process_identity.pid,
-                paper.process.pid,
-            )
-        ):
-            raise CanaryMonitorHardFailure("owner_not_in_canonical_rcc_tree")
-        ollama = self.contours["ollama"]
+        authority = self._runtime_dependency_snapshot("authority_state")
+        status = self._runtime_dependency_snapshot("runtime_status")
+        authority_ready = authority.get("ready") is True
+        status_ready = status.get("ready") is True
         listener_pid, listener_ready = self._listener_inventory_snapshot()
-        listener_ready = bool(
-            listener_ready
-            and listener_pid
-            and ollama.process is not None
-            and listener_pid == ollama.process.pid
-            and _same_live_process(listener_pid, ollama.started_at)
-        )
-
-        wall_started_at = time.time() - elapsed
-        try:
-            stop_intent_fresh = any(
-                path.is_file() and path.stat().st_mtime >= wall_started_at
-                for path in CANONICAL_STOP_INTENTS
-            )
-        except OSError as exc:
-            raise CanaryMonitorHardFailure("stop_intent_probe_failed") from exc
-        if stop_intent_fresh and not self._closing:
-            raise CanaryMonitorHardFailure("canonical_stop_intent_during_runtime")
-
-        telegram = self.contours["telegram_bot"]
-        telegram_assessment = assess_health(
-            self._read_cached_json(status_path(PRIVATE_ROOT)),
-            expected_pid=telegram.process.pid if telegram.process is not None else 0,
-            run_started_at=wall_started_at,
-            now=time.time(),
-            startup_budget_seconds=RUNTIME_STARTUP_BUDGET_SECONDS,
-            stale_seconds=TELEGRAM_BOT_POLL_STALE_SECONDS,
-            require_ready=self._runtime_ready,
-        )
-        if telegram_assessment.hard_failure:
-            raise CanaryMonitorHardFailure(telegram_assessment.hard_failure)
-        telegram_poll_ready = telegram_assessment.ready
-
+        listener_ready = bool(listener_ready and listener_pid)
         product_ready = bool(self._product_progress_ready)
         product_post_t0_failure = self._product_progress_post_t0_failure
         product_transitioning = bool(
@@ -1556,10 +1542,9 @@ class ControlCenter(tk.Tk):
             raise CanaryMonitorHardFailure("product_progress_startup_timeout")
         ready = (
             contours_ready
-            and owner.ready
+            and authority_ready
+            and status_ready
             and listener_ready
-            and supervisor_ready
-            and telegram_poll_ready
             and (product_ready or self._runtime_ready)
         )
         if ready and not self._runtime_ready:
@@ -1579,30 +1564,177 @@ class ControlCenter(tk.Tk):
             if ready
             else "process_starting"
             if not contours_ready
+            else "authority_starting"
+            if not authority_ready
             else "listener_starting"
             if not listener_ready
-            else "process_starting"
-            if not supervisor_ready
             else "provider_waiting"
-            if not telegram_poll_ready
+            if not status_ready
             else "product_starting"
             if not product_ready
-            else owner.state
+            else "dependency_starting"
+        )
+        self._record_runtime_lane_stage(
+            "fast_safety", "complete", "completed", started_at=probe_started_at
         )
         return {
             "state": state,
             "ready": ready,
+            "owner_fence": authority.get("owner_fence"),
+            "owner_resources": authority.get("owner_resources", ()),
+            "lease_supervisor_state": authority.get(
+                "lease_supervisor_state", "pending"
+            ),
+            "lease_supervisor_age_seconds": authority.get(
+                "lease_supervisor_age_seconds"
+            ),
+            "ollama_listener_ready": listener_ready,
+            "telegram_poll_state": status.get("telegram_poll_state", "starting"),
+            "telegram_poll_success_age_seconds": status.get(
+                "telegram_poll_success_age_seconds"
+            ),
+            "product_progress_ready": product_ready,
+            "product_progress_transitioning": product_transitioning,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    def _authority_runtime_safety_probe(self) -> dict[str, object]:
+        started_at = self._runtime_monitor_started_at
+        owner_monitor = self._runtime_owner_monitor
+        if started_at is None or owner_monitor is None:
+            raise RuntimeError("runtime monitor was not initialized")
+        probe_started_at = time.monotonic()
+        elapsed = max(0.0, probe_started_at - started_at)
+        self._record_runtime_lane_stage(
+            "authority_state",
+            "ownership_sqlite",
+            "started",
+            started_at=probe_started_at,
+        )
+        owner = owner_monitor.sample()
+        self._record_runtime_lane_stage(
+            "authority_state",
+            "lease_supervisor_status",
+            "started",
+            started_at=probe_started_at,
+        )
+        supervisor = self._read_cached_json(
+            PRIVATE_ROOT / "state" / "farm_process_lease_status.json"
+        )
+        supervisor_state = str(supervisor.get("state") or "")
+        supervisor_updated_at = float(supervisor.get("updated_at") or 0.0)
+        supervisor_age = (
+            max(0.0, time.time() - supervisor_updated_at)
+            if supervisor_updated_at > 0
+            else None
+        )
+        supervisor_ready = bool(
+            owner.ready
+            and supervisor.get("schema") == "ProcessLeaseSupervisorStatus.v1"
+            and supervisor_state == "running"
+            and supervisor.get("paper_only") is True
+            and supervisor.get("execution_allowed") is False
+            and supervisor_age is not None
+            and supervisor_age <= PROCESS_LEASE_SUPERVISOR_MAX_AGE_SECONDS
+            and owner.process_identity is not None
+            and int(supervisor.get("owner_pid") or 0) == owner.process_identity.pid
+            and abs(
+                float(supervisor.get("owner_started_at") or 0.0)
+                - owner.process_identity.started_at
+            )
+            <= 0.001
+            and int(supervisor.get("fencing_token") or 0)
+            == int(owner.canonical_fence or 0)
+            and float(supervisor.get("lease_expires_at") or 0.0) > time.time()
+        )
+        if (
+            owner.ready
+            and not supervisor_ready
+            and (self._runtime_ready or elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS)
+        ):
+            reason = (
+                "farm_process_lease_supervisor_failed"
+                if supervisor_state == "failed"
+                else "farm_process_lease_supervisor_stale"
+                if supervisor_age is not None
+                and supervisor_age > PROCESS_LEASE_SUPERVISOR_MAX_AGE_SECONDS
+                else "farm_process_lease_supervisor_unavailable"
+            )
+            raise CanaryMonitorHardFailure(reason)
+        self._record_runtime_lane_stage(
+            "authority_state",
+            "owner_process_ancestry",
+            "started",
+            started_at=probe_started_at,
+        )
+        paper = self.contours["paper_cards"]
+        if owner.process_identity is not None and (
+            paper.process is None
+            or not _process_descends_from(
+                owner.process_identity.pid,
+                paper.process.pid,
+            )
+        ):
+            raise CanaryMonitorHardFailure("owner_not_in_canonical_rcc_tree")
+        self._record_runtime_lane_stage(
+            "authority_state", "complete", "completed", started_at=probe_started_at
+        )
+        return {
+            "state": owner.state,
+            "ready": bool(owner.ready and supervisor_ready),
             "owner_fence": owner.canonical_fence,
             "owner_resources": owner.resources,
             "lease_supervisor_state": supervisor_state or "pending",
             "lease_supervisor_age_seconds": supervisor_age,
-            "ollama_listener_ready": listener_ready,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    def _status_runtime_safety_probe(self) -> dict[str, object]:
+        started_at = self._runtime_monitor_started_at
+        if started_at is None:
+            raise RuntimeError("runtime monitor was not initialized")
+        probe_started_at = time.monotonic()
+        elapsed = max(0.0, probe_started_at - started_at)
+        wall_started_at = time.time() - elapsed
+        self._record_runtime_lane_stage(
+            "runtime_status", "stop_intents", "started", started_at=probe_started_at
+        )
+        try:
+            stop_intent_fresh = any(
+                path.is_file() and path.stat().st_mtime >= wall_started_at
+                for path in CANONICAL_STOP_INTENTS
+            )
+        except OSError as exc:
+            raise CanaryMonitorHardFailure("stop_intent_probe_failed") from exc
+        if stop_intent_fresh and not self._closing:
+            raise CanaryMonitorHardFailure("canonical_stop_intent_during_runtime")
+        self._record_runtime_lane_stage(
+            "runtime_status", "telegram_health", "started", started_at=probe_started_at
+        )
+        telegram = self.contours["telegram_bot"]
+        telegram_assessment = assess_health(
+            self._read_cached_json(status_path(PRIVATE_ROOT)),
+            expected_pid=telegram.process.pid if telegram.process is not None else 0,
+            run_started_at=wall_started_at,
+            now=time.time(),
+            startup_budget_seconds=RUNTIME_STARTUP_BUDGET_SECONDS,
+            stale_seconds=TELEGRAM_BOT_POLL_STALE_SECONDS,
+            require_ready=self._runtime_ready,
+        )
+        if telegram_assessment.hard_failure:
+            raise CanaryMonitorHardFailure(telegram_assessment.hard_failure)
+        self._record_runtime_lane_stage(
+            "runtime_status", "complete", "completed", started_at=probe_started_at
+        )
+        return {
+            "state": telegram_assessment.state,
+            "ready": telegram_assessment.ready,
             "telegram_poll_state": telegram_assessment.state,
             "telegram_poll_success_age_seconds": (
                 telegram_assessment.success_age_seconds
             ),
-            "product_progress_ready": product_ready,
-            "product_progress_transitioning": product_transitioning,
             "paper_only": True,
             "execution_allowed": False,
         }
@@ -1677,14 +1809,18 @@ class ControlCenter(tk.Tk):
         return report
 
     def _on_runtime_monitor_sample(self, sample: CanaryLaneSample) -> None:
+        if (
+            sample.lane in {"authority_state", "runtime_status"}
+            and sample.state == "healthy"
+        ):
+            self._set_runtime_dependency(sample.lane, sample.payload)
         if sample.lane == "listener_inventory" and sample.state == "healthy":
             raw_pid = sample.payload.get("listener_pid")
             listener_pid = raw_pid if isinstance(raw_pid, int) else None
             self._set_listener_inventory(
                 listener_pid,
                 ready=(
-                    listener_pid is not None
-                    and sample.payload.get("ready") is True
+                    listener_pid is not None and sample.payload.get("ready") is True
                 ),
             )
         if sample.lane == "product_progress":
@@ -1720,6 +1856,14 @@ class ControlCenter(tk.Tk):
         self._runtime_monitor_started_at = time.monotonic()
         self._runtime_monitor_wall_started_at = time.time()
         self._set_listener_inventory(None, ready=False)
+        self._set_runtime_dependency(
+            "authority_state", {"ready": False, "state": "not_sampled"}
+        )
+        self._set_runtime_dependency(
+            "runtime_status", {"ready": False, "state": "not_sampled"}
+        )
+        with self._runtime_lane_stage_lock:
+            self._runtime_lane_stages = {}
         self._product_progress_ready = False
         self._product_progress_post_t0_failure = "product_progress_not_sampled"
         self._product_progress_monitor = ProductProgressMonitor(
@@ -1733,6 +1877,8 @@ class ControlCenter(tk.Tk):
         )
         monitor = CanaryMonitoringService(
             fast_probe=self._fast_runtime_safety_probe,
+            authority_probe=self._authority_runtime_safety_probe,
+            status_probe=self._status_runtime_safety_probe,
             listener_probe=self._listener_runtime_safety_probe,
             deep_probe=self._deep_runtime_safety_probe,
             product_probe=self._product_runtime_progress_probe,
@@ -1752,6 +1898,12 @@ class ControlCenter(tk.Tk):
         self._runtime_monitor_started_at = None
         self._runtime_monitor_wall_started_at = None
         self._set_listener_inventory(None, ready=False)
+        self._set_runtime_dependency(
+            "authority_state", {"ready": False, "state": "not_sampled"}
+        )
+        self._set_runtime_dependency(
+            "runtime_status", {"ready": False, "state": "not_sampled"}
+        )
         self._product_progress_monitor = None
         self._product_progress_ready = False
         self._product_progress_post_t0_failure = "product_progress_not_sampled"
@@ -1861,9 +2013,7 @@ class ControlCenter(tk.Tk):
         fresh: dict[str, bool] = {}
         for path in CANONICAL_STOP_INTENTS:
             try:
-                fresh[path.name] = (
-                    path.is_file() and path.stat().st_mtime >= started_at
-                )
+                fresh[path.name] = path.is_file() and path.stat().st_mtime >= started_at
             except OSError:
                 fresh[path.name] = False
         direct_marker = {
@@ -2512,6 +2662,7 @@ class ControlCenter(tk.Tk):
             "execution_allowed": False,
             "shutdown": shutdown,
             "runtime_probe": runtime_probe,
+            "runtime_lanes": self._runtime_lane_stage_snapshot(),
             "compute_pipeline": dict(self._last_compute_pipeline),
             "ui_snapshot": ui_snapshot,
             "contours": contour_rows,

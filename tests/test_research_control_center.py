@@ -109,7 +109,10 @@ def test_ollama_is_local_and_gpu_environment_is_explicit():
     assert ollama.env["CUDA_VISIBLE_DEVICES"] == "-1"
     assert ollama.env["GGML_VK_VISIBLE_DEVICES"] == "-1"
     assert ollama.env["OLLAMA_NUM_PARALLEL"] == "1"
-    assert MODULE.GPU_MASK_ENV_NAMES == ("CUDA_VISIBLE_DEVICES", "GGML_VK_VISIBLE_DEVICES")
+    assert MODULE.GPU_MASK_ENV_NAMES == (
+        "CUDA_VISIBLE_DEVICES",
+        "GGML_VK_VISIBLE_DEVICES",
+    )
 
 
 def test_canonical_code_root_and_private_runtime_state_are_separate():
@@ -129,12 +132,17 @@ def test_previous_heartbeat_recovers_only_same_live_process(tmp_path):
     started_at = MODULE._process_started_at(os.getpid())
     assert started_at is not None
     heartbeat = tmp_path / "heartbeat.json"
-    heartbeat.write_text(json.dumps({
-        "contours": {
-            "telegram_bot": {"pid": os.getpid(), "started_at": started_at},
-            "public_news": {"pid": os.getpid(), "started_at": started_at - 60},
-        }
-    }), encoding="utf-8")
+    heartbeat.write_text(
+        json.dumps(
+            {
+                "contours": {
+                    "telegram_bot": {"pid": os.getpid(), "started_at": started_at},
+                    "public_news": {"pid": os.getpid(), "started_at": started_at - 60},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
     recovered = MODULE._load_external_contours(heartbeat)
 
@@ -154,12 +162,17 @@ def test_port_owned_external_service_exposes_pid(monkeypatch):
         "_listening_pid",
         lambda port, **_kwargs: 4242 if port == 11434 else None,
     )
-    monkeypatch.setattr(MODULE, "_process_started_at", lambda pid: 123.0 if pid == 4242 else None)
+    monkeypatch.setattr(
+        MODULE, "_process_started_at", lambda pid: 123.0 if pid == 4242 else None
+    )
     monkeypatch.setattr(
         MODULE,
         "_process_executable",
-        lambda pid: Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
-        if pid == 4242 else None,
+        lambda pid: (
+            Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
+            if pid == 4242
+            else None
+        ),
     )
 
     class FakeCenter:
@@ -180,7 +193,9 @@ def test_port_owned_external_service_exposes_pid(monkeypatch):
 
 
 def test_same_live_process_rejects_missing_or_reused_pid(monkeypatch):
-    monkeypatch.setattr(MODULE, "_process_started_at", lambda pid: 200.0 if pid == 42 else None)
+    monkeypatch.setattr(
+        MODULE, "_process_started_at", lambda pid: 200.0 if pid == 42 else None
+    )
 
     assert MODULE._same_live_process(42, 200.0) is True
     assert MODULE._same_live_process(42, 190.0) is False
@@ -224,7 +239,9 @@ def test_authorized_multi_start_rejects_owner_group_before_any_start():
 
 def test_forged_recovered_process_cannot_reach_stop_hooks(monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(MODULE.subprocess, "run", lambda *_a, **_k: calls.append("taskkill"))
+    monkeypatch.setattr(
+        MODULE.subprocess, "run", lambda *_a, **_k: calls.append("taskkill")
+    )
 
     class Events:
         def put(self, _event):
@@ -235,8 +252,12 @@ def test_forged_recovered_process_cannot_reach_stop_hooks(monkeypatch):
     MODULE.ControlCenter._stop_external(
         center,
         "farm",
-        {"pid": os.getpid(), "started_at": MODULE._process_started_at(os.getpid()),
-         "stoppable": False, "authority": "display_only"},
+        {
+            "pid": os.getpid(),
+            "started_at": MODULE._process_started_at(os.getpid()),
+            "stoppable": False,
+            "authority": "display_only",
+        },
     )
     assert calls == []
 
@@ -352,13 +373,16 @@ def test_compute_health_exposes_fatal_priority_worker_without_private_identity(
     assert health["execution_allowed"] is False
 
 
-def test_learning_snapshot_explains_closed_loop_in_plain_language(monkeypatch, tmp_path):
+def test_learning_snapshot_explains_closed_loop_in_plain_language(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(MODULE, "PRIVATE_ROOT", tmp_path)
     work = tmp_path / "state" / "role_work_queue" / "farm"
     work.mkdir(parents=True)
-    (work / "env_1.json").write_text(json.dumps({
-        "status": "queued", "task_spec": {"generation": 1}
-    }), encoding="utf-8")
+    (work / "env_1.json").write_text(
+        json.dumps({"status": "queued", "task_spec": {"generation": 1}}),
+        encoding="utf-8",
+    )
     inbox = tmp_path / "state" / "derived" / "system_analyst_result_inbox.jsonl"
     inbox.parent.mkdir(parents=True)
     inbox.write_text(json.dumps({"result_id": "result-1"}) + "\n", encoding="utf-8")
@@ -470,7 +494,9 @@ def test_required_contour_exit_is_latched_once_without_restart(
 
     alerts = [
         json.loads(line)
-        for line in (state_dir / "alerts.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (state_dir / "alerts.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert len(alerts) == 1
     assert alerts[0]["reason"] == "required_contour_unexpected_exit"
@@ -544,9 +570,7 @@ def test_owned_contour_start_preserves_ctrl_break_process_group(
     item.start()
 
     assert captured["creationflags"] == MODULE._CREATE_NEW_PROCESS_GROUP
-    assert not (
-        int(captured["creationflags"]) & int(MODULE._CREATE_NO_WINDOW)
-    )
+    assert not (int(captured["creationflags"]) & int(MODULE._CREATE_NO_WINDOW))
     assert captured["env"]["AUTO_TRADE"] == "0"
     assert captured["env"]["TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"] == "0"
     assert item.started_at == 100.25
@@ -1074,6 +1098,12 @@ def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
     }
     center.events = Events()
     center.selected_key = "paper_cards"
+    center._record_runtime_lane_stage(
+        "authority_state",
+        "ownership_sqlite",
+        "started",
+        started_at=time.monotonic(),
+    )
 
     target = tmp_path / "heartbeat.json"
     publish_count = 0
@@ -1125,6 +1155,7 @@ def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
         "started_at": None,
     }
     assert payload["runtime_probe"]["stage"] == "not_started"
+    assert payload["runtime_lanes"]["authority_state"]["stage"] == "ownership_sqlite"
     assert payload["contours"]["paper_cards"]["running"] is True
     assert payload["ui_snapshot"]["stage"] == "synthetic_blocking_probe"
     assert payload["ui_snapshot"]["stage_age_seconds"] > 0
@@ -1370,6 +1401,25 @@ def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
     center._listener_inventory_lock = threading.Lock()
     center._listener_inventory_pid = center.contours["ollama"].process.pid
     center._listener_inventory_ready = True
+    center._runtime_dependency_lock = threading.Lock()
+    center._runtime_dependencies = {
+        "authority_state": {
+            "state": "ready",
+            "ready": True,
+            "owner_fence": owner_fence,
+            "owner_resources": ("canonical_farm", "strategy_lab_worker"),
+            "lease_supervisor_state": "running",
+            "lease_supervisor_age_seconds": 0.0,
+        },
+        "runtime_status": {
+            "state": "ready",
+            "ready": True,
+            "telegram_poll_state": "ready",
+            "telegram_poll_success_age_seconds": 0.0,
+        },
+    }
+    center._runtime_lane_stage_lock = threading.Lock()
+    center._runtime_lane_stages = {}
     center._product_progress_ready = True
     center._product_progress_post_t0_failure = None
     center._runtime_ready = False
@@ -1386,6 +1436,7 @@ def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
             resources=("canonical_farm", "strategy_lab_worker"),
         )
     )
+
     def read_status(path):
         if Path(path).name == "telegram_bot_health.json":
             now = MODULE.time.time()
@@ -1437,6 +1488,8 @@ def test_runtime_probe_treats_early_missing_listener_as_starting(
         listener["listener_pid"],
         ready=listener["ready"],
     )
+    status = center._status_runtime_safety_probe()
+    center._set_runtime_dependency("runtime_status", status)
     sample = center._fast_runtime_safety_probe()
 
     assert listener["ready"] is False
@@ -1509,10 +1562,112 @@ def test_fast_runtime_probe_never_calls_listener_inventory(
         (tmp_path / "absent-stop-intent",),
     )
 
+    status = center._status_runtime_safety_probe()
+    center._set_runtime_dependency("runtime_status", status)
     sample = center._fast_runtime_safety_probe()
 
     assert sample["ready"] is True
     assert sample["ollama_listener_ready"] is True
+
+
+def test_fast_runtime_probe_never_calls_sqlite_filesystem_or_ancestry(
+    monkeypatch,
+) -> None:
+    center, _events = _runtime_probe_center()
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 105.0)
+    center._runtime_owner_monitor = SimpleNamespace(
+        sample=lambda: pytest.fail("fast lane queried ownership SQLite")
+    )
+    center._read_cached_json = lambda _path: pytest.fail(
+        "fast lane read a runtime status file"
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_process_descends_from",
+        lambda *_args: pytest.fail("fast lane queried process ancestry"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_same_live_process",
+        lambda *_args: pytest.fail("fast lane reopened a process identity"),
+    )
+
+    sample = center._fast_runtime_safety_probe()
+
+    assert sample["ready"] is True
+    assert center._runtime_lane_stages["fast_safety"]["stage"] == "complete"
+
+
+def test_blocked_authority_probe_publishes_exact_stage_while_fast_stays_live(
+    monkeypatch,
+) -> None:
+    center, _events = _runtime_probe_center()
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_sample():
+        entered.set()
+        release.wait(0.5)
+        return SimpleNamespace(
+            state="ready",
+            ready=True,
+            canonical_fence=38,
+            process_identity=SimpleNamespace(
+                pid=42_424,
+                started_at=1_700_000_042.0,
+            ),
+            resources=("canonical_farm", "strategy_lab_worker"),
+        )
+
+    center._runtime_owner_monitor = SimpleNamespace(sample=blocked_sample)
+    thread = threading.Thread(target=center._authority_runtime_safety_probe)
+    thread.start()
+    assert entered.wait(0.1)
+
+    fast = center._fast_runtime_safety_probe()
+
+    assert fast["ready"] is True
+    assert center._runtime_lane_stages["authority_state"]["stage"] == "ownership_sqlite"
+    assert center._runtime_lane_stages["authority_state"]["state"] == "started"
+    release.set()
+    thread.join(0.5)
+    assert not thread.is_alive()
+
+
+def test_blocked_status_probe_publishes_exact_telegram_stage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    entered = threading.Event()
+    release = threading.Event()
+    original_read = center._read_cached_json
+
+    def blocked_read(path):
+        if Path(path).name == "telegram_bot_health.json":
+            entered.set()
+            release.wait(0.5)
+        return original_read(path)
+
+    center._read_cached_json = blocked_read
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+    thread = threading.Thread(target=center._status_runtime_safety_probe)
+    thread.start()
+    assert entered.wait(0.1)
+
+    fast = center._fast_runtime_safety_probe()
+
+    assert fast["ready"] is True
+    assert center._runtime_lane_stages["runtime_status"]["stage"] == "telegram_health"
+    assert center._runtime_lane_stages["runtime_status"]["state"] == "started"
+    release.set()
+    thread.join(0.5)
+    assert not thread.is_alive()
 
 
 def test_listener_timeout_preserves_last_verified_identity(
@@ -1552,9 +1707,7 @@ def test_runtime_probe_sets_t0_only_after_listener_and_owner_are_ready(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
-    monkeypatch.setattr(
-        MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid
-    )
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid)
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",
@@ -1624,6 +1777,8 @@ def test_runtime_probe_waits_for_real_telegram_poll_before_t0(
         (tmp_path / "absent-stop-intent",),
     )
 
+    status = center._status_runtime_safety_probe()
+    center._set_runtime_dependency("runtime_status", status)
     sample = center._fast_runtime_safety_probe()
 
     assert sample["state"] == "provider_waiting"
@@ -1661,7 +1816,7 @@ def test_runtime_probe_fails_closed_when_telegram_never_polls(
         MODULE.CanaryMonitorHardFailure,
         match="telegram_bot_poll_unready",
     ):
-        center._fast_runtime_safety_probe()
+        center._status_runtime_safety_probe()
 
 
 def test_runtime_probe_fails_closed_on_stale_telegram_poll_after_t0(
@@ -1705,7 +1860,7 @@ def test_runtime_probe_fails_closed_on_stale_telegram_poll_after_t0(
         MODULE.CanaryMonitorHardFailure,
         match="telegram_bot_poll_stale",
     ):
-        center._fast_runtime_safety_probe()
+        center._status_runtime_safety_probe()
 
 
 def test_runtime_probe_does_not_set_t0_before_real_product_progress(
@@ -1852,7 +2007,7 @@ def test_runtime_probe_rejects_owner_outside_canonical_rcc_tree(
         MODULE.CanaryMonitorHardFailure,
         match="owner_not_in_canonical_rcc_tree",
     ):
-        center._fast_runtime_safety_probe()
+        center._authority_runtime_safety_probe()
 
 
 def test_runtime_probe_keeps_supervisor_pending_before_startup_deadline(
@@ -1865,18 +2020,18 @@ def test_runtime_probe_keeps_supervisor_pending_before_startup_deadline(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
-    monkeypatch.setattr(
-        MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid
-    )
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid)
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",
         (tmp_path / "absent-stop-intent",),
     )
 
+    authority = center._authority_runtime_safety_probe()
+    center._set_runtime_dependency("authority_state", authority)
     sample = center._fast_runtime_safety_probe()
 
-    assert sample["state"] == "process_starting"
+    assert sample["state"] == "authority_starting"
     assert sample["ready"] is False
     assert sample["lease_supervisor_state"] == "pending"
     assert events == []
@@ -1912,9 +2067,7 @@ def test_runtime_probe_fails_closed_on_invalid_supervisor_after_t0(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 125.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
-    monkeypatch.setattr(
-        MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid
-    )
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid)
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",
@@ -1922,7 +2075,7 @@ def test_runtime_probe_fails_closed_on_invalid_supervisor_after_t0(
     )
 
     with pytest.raises(MODULE.CanaryMonitorHardFailure, match=expected):
-        center._fast_runtime_safety_probe()
+        center._authority_runtime_safety_probe()
 
 
 def test_deep_runtime_probe_requires_every_canonical_database(
