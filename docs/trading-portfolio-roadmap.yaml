@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 30c70dd0b4f0dc416bfcd10f70c7cdfe5dce8874
+  trading-bot-v2: c4c3607f788996ce655cb4c650e0667dcb5c701e
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -242,7 +242,7 @@ modules:
       - tests/test_windows_listener_probe.py
       - tests/test_product_progress.py
       - tests/test_telegram_bot_health.py
-    missing_evidence: a green 48-hour canary proving the independent listener-inventory and fast authority lanes, shared RCC/external post-T+0 classifier and its monotonic bounded-transition handoff, bounded real-progress cold start, mandatory-versus-optional advisory checkpoint separation, final product-cycle checkpoint, current-attempt delivery ambiguity gate, product-stage SLO, bounded validation transitions and generation freshness on the private runtime
+    missing_evidence: a green 48-hour canary proving independent exact process-handle, authority/fencing, filesystem/Telegram status and listener-inventory lanes, shared RCC/external post-T+0 classifier and its monotonic bounded-transition handoff, bounded real-progress cold start, mandatory-versus-optional advisory checkpoint separation, final product-cycle checkpoint, current-attempt delivery ambiguity gate, product-stage SLO, bounded validation transitions and generation freshness on the private runtime
     next_gate: separate owner-authorized operational launch with process, database, and product-progress lanes all green
     authority: separately_owner_gated
     public_private_boundary: supervisor code is public; process identities, ports, heartbeats, and runtime evidence are private

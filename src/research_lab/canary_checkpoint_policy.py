@@ -90,6 +90,16 @@ CANONICAL_MONITORING_LANES: tuple[CanaryMonitoringLaneSpec, ...] = (
         permits_database_snapshot=False,
     ),
     CanaryMonitoringLaneSpec(
+        name="authority_state",
+        max_sample_gap_seconds=30.0,
+        permits_database_snapshot=True,
+    ),
+    CanaryMonitoringLaneSpec(
+        name="runtime_status",
+        max_sample_gap_seconds=30.0,
+        permits_database_snapshot=False,
+    ),
+    CanaryMonitoringLaneSpec(
         name="listener_inventory",
         max_sample_gap_seconds=90.0,
         permits_database_snapshot=False,
@@ -245,9 +255,7 @@ class CanonicalCanaryRuntimeWatchdog:
             return CanaryLaneSample(
                 lane=self.lane,
                 state=(
-                    "failed"
-                    if assessment.failure_reason is not None
-                    else "degraded"
+                    "failed" if assessment.failure_reason is not None else "degraded"
                 ),
                 payload=MappingProxyType({}),
                 error_type=type(exc).__name__,
@@ -295,9 +303,7 @@ class CanonicalCanaryRuntimeWatchdog:
     def _validate_complete_sample(self, payload: Mapping[str, object]) -> None:
         reasons = payload.get("hard_fail_reasons")
         if isinstance(reasons, (list, tuple)) and reasons:
-            raise CanaryMonitorHardFailure(
-                "runtime:" + str(reasons[0])[:140]
-            )
+            raise CanaryMonitorHardFailure("runtime:" + str(reasons[0])[:140])
         if payload.get("ready") is not True:
             raise CanaryMonitorHardFailure("canonical_runtime_not_ready")
 
@@ -325,17 +331,13 @@ class CanonicalCanaryRuntimeWatchdog:
                 "process_lease_supervisor_generation_changed"
             )
         if supervisor.get("paper_only") is not True:
-            raise CanaryMonitorHardFailure(
-                "process_lease_supervisor_paper_only_drift"
-            )
+            raise CanaryMonitorHardFailure("process_lease_supervisor_paper_only_drift")
         if supervisor.get("execution_allowed") is not False:
             raise CanaryMonitorHardFailure(
                 "process_lease_supervisor_execution_authority_drift"
             )
         if supervisor.get("identity_matches") is not True:
-            raise CanaryMonitorHardFailure(
-                "process_lease_supervisor_identity_changed"
-            )
+            raise CanaryMonitorHardFailure("process_lease_supervisor_identity_changed")
         if supervisor.get("fence_matches") is not True:
             raise CanaryMonitorHardFailure("process_lease_supervisor_fence_changed")
 
@@ -361,22 +363,31 @@ class CanaryMonitoringService:
         product_probe: Callable[[], Mapping[str, object]],
         on_sample: LaneSampleCallback,
         on_failure: LaneFailureCallback,
+        authority_probe: Callable[[], Mapping[str, object]] | None = None,
+        status_probe: Callable[[], Mapping[str, object]] | None = None,
         listener_probe: Callable[[], Mapping[str, object]] | None = None,
         started_at: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         fast_interval_seconds: float = 5.0,
+        authority_interval_seconds: float = 5.0,
+        status_interval_seconds: float = 5.0,
         listener_interval_seconds: float = 5.0,
         deep_interval_seconds: float = 60.0,
         product_interval_seconds: float = 30.0,
         supervisor_interval_seconds: float = 0.25,
     ) -> None:
-        if min(
-            fast_interval_seconds,
-            listener_interval_seconds,
-            deep_interval_seconds,
-            product_interval_seconds,
-            supervisor_interval_seconds,
-        ) <= 0:
+        if (
+            min(
+                fast_interval_seconds,
+                authority_interval_seconds,
+                status_interval_seconds,
+                listener_interval_seconds,
+                deep_interval_seconds,
+                product_interval_seconds,
+                supervisor_interval_seconds,
+            )
+            <= 0
+        ):
             raise ValueError("monitoring intervals must be positive")
         self._monotonic = monotonic
         initial = float(monotonic() if started_at is None else started_at)
@@ -387,6 +398,10 @@ class CanaryMonitoringService:
         }
         if listener_probe is not None:
             self._probes["listener_inventory"] = listener_probe
+        if authority_probe is not None:
+            self._probes["authority_state"] = authority_probe
+        if status_probe is not None:
+            self._probes["runtime_status"] = status_probe
         active_specs = tuple(
             spec for spec in CANONICAL_MONITORING_LANES if spec.name in self._probes
         )
@@ -400,9 +415,11 @@ class CanaryMonitoringService:
             "product_progress": float(product_interval_seconds),
         }
         if listener_probe is not None:
-            self._intervals["listener_inventory"] = float(
-                listener_interval_seconds
-            )
+            self._intervals["listener_inventory"] = float(listener_interval_seconds)
+        if authority_probe is not None:
+            self._intervals["authority_state"] = float(authority_interval_seconds)
+        if status_probe is not None:
+            self._intervals["runtime_status"] = float(status_interval_seconds)
         self._supervisor_interval = float(supervisor_interval_seconds)
         self._on_sample = on_sample
         self._on_failure = on_failure
@@ -441,9 +458,7 @@ class CanaryMonitoringService:
         for thread in (*self._threads.values(), self._supervisor):
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
         return tuple(
-            lane
-            for lane, thread in self._threads.items()
-            if thread.is_alive()
+            lane for lane, thread in self._threads.items() if thread.is_alive()
         )
 
     def _run_lane(self, lane: str) -> None:
