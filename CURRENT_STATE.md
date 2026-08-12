@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-11
-- Verified against: `c4c3607f788996ce655cb4c650e0667dcb5c701e`
+- Verified: 2026-08-12
+- Verified against: `5a397edfb2787f51fdac12ef5f983a894b78a2a2`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -38,6 +38,13 @@ ancestry, or reopens a PID. Authority/fencing and filesystem/Telegram status
 have independent supervised freshness clocks. Every lane publishes its exact
 active stage and elapsed time in the minimal heartbeat, so a blocked I/O probe
 fails under its own name without fabricating a stopped contour.
+
+Expired process ownership survives a host reboot as fencing evidence, but it
+cannot block the next canonical owner merely because Windows reused the old PID
+for a process whose identity is not readable. Acquisition may reclaim that row
+only when the persisted process start is provably before the current host boot
+and the lease is already expired. Same-boot probe failures, live identities and
+unexpired leases remain fail-closed, and the next fence stays monotonic.
 
 Priority validation publication now wakes the canonical full product cycle
 immediately after a new current generation is atomically complete. This avoids

@@ -87,6 +87,11 @@ a sanitized aggregate if a result needs discussion.
   launcher therefore cannot erase another operator's stop request.
 - A PID, fresh heartbeat, old lock path or expected executable is not proof of
   ownership. Recovered processes remain visible but non-stoppable.
+- After a host reboot, an expired persisted owner may be reclaimed during the
+  next canonical acquisition only when its recorded process start is provably
+  earlier than the current boot. This handles protected PID reuse without
+  treating AccessDenied as process death on the same boot; ambiguous same-boot
+  identity remains a startup refusal and every takeover advances the fence.
 - The RCC heartbeat publishes the immutable RCC PID and process-start identity.
   Any finalizer must bind both values to the currently live process and fail
   closed when the start identity is missing or differs; it must never derive

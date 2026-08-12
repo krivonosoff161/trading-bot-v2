@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-11
-- Verified against: `c4c3607f788996ce655cb4c650e0667dcb5c701e`
+- Verified: 2026-08-12
+- Verified against: `5a397edfb2787f51fdac12ef5f983a894b78a2a2`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -29,6 +29,10 @@ dependency, not by a route to live trading.
   its exact active stage. Listener Job Object cleanup uses kill-on-close rather
   than a synchronous termination call; repeated inventory loss and complete
   listener identity violations remain fail-closed.
+- An expired owner whose persisted process start predates the current Windows
+  boot can be atomically reclaimed even when its reused PID is not probeable.
+  Same-boot ambiguity and unexpired authority still fail closed, and takeover
+  advances rather than resets the fence.
 - Validation maintenance continuously drains from the priority worker using the
   configured batch capacity, publishes durable progress only after completed
   export/check/artifact chunks, and rechecks owner/fence authority before each

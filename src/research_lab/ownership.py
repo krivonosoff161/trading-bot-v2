@@ -49,6 +49,28 @@ class ProcessLease:
 IdentityProbe = Callable[[int], ProcessIdentity | None]
 
 
+def _system_boot_time() -> float:
+    """Return the current host boot epoch or fail closed to an unusable value."""
+
+    try:
+        import psutil  # type: ignore[import-untyped]
+
+        return float(psutil.boot_time())
+    except Exception:
+        return 0.0
+
+
+def _identity_predates_current_boot(
+    identity: ProcessIdentity,
+    *,
+    now: float,
+) -> bool:
+    """Prove that a persisted process cannot belong to the current boot."""
+
+    booted_at = _system_boot_time()
+    return bool(0.0 < booted_at <= now and identity.started_at < booted_at - 1.0)
+
+
 @dataclass(frozen=True)
 class CanonicalAuthorityAssessment:
     """Fail-closed process-authority view for canonical farm monitoring.
@@ -388,7 +410,15 @@ class OwnershipStore:
                     expires = row["lease_expires_at"]
                     if expires is None:
                         raise OwnershipConflictError("corrupt ownership lease")
-                    live = self._identity_probe(persisted.pid)
+                    try:
+                        live = self._identity_probe(persisted.pid)
+                    except OwnershipConflictError:
+                        if not (
+                            float(expires) <= now
+                            and _identity_predates_current_boot(persisted, now=now)
+                        ):
+                            raise
+                        live = None
                     if float(expires) <= now and self._same_identity(live, persisted):
                         raise OwnershipConflictError("expired_alive_conflict")
                     if float(expires) <= now and live is not None:
