@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from src.research_lab import ownership as ownership_module
+
 from scripts import research_control_center as control_center
 from scripts.strategy_lab.release_materialization_payloads import (
     run as run_payload_release,
@@ -362,6 +364,110 @@ def test_process_identity_mismatch_after_expiry_fails_closed(tmp_path) -> None:
             identity=_identity(202), lease_seconds=5,
         )
     assert store.status("canonical_farm")["state"] == "identity_mismatch"
+
+
+def _seed_persisted_owner(
+    store: OwnershipStore,
+    identity: ProcessIdentity,
+    *,
+    expires_at: float,
+    fence: int = 7,
+) -> None:
+    store.raw_connection.execute(
+        """INSERT INTO ownership_resources(
+               resource_id,role_id,owner_id,pid,started_at,executable,
+               command_digest,lease_expires_at,next_fence,updated_at
+           ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (
+            "canonical_farm", "farm", "old", identity.pid,
+            identity.started_at, identity.executable, identity.command_digest,
+            expires_at, fence, 100.0,
+        ),
+    )
+    store.raw_connection.commit()
+
+
+def test_expired_owner_before_current_boot_reclaims_when_pid_probe_is_denied(
+    tmp_path, monkeypatch
+) -> None:
+    clock = Clock(1_000.0)
+    original = _identity()
+    calls = 0
+
+    def denied(_pid: int):
+        nonlocal calls
+        calls += 1
+        raise OwnershipConflictError("process identity probe failed")
+
+    monkeypatch.setattr(ownership_module, "_system_boot_time", lambda: 500.0)
+    store = OwnershipStore(
+        tmp_path / "ownership.sqlite", clock=clock, identity_probe=denied
+    )
+    _seed_persisted_owner(store, original, expires_at=100.0)
+
+    lease = store.acquire(
+        resource_id="canonical_farm", role_id="farm", owner_id="new",
+        identity=_identity(202), lease_seconds=90.0,
+    )
+
+    assert calls == 1
+    assert lease.fencing_token == 8
+    assert lease.owner_id == "new"
+    store.close()
+
+
+def test_same_boot_probe_failure_remains_fail_closed(tmp_path, monkeypatch) -> None:
+    clock = Clock(1_000.0)
+    original = ProcessIdentity(
+        pid=101,
+        started_at=600.0,
+        executable="C:/Python/python.exe",
+        command_digest="sha256:farm-command",
+    )
+    monkeypatch.setattr(ownership_module, "_system_boot_time", lambda: 500.0)
+
+    def denied(_pid: int):
+        raise OwnershipConflictError("process identity probe failed")
+
+    store = OwnershipStore(
+        tmp_path / "ownership.sqlite", clock=clock, identity_probe=denied
+    )
+    _seed_persisted_owner(store, original, expires_at=100.0)
+
+    with pytest.raises(OwnershipConflictError, match="process identity probe failed"):
+        store.acquire(
+            resource_id="canonical_farm", role_id="farm", owner_id="new",
+            identity=_identity(202), lease_seconds=90.0,
+        )
+    row = store.raw_connection.execute(
+        "SELECT owner_id,next_fence FROM ownership_resources WHERE resource_id=?",
+        ("canonical_farm",),
+    ).fetchone()
+    assert tuple(row) == ("old", 7)
+    store.close()
+
+
+def test_unexpired_preboot_probe_failure_remains_fail_closed(
+    tmp_path, monkeypatch
+) -> None:
+    clock = Clock(1_000.0)
+    original = _identity()
+    monkeypatch.setattr(ownership_module, "_system_boot_time", lambda: 500.0)
+
+    def denied(_pid: int):
+        raise OwnershipConflictError("process identity probe failed")
+
+    store = OwnershipStore(
+        tmp_path / "ownership.sqlite", clock=clock, identity_probe=denied
+    )
+    _seed_persisted_owner(store, original, expires_at=1_100.0)
+
+    with pytest.raises(OwnershipConflictError, match="process identity probe failed"):
+        store.acquire(
+            resource_id="canonical_farm", role_id="farm", owner_id="new",
+            identity=_identity(202), lease_seconds=90.0,
+        )
+    store.close()
 
 
 def test_compute_lease_renewal_prevents_age_only_reap(tmp_path) -> None:
