@@ -42,9 +42,13 @@ def _require_quiescent(private_root: Path, task_id: int) -> None:
         ]
     finally:
         farm.close()
-    if running != [int(task_id)]:
+    # Before the first apply the exact expired target is the sole running task.
+    # After a successful adoption there are no running tasks, and the same
+    # hash-bound plan must remain callable to prove changed=0.  The domain
+    # planner/apply API still validates the target's exact adopted state.
+    if running not in ([], [int(task_id)]):
         raise RuntimeError(
-            "materialization recovery requires the exact target as the only running task"
+            "materialization recovery requires no unrelated running tasks"
         )
 
 
