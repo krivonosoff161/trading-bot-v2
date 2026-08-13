@@ -16,15 +16,10 @@ This page describes the public repository, not a live runtime. It does not
 publish process identities, private database rows, observations, outcomes,
 model conversations, recipients, credentials, or workstation-specific state.
 
-## Task-Branch Candidate: Product Liveness And Deterministic E2E
+## Integrated Product Liveness Baseline
 
-The `codex/product-liveness-e2e-repair` task branch contains a review candidate
-built from the verified implementation baseline above. These changes are not
-merged, are not authoritative, and do not change the current operational gate.
-Promotion requires an exact-head review, the repository gates, synchronized
-documentation, and a separate merge decision.
-
-The candidate closes bounded product-chain gaps without broadening paper-only
+PR #277 is integrated at `dc4d6db71fc12abde330b10d9a78258e2b0084e6`.
+It closes the bounded product-chain gaps below without broadening paper-only
 authority:
 
 - Scanner intake filters caller-supplied, already-ingested event identities
@@ -52,7 +47,18 @@ authority:
 - Rebuildable derived snapshots use a byte budget, content digest, atomic
   replace, and no-op identical writes instead of unbounded append semantics.
   Deterministic synthetic E2E coverage must prove one causally linked product
-  flow and replay idempotency before this candidate can be promoted.
+  flow and replay idempotency.
+
+## Task-Branch Candidate: Expired Materialization Adoption
+
+The `codex/stale-materialization-recovery` branch adds a narrow, non-authoritative
+recovery candidate for the cross-database crash window where an exact compute
+queue materialization is already durable but the owning task claim expires before
+its outbox acknowledgement. A hash-bound plan verifies the task fence, mutation
+sequence, sole outbox generation and immutable queue binding. Apply adopts that
+existing job into the task lifecycle without requeueing or creating a new queue,
+outbox or materialization effect; repeat apply changes zero rows. Promotion still
+requires exact-head review, full repository gates and a separate merge decision.
 
 ## Implemented Public Contracts
 

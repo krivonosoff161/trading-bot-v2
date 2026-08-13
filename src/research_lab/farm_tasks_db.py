@@ -1950,6 +1950,196 @@ class FarmTasksDB:
             raise
         return requeued
 
+    def adopt_expired_materialization(
+        self,
+        *,
+        task_id: int,
+        expected_fence: int,
+        expected_mutation_seq: int,
+        materialization_id: str,
+        queue_job_id: int,
+        spec_path: str,
+        spec_digest: str,
+        compute_db_path: Path,
+        expected_queue_status: str,
+        now: float | None = None,
+    ) -> int:
+        """Adopt one already-durable compute binding after an expired claim.
+
+        The compute queue is a separate database, so a crash can happen after its
+        durable materialization row is committed but before this store acknowledges
+        the outbox.  The compute database is attached and the exact immutable queue
+        binding is rechecked under the same immediate transaction that advances the
+        matching expired run-sweep generation.  The method never requeues, creates
+        a new fence, or publishes another compute effect.
+
+        Reapplying the exact disposition is idempotent.  Any other task/outbox drift
+        fails closed instead of guessing whether a side effect happened.
+        """
+
+        current = self._effective_now(now)
+        tid = int(task_id)
+        expected_fence = int(expected_fence)
+        expected_seq = int(expected_mutation_seq)
+        job_id = int(queue_job_id)
+        attached = False
+        try:
+            self._conn.execute(
+                "ATTACH DATABASE ? AS recovery_compute", (str(Path(compute_db_path)),)
+            )
+            attached = True
+            self._conn.execute("BEGIN IMMEDIATE")
+            current = self._effective_now(current)
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE task_id=?", (tid,)
+            ).fetchone()
+            outbox = self._conn.execute(
+                "SELECT * FROM materialization_outbox WHERE materialization_id=?",
+                (str(materialization_id),),
+            ).fetchone()
+            binding = self._conn.execute(
+                """SELECT qm.job_id,qm.spec_path,qm.spec_digest,q.status,
+                          q.materialization_id AS queue_materialization_id,
+                          q.materialization_digest AS queue_digest
+                   FROM recovery_compute.queue_materializations qm
+                   JOIN recovery_compute.queue q ON q.job_id=qm.job_id
+                   WHERE qm.materialization_id=?""",
+                (str(materialization_id),),
+            ).fetchone()
+            if row is None or outbox is None or int(outbox["task_id"]) != tid:
+                raise StaleTaskClaimError(
+                    "expired materialization recovery identity changed"
+                )
+            if binding is None or (
+                int(binding["job_id"]) != job_id
+                or str(binding["spec_path"]) != str(spec_path)
+                or str(binding["spec_digest"]) != str(spec_digest)
+                or str(binding["status"]) != str(expected_queue_status)
+                or str(binding["queue_materialization_id"] or "")
+                != str(materialization_id)
+                or str(binding["queue_digest"] or "") != str(spec_digest)
+            ):
+                raise StaleTaskClaimError(
+                    "expired materialization compute binding changed"
+                )
+
+            already_adopted = (
+                row["task_type"] == "run_sweep"
+                and row["state"] == "deferred"
+                and str(row["machine_reason"] or "")
+                == "materialized_awaiting_worker"
+                and row["claim_owner"] is None
+                and row["claim_expires_at"] is None
+                and int(row["fencing_token"] or 0) == expected_fence
+                and int(row["mutation_seq"] or 0) == expected_seq + 1
+                and int(row["materialized_queue_job_id"] or 0) == job_id
+                and int(outbox["task_fencing_token"] or 0) == expected_fence
+                and str(outbox["state"] or "") == "acknowledged"
+                and int(outbox["queue_job_id"] or 0) == job_id
+                and str(outbox["spec_path"] or "") == str(spec_path)
+                and str(outbox["spec_digest"] or "") == str(spec_digest)
+            )
+            if already_adopted:
+                self._conn.commit()
+                return 0
+
+            active_outboxes = int(
+                self._conn.execute(
+                    """SELECT COUNT(*) FROM materialization_outbox
+                       WHERE task_id=? AND state IN ('pending','dispatched')""",
+                    (tid,),
+                ).fetchone()[0]
+            )
+            if (
+                row["task_type"] != "run_sweep"
+                or row["state"] != "running"
+                or row["claim_owner"] is None
+                or float(row["claim_expires_at"] or 0) > current
+                or int(row["fencing_token"] or 0) != expected_fence
+                or str(row["mutation_protocol"] or "") != "fenced.v2"
+                or int(row["mutation_seq"] or 0) != expected_seq
+                or row["materialized_queue_job_id"] is not None
+                or int(outbox["task_fencing_token"] or 0) != expected_fence
+                or str(outbox["state"] or "") not in {"pending", "dispatched"}
+                or (
+                    outbox["queue_job_id"] is not None
+                    and int(outbox["queue_job_id"]) != job_id
+                )
+                or str(outbox["spec_path"] or "") != str(spec_path)
+                or str(outbox["spec_digest"] or "") != str(spec_digest)
+                or active_outboxes != 1
+            ):
+                raise StaleTaskClaimError(
+                    "expired materialization recovery plan is stale"
+                )
+
+            next_seq = expected_seq + 1
+            task_cur = self._conn.execute(
+                """UPDATE tasks SET state='deferred', materialized_queue_job_id=?,
+                       machine_reason='materialized_awaiting_worker',
+                       updated_at=?, deferred_until=NULL, claim_owner=NULL,
+                       claim_expires_at=NULL, mutation_protocol='fenced.v2',
+                       mutation_seq=?
+                   WHERE task_id=? AND task_type='run_sweep' AND state='running'
+                     AND claim_owner IS NOT NULL AND claim_expires_at<=?
+                     AND fencing_token=? AND mutation_protocol='fenced.v2'
+                     AND mutation_seq=? AND materialized_queue_job_id IS NULL""",
+                (
+                    job_id,
+                    current,
+                    next_seq,
+                    tid,
+                    current,
+                    expected_fence,
+                    expected_seq,
+                ),
+            )
+            outbox_cur = self._conn.execute(
+                """UPDATE materialization_outbox
+                   SET state='acknowledged', queue_job_id=?, updated_at=?, spec_json=''
+                   WHERE materialization_id=? AND task_id=?
+                     AND task_fencing_token=? AND state IN ('pending','dispatched')
+                     AND spec_path=? AND spec_digest=?""",
+                (
+                    job_id,
+                    current,
+                    str(materialization_id),
+                    tid,
+                    expected_fence,
+                    str(spec_path),
+                    str(spec_digest),
+                ),
+            )
+            if task_cur.rowcount != 1 or outbox_cur.rowcount != 1:
+                raise StaleTaskClaimError(
+                    "expired materialization changed during recovery"
+                )
+            self._record_transition(
+                tid,
+                "running",
+                "deferred",
+                "recovered_existing_compute_materialization",
+                current,
+                str(row["claim_owner"]),
+                expected_fence,
+                next_seq,
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            if attached:
+                self._conn.execute("DETACH DATABASE recovery_compute")
+        self._claims.pop(tid, None)
+        self._emit_transition(
+            tid,
+            "deferred",
+            "recovered_existing_compute_materialization",
+            current,
+        )
+        return 1
+
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT * FROM tasks WHERE task_id=?", (int(task_id),)
