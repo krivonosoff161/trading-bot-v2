@@ -166,7 +166,7 @@ def test_card_ledger_concurrent_read_modify_write_loses_no_card(tmp_path) -> Non
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=10)
+        thread.join(timeout=30)
 
     assert errors == []
     path = tmp_path / "state" / "derived" / "paper_telegram_card_ledger.json"

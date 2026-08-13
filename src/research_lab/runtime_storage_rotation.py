@@ -41,6 +41,7 @@ from src.research_lab.storage_os_lock import StorageLockConflict, storage_root_l
 
 
 _WINDOWS_REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
+_SNAPSHOT_LOCK_WAIT_SECONDS = 15.0
 
 
 def _replace_with_bounded_retry(source: Path, target: Path) -> None:
@@ -180,7 +181,7 @@ def write_bounded_rebuildable_snapshot(
     lock_path = _snapshot_lock_path(target)
     _ensure_snapshot_lock_file(lock_path)
     try:
-        with storage_root_lock(lock_path, wait_seconds=5.0):
+        with storage_root_lock(lock_path, wait_seconds=_SNAPSHOT_LOCK_WAIT_SECONDS):
             return _write_bounded_rebuildable_snapshot_locked(
                 target, payload, max_bytes=max_bytes
             )
@@ -200,7 +201,7 @@ def update_bounded_rebuildable_snapshot(
     lock_path = _snapshot_lock_path(target)
     _ensure_snapshot_lock_file(lock_path)
     try:
-        with storage_root_lock(lock_path, wait_seconds=5.0):
+        with storage_root_lock(lock_path, wait_seconds=_SNAPSHOT_LOCK_WAIT_SECONDS):
             current: Mapping[str, Any] | None = None
             if target.exists():
                 if is_link_or_reparse(target):
