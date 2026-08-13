@@ -32,10 +32,11 @@ from src.research_lab.honest_backtest_bridge import (
     run_validation_batch,
 )
 from src.research_lab.setup_library import build_setup_card, write_setup_library
-from src.research_lab.validation_handoff import refresh_from_artifacts
 from src.research_lab.validation_feedback import generate_feedback, write_feedback
 from src.research_lab.validation_generation import (
+    clear_pending_generation,
     current_generation_manifest_status,
+    load_current_generation,
     write_current_generation,
     write_pending_generation,
 )
@@ -46,6 +47,8 @@ ActiveCheck = Callable[[], None]
 MAX_VALIDATION_ATTEMPTS = 3
 MIN_VALIDATION_SCAN_LIMIT = 32
 MAX_VALIDATION_SCAN_LIMIT = 256
+VALIDATION_FRESHNESS_WINDOW_SECONDS = 3600.0
+VALIDATION_FRESH_SLOT_EVERY = 2
 
 
 def _check_active(check_active: ActiveCheck | None) -> None:
@@ -268,7 +271,13 @@ def run_due_validations(
             and counters["tasks_examined"] < scan_limit
         ):
             _check_active(check_active)
-            task = tasks.claim_next_task(task_types=("export_validation",), now=now)
+            task = tasks.claim_next_task(
+                task_types=("export_validation",),
+                now=now,
+                fairness_key="export_validation",
+                freshness_window_seconds=VALIDATION_FRESHNESS_WINDOW_SECONDS,
+                fresh_every=VALIDATION_FRESH_SLOT_EVERY,
+            )
             if task is None:
                 queue_exhausted = True
                 break
@@ -414,13 +423,20 @@ def run_due_validations(
         return counters
     prepared = [prepared_by_id[_hard_id_for_task(task)] for task in export_tasks]
 
-    # Only a proven exportable batch may revoke the prior generation.  The
-    # pending manifest still precedes every request/report/verdict/card write.
+    # The staging manifest precedes every request/report/verdict/card write but
+    # never revokes a previously completed generation.  Consumers switch only
+    # after the new complete manifest is atomically published below.
     _check_active(check_active)
-    write_pending_generation(
+    prior_generation_exists = load_current_generation(Path(private_root)) is not None
+    pending = write_pending_generation(
         Path(private_root),
         tasks=export_tasks,
         producer_time=now,
+    )
+    staging_root = (
+        Path(private_root)
+        / ".vstg"
+        / str(pending["build_id"]).removeprefix("hvb_")[:20]
     )
     _completed_progress(
         progress,
@@ -432,6 +448,7 @@ def run_due_validations(
     exported_ids = write_prepared_requests(
         private_root,
         prepared,
+        artifact_root=staging_root,
         progress=progress,
         check_active=check_active,
     )
@@ -443,7 +460,7 @@ def run_due_validations(
         len(exported_ids),
         len(export_tasks),
     )
-    requests_dir = Path(private_root) / "hard_validation" / "requests"
+    requests_dir = staging_root / "hard_validation" / "requests"
     if exported_ids:
         _check_active(check_active)
         val = run_validation_batch(
@@ -452,6 +469,7 @@ def run_due_validations(
             dry_run=False,
             limit=max(limit, len(export_tasks)),
             candidate_ids=exported_ids,
+            artifact_root=staging_root,
             progress=progress,
             check_active=check_active,
         )
@@ -476,24 +494,22 @@ def run_due_validations(
         len(exported_ids),
     )
 
-    # Empty or failed current batches must not scan historical artifact trees.
-    # Publish the bounded incomplete generation and defer only the claimed tasks.
+    # Empty or failed current batches must not scan historical artifact trees or
+    # revoke a previously completed generation.  With no prior generation, the
+    # staging manifest remains a fail-closed pending state.
     if not current_ids:
-        _check_active(check_active)
-        write_current_generation(
-            Path(private_root),
-            tasks=export_tasks,
-            exported_ids=exported_ids,
-            completed_ids=[],
-            producer_time=now,
-        )
+        if prior_generation_exists:
+            clear_pending_generation(
+                Path(private_root), expected_build_id=str(pending["build_id"])
+            )
         _completed_progress(
             progress,
             check_active,
-            "generation_published",
+            "generation_retained",
             0,
             len(exported_ids),
         )
+        counters["generation_unchanged"] = 1
         for completed, task in enumerate(export_tasks, start=1):
             _check_active(check_active)
             if int(task.get("attempts") or 0) >= MAX_VALIDATION_ATTEMPTS:
@@ -519,30 +535,13 @@ def run_due_validations(
             )
         return counters
 
-    # auto stamp-back into farm_results (was the orphaned refresh_validation_handoff step)
-    from src.research_lab.state_db import connect, default_db_path, init_db
-
+    # Load and complete the immutable staged chain first.  Mutable farm status,
+    # feedback and task projections must not expose a successor before its
+    # generation manifest becomes authoritative.
     _check_active(check_active)
-    conn = connect(default_db_path(private_root))
-    init_db(conn)
-    try:
-        handoff = refresh_from_artifacts(conn, private_root, candidate_ids=current_ids)
-        counters["stamped_db"] = int(handoff.get("rows_stamped_verdict") or 0)
-    finally:
-        conn.close()
-    _completed_progress(
-        progress,
-        check_active,
-        "validation_handoff_stamped",
-        int(counters["stamped_db"]),
-        len(current_ids),
-    )
-
-    # mirror verdicts into the coordinator's unique_candidates view
-    _check_active(check_active)
-    verdicts_all = _verdict_map(private_root, current_ids)
+    verdicts_all = _verdict_map(staging_root, current_ids)
     verdicts = {cid: verdicts_all[cid] for cid in current_ids if cid in verdicts_all}
-    reqs = _request_map(private_root, current_ids)
+    reqs = _request_map(staging_root, current_ids)
     _completed_progress(
         progress,
         check_active,
@@ -550,6 +549,42 @@ def run_due_validations(
         len(verdicts),
         len(current_ids),
     )
+    _check_active(check_active)
+    counters["setup_cards"] = _write_setup_cards(
+        staging_root, current_ids, requests=reqs
+    )
+    _completed_progress(
+        progress,
+        check_active,
+        "setup_cards_written",
+        int(counters["setup_cards"]),
+        len(current_ids),
+    )
+    # Publish final authority while the claimed tasks still provide a recoverable
+    # running marker.  If publication fails, startup orphan reconciliation can
+    # requeue the tasks and the pending manifest remains fail-closed.
+    _check_active(check_active)
+    write_current_generation(
+        Path(private_root),
+        tasks=export_tasks,
+        exported_ids=exported_ids,
+        completed_ids=current_ids,
+        producer_time=now,
+        artifact_root=staging_root,
+        pending_build_id=str(pending["build_id"]),
+    )
+    _completed_progress(
+        progress,
+        check_active,
+        "generation_published",
+        len(current_ids),
+        len(exported_ids),
+    )
+
+    # Publication is the commit point.  All mutable projections below are
+    # idempotent derivatives of the exact current immutable generation.  A
+    # pre-publication crash therefore leaves no successor verdict/status/feedback
+    # visible alongside the prior authority.
     _check_active(check_active)
     counters["stamped_db"] += _stamp_farm_results_from_contexts(
         Path(private_root), verdicts, requests=reqs
@@ -561,18 +596,7 @@ def run_due_validations(
         int(counters["stamped_db"]),
         len(verdicts),
     )
-    _check_active(check_active)
-    counters["setup_cards"] = _write_setup_cards(
-        Path(private_root), current_ids, requests=reqs
-    )
-    _completed_progress(
-        progress,
-        check_active,
-        "setup_cards_written",
-        int(counters["setup_cards"]),
-        len(current_ids),
-    )
-    reports_dir = Path(private_root) / "hard_validation" / "reports"
+    reports_dir = staging_root / "hard_validation" / "reports"
     for completed, cid in enumerate(current_ids, start=1):
         _check_active(check_active)
         report_data = _read_json(reports_dir / f"{_artifact_stem(cid)}.json")
@@ -617,25 +641,6 @@ def run_due_validations(
             completed,
             len(verdicts),
         )
-
-    # Publish final authority while the claimed tasks still provide a recoverable
-    # running marker.  If publication fails, startup orphan reconciliation can
-    # requeue the tasks and the pending manifest remains fail-closed.
-    _check_active(check_active)
-    write_current_generation(
-        Path(private_root),
-        tasks=export_tasks,
-        exported_ids=exported_ids,
-        completed_ids=current_ids,
-        producer_time=now,
-    )
-    _completed_progress(
-        progress,
-        check_active,
-        "generation_published",
-        len(current_ids),
-        len(exported_ids),
-    )
     for completed, task in enumerate(export_tasks, start=1):
         _check_active(check_active)
         hid = _hard_id_for_task(task)

@@ -111,6 +111,7 @@ class LLMRoleReview:
     model: str
     payload: dict[str, Any]
     accepted: bool
+    source_binding: dict[str, str] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
     schema: str = ""
     paper_only: bool = True
@@ -242,17 +243,24 @@ def request_role_review(
     source_ref: str,
     source_payload: Mapping[str, Any],
     provider: ProposalProvider,
+    source_binding: Mapping[str, str] | None = None,
     allow_public_output: bool = False,
 ) -> LLMRoleReview:
     if role_id not in ROLE_TO_SCHEMA:
         raise KeyError(f"unsupported review role: {role_id}")
     system_prompt = _review_system_prompt(role_id, provider)
+    binding = {
+        str(key): str(value)
+        for key, value in (source_binding or {}).items()
+        if str(key) and str(value)
+    }
     permit = preflight_invocation(
         private_root,
         role_id=role_id,
         source_ref=source_ref,
         input_payload={
             "source_payload": dict(source_payload),
+            "source_binding": binding,
             "prompt_hash": hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16],
             "output_schema": ROLE_TO_SCHEMA[role_id],
         },
@@ -263,7 +271,12 @@ def request_role_review(
         review = LLMRoleReview(
             review_id=stable_id(
                 "llmr",
-                {"role_id": role_id, "source_ref": source_ref, "status": permit.reason},
+                {
+                    "role_id": role_id,
+                    "source_ref": source_ref,
+                    "source_binding": binding,
+                    "status": permit.reason,
+                },
             ),
             role_id=role_id,
             source_ref=source_ref,
@@ -271,6 +284,7 @@ def request_role_review(
             model="",
             payload={},
             accepted=False,
+            source_binding=binding,
             problems=[permit.reason],
             schema=ROLE_TO_SCHEMA[role_id],
         )
@@ -293,13 +307,22 @@ def request_role_review(
         payload = normalize_review_payload(role_id, payload)
         accepted, problems = validate_review_payload(role_id, payload)
         review = LLMRoleReview(
-            review_id=stable_id("llmr", {"role_id": role_id, "source_ref": source_ref, "payload": payload}),
+            review_id=stable_id(
+                "llmr",
+                {
+                    "role_id": role_id,
+                    "source_ref": source_ref,
+                    "source_binding": binding,
+                    "payload": payload,
+                },
+            ),
             role_id=role_id,
             source_ref=source_ref,
             provider=usage.provider,
             model=usage.model,
             payload=payload if accepted else {},
             accepted=accepted,
+            source_binding=binding,
             problems=problems,
             schema=ROLE_TO_SCHEMA[role_id],
         )
@@ -313,13 +336,22 @@ def request_role_review(
         )
     except (LLMProviderError, json.JSONDecodeError, ValueError) as exc:
         review = LLMRoleReview(
-            review_id=stable_id("llmr", {"role_id": role_id, "source_ref": source_ref, "error": type(exc).__name__}),
+            review_id=stable_id(
+                "llmr",
+                {
+                    "role_id": role_id,
+                    "source_ref": source_ref,
+                    "source_binding": binding,
+                    "error": type(exc).__name__,
+                },
+            ),
             role_id=role_id,
             source_ref=source_ref,
             provider=getattr(provider, "name", "unknown"),
             model="",
             payload={},
             accepted=False,
+            source_binding=binding,
             problems=[str(exc).strip() or type(exc).__name__],
             schema=ROLE_TO_SCHEMA[role_id],
         )

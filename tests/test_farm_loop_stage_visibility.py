@@ -1376,6 +1376,10 @@ class TestCycleLogStages:
         assert "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2" in bat
         assert "'--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%'" in bat
         assert "STRATEGY_LAB_RUN_CALCULATOR_ADVISOR=1" in bat
+        assert (
+            'if /I "%STRATEGY_LAB_RUN_CALCULATOR_ADVISOR%"=="1" '
+            'set "STRATEGY_LAB_CALCULATOR_ADVISOR_ARG=--run-calculator-advisor"'
+        ) in bat
         assert "STRATEGY_LAB_CALCULATOR_ADVISOR_MAX_CALLS=1" in bat
         assert "'--calculator-advisor-max-calls','%STRATEGY_LAB_CALCULATOR_ADVISOR_MAX_CALLS%'" in bat
         assert "STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS=0" in bat

@@ -173,7 +173,22 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
         "checks_summary": {"total": 0, "passed": 0, "failed": 0},
     }), encoding="utf-8")
 
+    def fake_write_prepared(*args, **kwargs):
+        target = kwargs["artifact_root"] / "hard_validation" / "requests"
+        target.mkdir(parents=True, exist_ok=True)
+        (target / f"{_artifact_stem(validation_id)}.json").write_bytes(
+            (rdir / f"{_artifact_stem(validation_id)}.json").read_bytes()
+        )
+        return [validation_id]
+
     def fake_validation_batch(*args, **kwargs):
+        target_root = kwargs["artifact_root"] / "hard_validation"
+        for source, name in ((vdir, "verdicts"), (reports, "reports")):
+            target = target_root / name
+            target.mkdir(parents=True, exist_ok=True)
+            (target / f"{_artifact_stem(validation_id)}.json").write_bytes(
+                (source / f"{_artifact_stem(validation_id)}.json").read_bytes()
+            )
         return {"total": 1, "validated": 1, "errors": 0,
                 "results": [{"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}]}
 
@@ -186,7 +201,7 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "src.research_lab.validation_orchestrator.write_prepared_requests",
-        lambda *args, **kwargs: [validation_id],
+        fake_write_prepared,
     )
     monkeypatch.setattr("src.research_lab.validation_orchestrator.run_validation_batch", fake_validation_batch)
     out = run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
@@ -194,8 +209,8 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
     assert out["stamped_unique"] == 1, out
     assert out["setup_cards"] == 1
     assert tasks.latest_unique_candidates()[0]["hard_status"] == "PAPER_FORWARD_READY"
-    card = tmp_path / "setup_library" / "cards" / f"setup-{validation_id}.json"
-    assert json.loads(card.read_text(encoding="utf-8"))["paper_forward_ready"] is True
+    from src.research_lab.validation_generation import read_current_setup_card_for_candidate
+    assert read_current_setup_card_for_candidate(tmp_path, validation_id)["paper_forward_ready"] is True
     manifest = json.loads(
         (tmp_path / "hard_validation" / "current_generation.json").read_text(encoding="utf-8")
     )
@@ -209,6 +224,7 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
     assert [item.candidate_id for item in load_ready_setup_cards(tmp_path)] == [validation_id]
 
     # A card edited after producer completion no longer matches the current generation.
+    card = tmp_path / manifest["active"][validation_id]["setup_card"]["path"]
     card.write_text(card.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     assert load_ready_setup_cards(tmp_path) == []
     assert not tasks.tasks_in_state("queued", task_type="export_validation")  # task completed
@@ -459,7 +475,7 @@ def test_validation_orchestrator_publishes_pending_before_export_side_effects(
     from src.research_lab.hard_validation_export import (
         validation_id_for_unique_candidate,
     )
-    from src.research_lab.validation_generation import load_current_generation
+    from src.research_lab.validation_generation import load_pending_generation
     from src.research_lab.validation_orchestrator import run_due_validations
 
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
@@ -476,7 +492,7 @@ def test_validation_orchestrator_publishes_pending_before_export_side_effects(
     observed = []
 
     def crash_export(*args, **kwargs):
-        manifest = load_current_generation(tmp_path)
+        manifest = load_pending_generation(tmp_path)
         observed.append(manifest)
         assert manifest["producer_complete"] is False
         assert manifest["active"] == {}
@@ -502,7 +518,7 @@ def test_validation_orchestrator_publishes_pending_before_export_side_effects(
     with pytest.raises(RuntimeError, match="synthetic producer crash"):
         run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
 
-    manifest = load_current_generation(tmp_path)
+    manifest = load_pending_generation(tmp_path)
     assert observed
     assert manifest["producer_complete"] is False
     assert manifest["active"] == {}
@@ -627,7 +643,7 @@ def test_validation_lease_failure_after_export_blocks_later_side_effects(
     monkeypatch, tmp_path
 ):
     from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
-    from src.research_lab.validation_generation import load_current_generation
+    from src.research_lab.validation_generation import load_pending_generation
     from src.research_lab.validation_orchestrator import run_due_validations
 
     uc_key = "FAIL::1h::momentum_breakout::ph::fp"
@@ -679,7 +695,7 @@ def test_validation_lease_failure_after_export_blocks_later_side_effects(
         )
 
     assert validation_calls == []
-    assert load_current_generation(tmp_path)["producer_complete"] is False
+    assert load_pending_generation(tmp_path)["producer_complete"] is False
     assert len(tasks.tasks_in_state("running", task_type="export_validation")) == 1
     tasks.close()
 
@@ -688,7 +704,7 @@ def test_final_generation_failure_leaves_running_task_for_orphan_recovery(
     monkeypatch, tmp_path
 ):
     from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
-    from src.research_lab.validation_generation import load_current_generation
+    from src.research_lab.validation_generation import load_pending_generation
     from src.research_lab.validation_orchestrator import run_due_validations
 
     uc_key = "X::1h::momentum_breakout::ph::fp"
@@ -733,11 +749,30 @@ def test_final_generation_failure_leaves_running_task_for_orphan_recovery(
             OSError("synthetic final publication failure")
         ),
     )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator._stamp_farm_results_from_contexts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("mutable DB stamp preceded authority publication")
+        ),
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.write_feedback",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("feedback preceded authority publication")
+        ),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "set_unique_hard_status",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unique status preceded authority publication")
+        ),
+    )
 
     with pytest.raises(OSError, match="synthetic final publication failure"):
         run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
 
-    assert load_current_generation(tmp_path)["producer_complete"] is False
+    assert load_pending_generation(tmp_path)["producer_complete"] is False
     running = tasks.tasks_in_state("running", task_type="export_validation")
     assert len(running) == 1
     claim_expires_at = float(running[0]["claim_expires_at"])

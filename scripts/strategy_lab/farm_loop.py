@@ -21,6 +21,7 @@ import argparse
 import _thread
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -53,6 +54,7 @@ from src.research_lab.process_lease_supervisor import (  # noqa: E402
     ProcessLeaseSupervisor,
 )
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.storage_capability import is_link_or_reparse  # noqa: E402
 from src.research_lab.task_claim_heartbeat import TaskClaimHeartbeat  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 
@@ -163,12 +165,52 @@ def _paper_telegram_delivery_config(args, *, apply: bool) -> dict:
     }
 
 
-def _read_intake(limit: int) -> list[dict]:
+def _read_intake(
+    limit: int,
+    *,
+    tasks: FarmTasksDB | None = None,
+    metrics: dict[str, Any] | None = None,
+) -> list[dict]:
     """Read open scanner watches (file only - never imports the scanner module)."""
     try:
         from src.scout.watch_queue import open_watches
 
-        return watches_to_intake(open_watches())[:limit]
+        watches = open_watches()
+        normalized = watches_to_intake(watches)
+        known = (
+            tasks.existing_intake_event_ids(
+                str(event.get("event_id") or "") for event in normalized
+            )
+            if tasks is not None
+            else set()
+        )
+        selected = watches_to_intake(
+            watches,
+            known_event_ids=known,
+            limit=limit,
+        )
+        if metrics is not None:
+            unseen = [
+                event
+                for event in normalized
+                if str(event.get("event_id") or "") not in known
+            ]
+            now = time.time()
+            metrics.update(
+                {
+                    "open_watches": len(watches),
+                    "normalized_events": len(normalized),
+                    "already_ingested": len(known),
+                    "uningested_events": len(unseen),
+                    "selected": len(selected),
+                    "remaining_after_selection": max(0, len(unseen) - len(selected)),
+                    "oldest_uningested_age_seconds": max(
+                        (now - float(event.get("observed_at") or now) for event in unseen),
+                        default=0.0,
+                    ),
+                }
+            )
+        return selected
     except Exception as exc:  # noqa: BLE001 - a missing/locked watch file must not crash the farm
         print(f"  intake: no watches ({type(exc).__name__})")
         return []
@@ -531,14 +573,19 @@ def _run_v2_main_paper_derived_chain(
     runtime.raise_if_failed()
     from src.research_lab.validation_generation import (
         load_current_generation_snapshot,
+        load_pending_generation,
     )
 
     validation_generation = load_current_generation_snapshot(private_root)
     if validation_generation.status in {"legacy_absent", "pending", "code_stale"}:
+        pending_generation = load_pending_generation(private_root) or {}
         out["paper_generation_v2"] = {
             "state": "waiting_validation_generation",
             "validation_generation_status": validation_generation.status,
             "validation_generation_id": validation_generation.generation_id,
+            "validation_generation_started_at": float(
+                pending_generation.get("producer_time") or 0.0
+            ),
             "run_id": "",
             "current": False,
             "producer_membership": {
@@ -609,6 +656,60 @@ def _run_v2_main_paper_derived_chain(
         cycle_started_at=cycle_started_at,
         details={"milestone": "generation_promoted", "paper_generation_run_id": run_id},
     )
+
+    feature_packet_ids = _generation_feature_packet_ids(
+        generation.get("queue") or {},
+        expected_run_id=run_id,
+        private_root=private_root,
+    )
+    if getattr(args, "run_calculator_advisor", False):
+        try:
+            out["calculator_advisor"] = _run_calculator_advisor_stage(
+                args,
+                private_root,
+                apply,
+                feature_packet_ids=feature_packet_ids,
+            )
+        except Exception as exc:  # noqa: BLE001 - bounded advisory falls back deterministically
+            out["calculator_advisor"] = {
+                "schema": "CalculatorAdvisorStage.v1",
+                "enabled": True,
+                "requested": len(feature_packet_ids),
+                "eligible": len(feature_packet_ids),
+                "attempted": 0,
+                "processed": 0,
+                "accepted": 0,
+                "fallback": len(feature_packet_ids),
+                "skipped": 0,
+                "deferred": 0,
+                "blocked": max(1, len(feature_packet_ids)),
+                "reason_counts": {f"pre_delivery_{type(exc).__name__}": 1},
+                "pre_delivery": True,
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+    else:
+        out["calculator_advisor"] = {
+            "schema": "CalculatorAdvisorStage.v1",
+            "enabled": False,
+            "requested": len(feature_packet_ids),
+            "eligible": len(feature_packet_ids),
+            "attempted": 0,
+            "processed": 0,
+            "accepted": 0,
+            "fallback": len(feature_packet_ids),
+            "skipped": len(feature_packet_ids),
+            "deferred": 0,
+            "blocked": 0,
+            "reason_counts": (
+                {"advisor_explicitly_disabled": len(feature_packet_ids)}
+                if feature_packet_ids
+                else {}
+            ),
+            "pre_delivery": True,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
 
     from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
     from src.research_lab.paper_signals.training_export import export_training_rows
@@ -747,6 +848,7 @@ def _run_v2_post_delivery_maintenance_chain(
         private_root,
         apply=apply,
         expected_generation_run_id=run_id,
+        evidence_database_path=evidence_database_path,
         check_active=check_active,
     )
     check_active()
@@ -1430,7 +1532,11 @@ def _print_cycle(out: dict) -> None:
     if advisor:
         print(
             "  calculator_advisor: "
-            f"processed={advisor.get('processed', 0)} accepted={advisor.get('accepted', 0)} "
+            f"requested={advisor.get('requested', 0)} "
+            f"eligible={advisor.get('eligible', 0)} "
+            f"attempted={advisor.get('attempted', 0)} "
+            f"accepted={advisor.get('accepted', 0)} "
+            f"fallback={advisor.get('fallback', 0)} "
             f"skipped={advisor.get('skipped', 0)} blocked={advisor.get('blocked', 0)} "
             f"reason_counts={advisor.get('reason_counts', {})}"
         )
@@ -1554,8 +1660,12 @@ def _cycle_summary(out: dict) -> dict:
             ),
         },
         "calculator_advisor": {
+            "requested": (out.get("calculator_advisor") or {}).get("requested", 0),
+            "eligible": (out.get("calculator_advisor") or {}).get("eligible", 0),
+            "attempted": (out.get("calculator_advisor") or {}).get("attempted", 0),
             "processed": (out.get("calculator_advisor") or {}).get("processed", 0),
             "accepted": (out.get("calculator_advisor") or {}).get("accepted", 0),
+            "fallback": (out.get("calculator_advisor") or {}).get("fallback", 0),
             "blocked": (out.get("calculator_advisor") or {}).get("blocked", 0),
         },
         "paper_product_quality": {
@@ -1700,28 +1810,118 @@ def _provider_env(args) -> dict[str, str]:
     return env
 
 
-def _run_calculator_advisor_stage(args, private_root: Path, apply: bool) -> dict:
-    result = {
+_FEATURE_PACKET_ID = re.compile(r"fp_[a-f0-9]{16}")
+_PAPER_QUEUE_SCHEMA = "main_paper_runtime_adapter.v1"
+_PAPER_QUEUE_ITEM_SCHEMA = "MainPaperRuntimeQueueItem.v1"
+
+
+def _canonical_queue_snapshot_path(private_root: Path, raw_path: Any) -> Path:
+    text = str(raw_path or "").strip()
+    candidate = Path(text)
+    if not text or not candidate.is_absolute():
+        raise RuntimeError("paper queue snapshot path is not canonical")
+    expected = (
+        Path(private_root) / "state" / "derived" / "main_paper_runtime_queue.json"
+    )
+    try:
+        resolved = candidate.resolve(strict=True)
+        expected_resolved = expected.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("paper queue snapshot is unavailable") from exc
+    if resolved != expected_resolved or is_link_or_reparse(candidate):
+        raise RuntimeError("paper queue snapshot escapes its canonical path")
+    return resolved
+
+
+def _generation_feature_packet_ids(
+    queue_summary: dict[str, Any], *, expected_run_id: str, private_root: Path
+) -> list[str]:
+    """Load the exact validation-bound feature IDs for pre-delivery advice."""
+
+    if str(queue_summary.get("paper_generation_run_id") or "") != expected_run_id:
+        raise RuntimeError("paper queue is not bound to the current generation")
+    path = _canonical_queue_snapshot_path(
+        private_root, queue_summary.get("snapshot_path")
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("paper queue snapshot is unavailable") from exc
+    if not isinstance(payload, dict) or payload.get("schema") != _PAPER_QUEUE_SCHEMA:
+        raise RuntimeError("paper queue snapshot schema mismatch")
+    if str(payload.get("paper_generation_run_id") or "") != expected_run_id:
+        raise RuntimeError("paper queue snapshot generation mismatch")
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("paper queue snapshot items must be a list")
+    feature_ids: list[str] = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("schema") != _PAPER_QUEUE_ITEM_SCHEMA:
+            raise RuntimeError("paper queue item schema mismatch")
+        if str(item.get("paper_generation_run_id") or "") != expected_run_id:
+            raise RuntimeError("paper queue item generation mismatch")
+        if str(item.get("validation_tier") or "") != "validated_pfr":
+            continue
+        feature_id = str(item.get("feature_packet_id") or "")
+        if not _FEATURE_PACKET_ID.fullmatch(feature_id):
+            raise RuntimeError("paper queue feature packet identity is invalid")
+        feature_ids.append(feature_id)
+    return list(dict.fromkeys(feature_ids))
+
+
+def _canonical_feature_packet_path(private_root: Path, feature_id: str) -> Path:
+    if not _FEATURE_PACKET_ID.fullmatch(feature_id):
+        raise RuntimeError("feature packet identity is invalid")
+    root = Path(private_root) / "features" / "decision"
+    candidate = root / f"{feature_id}.json"
+    if candidate.exists():
+        try:
+            resolved_root = root.resolve(strict=True)
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError("feature packet path is unavailable") from exc
+        if resolved.parent != resolved_root or is_link_or_reparse(candidate):
+            raise RuntimeError("feature packet path escapes its canonical root")
+        return resolved
+    return candidate
+
+
+def _run_calculator_advisor_stage(
+    args,
+    private_root: Path,
+    apply: bool,
+    *,
+    feature_packet_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    requested = list(dict.fromkeys(feature_packet_ids or ()))
+    result: dict[str, Any] = {
         "schema": "CalculatorAdvisorStage.v1",
+        "enabled": True,
+        "requested": len(requested),
+        "eligible": len(requested),
+        "attempted": 0,
         "processed": 0,
         "accepted": 0,
+        "fallback": len(requested),
         "skipped": 0,
         "deferred": 0,
         "blocked": 0,
         "reason_counts": {},
+        "pre_delivery": feature_packet_ids is not None,
         "paper_only": True,
         "execution_allowed": False,
     }
     if not apply:
-        result["skipped"] = 1
-        result["reason_counts"] = {"dry_run": 1}
+        result["skipped"] = len(requested) or 1
+        result["reason_counts"] = {"dry_run": len(requested) or 1}
         return result
     max_calls = max(0, int(getattr(args, "calculator_advisor_max_calls", 1)))
     if max_calls < 1:
-        result["skipped"] = 1
-        result["reason_counts"] = {"cap_zero": 1}
+        result["skipped"] = len(requested) or 1
+        result["reason_counts"] = {"cap_zero": len(requested) or 1}
         return result
     from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals
+    from src.research_lab.calculator_advisor import load_latest_calculator_advice
     from src.research_lab.feature_packet import (
         latest_feature_packet_path,
         load_feature_packet,
@@ -1730,51 +1930,104 @@ def _run_calculator_advisor_stage(args, private_root: Path, apply: bool) -> dict
     from src.research_lab.llm_provider import load_provider
     from src.research_lab.local_calculator_swarm import request_local_calculator_swarm
 
-    packet_path = latest_feature_packet_path(private_root)
-    if packet_path is None:
-        result["deferred"] = 1
-        result["reason_counts"] = {"missing_feature_packet": 1}
+    if feature_packet_ids is None:
+        latest = latest_feature_packet_path(private_root)
+        packet_paths = [latest] if latest is not None else []
+        result["requested"] = len(packet_paths)
+        result["eligible"] = len(packet_paths)
+        result["fallback"] = len(packet_paths)
+    else:
+        existing = load_latest_calculator_advice(private_root, set(requested))
+        result["already_available"] = len(existing)
+        result["accepted"] = len(existing)
+        result["fallback"] = max(0, len(requested) - len(existing))
+        pending_paths = [
+            _canonical_feature_packet_path(private_root, feature_id)
+            for feature_id in requested
+            if feature_id not in existing
+        ]
+        budget_deferred = max(0, len(pending_paths) - max_calls)
+        if budget_deferred:
+            result["deferred"] += budget_deferred
+            result["reason_counts"]["pre_delivery_budget_exhausted"] = (
+                budget_deferred
+            )
+        packet_paths = pending_paths
+    packet_paths = packet_paths[:max_calls]
+    if not packet_paths:
+        if requested and int(result.get("already_available") or 0) == len(requested):
+            result["reason_counts"] = {"advice_already_available": len(requested)}
+        elif result["eligible"]:
+            result["deferred"] += int(result["eligible"])
+            result["reason_counts"] = {
+                "missing_feature_packet": int(result["eligible"])
+            }
         return result
-    packet = load_feature_packet(packet_path)
-    advice = request_local_calculator_swarm(
-        private_root,
-        packet,
-        load_provider(_provider_env(args)),
-        allow_public_output=bool(getattr(args, "allow_public_output", False)),
+    provider = load_provider(_provider_env(args))
+    items: list[dict[str, Any]] = []
+    for packet_path in packet_paths:
+        if packet_path is None or not packet_path.is_file():
+            result["deferred"] += 1
+            result["reason_counts"]["missing_feature_packet"] = (
+                int(result["reason_counts"].get("missing_feature_packet") or 0) + 1
+            )
+            continue
+        packet = load_feature_packet(packet_path)
+        expected_feature_id = packet_path.stem
+        if packet.feature_packet_id != expected_feature_id:
+            raise RuntimeError("feature packet content identity mismatch")
+        result["attempted"] += 1
+        advice = request_local_calculator_swarm(
+            private_root,
+            packet,
+            provider,
+            allow_public_output=bool(getattr(args, "allow_public_output", False)),
+        )
+        reason = (
+            "accepted"
+            if advice.accepted
+            else (advice.problems[0] if advice.problems else "llm_schema_reject")
+        )
+        result["processed"] += 1
+        result["accepted"] += 1 if advice.accepted else 0
+        result["blocked"] += 0 if advice.accepted else 1
+        result["reason_counts"][reason] = (
+            int(result["reason_counts"].get(reason) or 0) + 1
+        )
+        items.append(
+            {
+                "feature_packet_id": packet.feature_packet_id,
+                "advisor_ref": advice.advisor_ref,
+                "accepted": bool(advice.accepted),
+            }
+        )
+        result["sweep_proposals"] = compile_sweep_proposals(private_root, advice)
+        write_cycle_link(
+            private_root,
+            {
+                "feature_packet_id": packet.feature_packet_id,
+                "llm_interpretation_ref": advice.advisor_ref,
+                "source": "calculator_advisor",
+                "mode": packet.mode,
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+        )
+    result["items"] = items
+    result["fallback"] = max(
+        0, int(result["eligible"]) - int(result["accepted"])
     )
-    reason = (
-        "accepted"
-        if advice.accepted
-        else (advice.problems[0] if advice.problems else "llm_schema_reject")
-    )
-    result["processed"] = 1
-    result["accepted"] = 1 if advice.accepted else 0
-    result["blocked"] = 0 if advice.accepted else 1
-    result["reason_counts"] = {reason: 1}
-    result["advisor_ref"] = advice.advisor_ref
-    result["feature_packet_id"] = packet.feature_packet_id
-    result["provider"] = advice.provider
-    result["model"] = advice.model
+    if len(items) == 1:
+        result["advisor_ref"] = items[0]["advisor_ref"]
+        result["feature_packet_id"] = items[0]["feature_packet_id"]
     result["swarm_roles"] = [
         "calculator_context_classifier",
         "calculator_hypothesis_proposer",
         "calculator_hypothesis_critic",
     ]
-    result["sweep_proposals"] = compile_sweep_proposals(private_root, advice)
     from src.research_lab.llm_invocation_ledger import invocation_summary
 
     result["invocations"] = invocation_summary(private_root)
-    write_cycle_link(
-        private_root,
-        {
-            "feature_packet_id": packet.feature_packet_id,
-            "llm_interpretation_ref": advice.advisor_ref,
-            "source": "calculator_advisor",
-            "mode": packet.mode,
-            "paper_only": True,
-            "execution_allowed": False,
-        },
-    )
     return result
 
 
@@ -2323,7 +2576,12 @@ def _run_once(
         cycle_started_at=cycle_started_at,
         details={"max_plan_events": int(getattr(args, "max_plan_events", 20))},
     )
-    events = _read_intake(args.max_plan_events)
+    intake_metrics: dict[str, Any] = {}
+    events = _read_intake(
+        args.max_plan_events,
+        tasks=tasks if apply else None,
+        metrics=intake_metrics,
+    )
     if apply and events:
         from src.research_lab.lineage_contract import (
             scanner_event_from_intake,
@@ -2397,6 +2655,7 @@ def _run_once(
             task_claim_guard_factory=getattr(args, "task_claim_guard_factory", None),
         )
     out["discovery"] = discovery_info
+    out["scanner_intake"] = intake_metrics
 
     def priority_checkpoint(after_stage: str) -> None:
         """Let urgent/GO work advance between heavyweight full-cycle stages."""
@@ -2767,7 +3026,10 @@ def _run_once(
                         out.setdefault("errors", []).append(
                             {"where": "journal_export", "error": str(exc)}
                         )
-                if getattr(args, "run_calculator_advisor", False):
+                if getattr(args, "run_calculator_advisor", False) and not (
+                    getattr(args, "paper_evidence_v2_required", False)
+                    and "calculator_advisor" in out
+                ):
                     if cycle_stop_requested():
                         out["stop_requested"] = True
                         return out
@@ -2906,6 +3168,29 @@ def _run_once(
         },
     )
     if apply:
+        from src.research_lab.validation_generation import load_pending_generation
+
+        pending_generation = load_pending_generation(private_root) or {}
+        out["validation_generation_build"] = {
+            "active": bool(pending_generation),
+            "generation_id": str(pending_generation.get("generation_id") or ""),
+            "started_at": float(pending_generation.get("producer_time") or 0.0),
+        }
+        backlog_reader = getattr(tasks, "validation_backlog_metrics", None)
+        validation_backlog = (
+            backlog_reader()
+            if callable(backlog_reader)
+            else {
+                "active": 0,
+                "eligible": 0,
+                "oldest_age_seconds": 0.0,
+            }
+        )
+        validation_backlog["backlog_slo_seconds"] = max(
+            1.0,
+            float(getattr(args, "validation_backlog_slo_seconds", 3600.0)),
+        )
+        out["validation_backlog"] = validation_backlog
         out["product_cycle_complete"] = True
         _publish_farm_product_checkpoint(private_root, out)
     return out
@@ -2923,8 +3208,13 @@ def _run_priority_slot(
     longer sleeps for minutes.
     """
     provider, flow_provider, oi_provider = _providers(args, True)
-    events = _read_intake(min(8, max(1, int(args.max_plan_events))))
-    return run_coordinator_cycle(
+    intake_metrics: dict[str, Any] = {}
+    events = _read_intake(
+        min(8, max(1, int(args.max_plan_events))),
+        tasks=tasks,
+        metrics=intake_metrics,
+    )
+    out = run_coordinator_cycle(
         tasks,
         private_root=private_root,
         profiles=profiles,
@@ -2957,6 +3247,8 @@ def _run_priority_slot(
         sweep_tier=args.sweep_tier,
         task_claim_guard_factory=getattr(args, "task_claim_guard_factory", None),
     )
+    out["scanner_intake"] = intake_metrics
+    return out
 
 
 def _slot_did_work(slot: dict) -> bool:

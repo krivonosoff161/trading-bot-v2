@@ -4,7 +4,12 @@ from pathlib import Path
 
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.paper_signals.store import append_signal, update_signal
-from src.research_lab.paper_signals.training_export import export_training_rows, training_row
+from src.research_lab.paper_signals.training_export import (
+    _matching_outcome_review,
+    _project_current_v2_outcomes,
+    export_training_rows,
+    training_row,
+)
 
 
 def _signal(signal_id: str = "s1", status: str = "armed") -> PaperActionSignal:
@@ -122,6 +127,119 @@ def test_export_training_rows_uses_latest_terminal_state(tmp_path):
     assert rows[0]["status"] == "reviewed"
     assert rows[0]["result"] == "stop"
     assert summary["by_diagnosis"] == {"wrong_direction": 1}
+
+
+def test_current_v2_terminal_projection_overlays_only_exact_run_outcome():
+    signal = _signal(status="armed")
+    trade = {
+        "source_signal_id": signal.signal_id,
+        "signal_status": "reviewed",
+        "paper_generation_run_id": "run-current",
+        "paper_subject_generation_id": "subject-current",
+        "account_generation_id": "account-current",
+        "terminal_lifecycle_event_id": "event-terminal",
+        "outcome": {"result": "take", "net_pct": 1.25},
+        "review": {"diagnosis": "good_signal", "net_r": 0.8},
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    current = {
+        "authority_database_exists": True,
+        "current": True,
+        "display_only": False,
+        "generation_status": "completed",
+        "paper_generation_run_id": "run-current",
+        "paper_subject_generation_ids": ["subject-current"],
+        "account_generation_id": "account-current",
+        "items": [trade],
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+    projected = _project_current_v2_outcomes(
+        [signal], trades={signal.signal_id: trade}, trade_generation=current
+    )
+
+    assert projected[0] is not signal
+    assert signal.status == "armed"
+    assert projected[0].status == "reviewed"
+    assert projected[0].outcome == trade["outcome"]
+    assert projected[0].review == trade["review"]
+
+    stale = _project_current_v2_outcomes(
+        [signal],
+        trades={
+            signal.signal_id: {
+                **trade,
+                "paper_subject_generation_id": "subject-old",
+            }
+        },
+        trade_generation=current,
+    )
+    unavailable = _project_current_v2_outcomes(
+        [signal],
+        trades={signal.signal_id: trade},
+        trade_generation={**current, "current": False},
+    )
+    assert stale == []
+    assert unavailable == [signal]
+
+    terminal_signal = _signal(status="reviewed")
+    terminal_signal.outcome = {"result": "take", "net_pct": 1.0}
+    terminal_signal.review = {"diagnosis": "good_signal"}
+    assert _project_current_v2_outcomes(
+        [terminal_signal],
+        trades={
+            terminal_signal.signal_id: {
+                **trade,
+                "paper_subject_generation_id": "subject-stale",
+            }
+        },
+        trade_generation=current,
+    ) == []
+
+
+def test_v2_training_rejects_stale_review_with_same_training_id():
+    from src.research_lab.system_analyst_cycle import outcome_review_source_binding
+
+    signal = _signal(status="reviewed")
+    signal.outcome = {"result": "take", "net_pct": 1.0}
+    signal.review = {"diagnosis": "good_signal"}
+    row = training_row(
+        signal,
+        paper_trade={
+            "paper_generation_run_id": "run-current",
+            "paper_subject_generation_id": "subject-current",
+            "account_generation_id": "account-current",
+            "terminal_lifecycle_event_id": "terminal-current",
+        },
+    )
+    exact = {
+        "review_id": "exact",
+        "source_ref": row["training_row_id"],
+        "source_binding": outcome_review_source_binding(row),
+        "accepted": True,
+        "created_at": "2026-08-13T00:00:00+00:00",
+    }
+    stale = {
+        **exact,
+        "review_id": "stale-newer",
+        "source_binding": {
+            **exact["source_binding"],
+            "source_content_sha256": "stale-content",
+        },
+        "created_at": "2026-08-13T00:01:00+00:00",
+    }
+
+    assert _matching_outcome_review(
+        row, [exact, stale], require_source_binding=True
+    ) == exact
+    assert (
+        _matching_outcome_review(
+            row, [stale], require_source_binding=True
+        )
+        is None
+    )
 
 
 def test_export_training_rows_rebuilds_when_field_version_missing(tmp_path):

@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from src.research_lab.calculator_advisor import normalize_advice_payload, request_calculator_advice, validate_advice_payload
 from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals, schedule_advisor_sweep_tasks
 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
@@ -176,6 +178,46 @@ def test_calculator_advice_normalizes_missing_and_warning_strings():
     ok, problems = validate_advice_payload(payload)
     assert ok is True
     assert problems == []
+
+
+def test_calculator_advice_bounds_explicit_user_facing_analysis():
+    ok, problems = validate_advice_payload(
+        {
+            "user_facing_analysis": (
+                "Trend context remains uncertain and requires deterministic "
+                "confirmation."
+            )
+        }
+    )
+    assert ok is True
+    assert problems == []
+
+    ok, problems = validate_advice_payload({"user_facing_analysis": "x" * 321})
+    assert ok is False
+    assert "user_facing_analysis must be 1..320 characters" in problems
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "Buy at the next entry level.",
+        "Use leverage and place an order.",
+        "Target 105 after a long signal.",
+        "Открыть лонг с плечом.",
+        "Купить сейчас.",
+        "Продать актив.",
+        "Купи немедленно.",
+        "Продавай при движении.",
+        "Context at https://example.invalid",
+        "<b>Trusted context</b>",
+        "First line\nsecond line",
+    ],
+)
+def test_calculator_advice_rejects_order_like_public_model_text(unsafe_text):
+    ok, problems = validate_advice_payload({"user_facing_analysis": unsafe_text})
+
+    assert ok is False
+    assert problems == ["user_facing_analysis is not an approved statement"]
 
 
 def test_calculator_advice_normalizes_non_string_list_fields():
@@ -594,7 +636,12 @@ def test_farm_loop_calculator_stage_records_disabled_state(tmp_path):
 
     result = _run_calculator_advisor_stage(args, tmp_path, apply=True)
 
+    assert result["requested"] == 1
+    assert result["eligible"] == 1
+    assert result["attempted"] == 1
     assert result["processed"] == 1
+    assert result["accepted"] == 0
+    assert result["fallback"] == 1
     assert result["blocked"] == 1
     assert result["reason_counts"] == {"provider_not_configured": 1}
     assert result["execution_allowed"] is False

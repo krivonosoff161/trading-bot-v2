@@ -423,6 +423,11 @@ def test_validated_preview_links_only_accepted_bounded_llm_advice(tmp_path):
                     "situation_class": "trend",
                     "confidence": 0.7,
                     "advisory_reason": "synthetic private prose must not render",
+                        "user_facing_analysis": (
+                            "Trend context remains uncertain and requires "
+                            "deterministic confirmation."
+                        ),
+                    "missing_data": ["funding <unknown>", "volume & breadth"],
                 },
             }
         )
@@ -440,8 +445,56 @@ def test_validated_preview_links_only_accepted_bounded_llm_advice(tmp_path):
     assert item["llm_interpretation_ref"] == "advice_synthetic_1"
     assert item["feature_packet_id"] == "feature_synthetic_1"
     assert summary["analysis_llm_linked"] == 1
+    assert "<b>Анализ LLM:</b>" in item["text"]
+    assert (
+        "Trend context remains uncertain and requires deterministic confirmation."
+        in item["text"]
+    )
+    assert "<script>" not in item["text"]
     assert "synthetic private prose" not in item["text"]
+    assert "funding" not in item["text"]
     assert item["text"].count("100.5") >= 1
+    assert item["text"].count("95") >= 1
+    assert item["text"].count("110") >= 1
+    assert len(item["text"]) <= MAX_MESSAGE_CHARS
+
+
+def test_rejected_advice_uses_explicit_deterministic_fallback(tmp_path):
+    _write_trade_snapshot(
+        tmp_path,
+        [_trade_record(feature_packet_id="feature_rejected_advice")],
+    )
+    advice_path = tmp_path / "state" / "llm_advice" / "calculator_advice.jsonl"
+    advice_path.parent.mkdir(parents=True, exist_ok=True)
+    advice_path.write_text(
+        json.dumps(
+            {
+                "schema": "CalculatorAdvice.v1",
+                "advisor_ref": "advice_rejected",
+                "feature_packet_id": "feature_rejected_advice",
+                "accepted": False,
+                "problems": ["synthetic_provider_error"],
+                "advice": {"advisory_reason": "must never render"},
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))[
+        "items"
+    ][0]
+    assert item["analysis_mode"] == "deterministic_fallback"
+    assert item["analysis_status"] == "llm_advisory_unavailable"
+    assert item["llm_interpretation_ref"] == ""
+    assert "must never render" not in item["text"]
+    assert "детерминированный шаблон" in item["text"]
+    assert item["text"].count("100.5") >= 1
+    assert item["text"].count("95") >= 1
 
 
 def test_direct_llm_reference_without_accepted_advice_does_not_claim_link(tmp_path):

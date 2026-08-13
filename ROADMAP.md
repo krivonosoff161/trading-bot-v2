@@ -14,6 +14,35 @@ Status: **CURRENT**
 The project is a paper/research workbench. This sequence is ordered by evidence
 dependency, not by a route to live trading.
 
+## In Review On The Task Branch
+
+The unmerged `codex/product-liveness-e2e-repair` branch is an implementation
+candidate, not a completed or authoritative portfolio state. It is expected to
+pass exact-head review before any item below moves into **Completed**:
+
+1. Filter already-ingested scanner event identities before bounded intake, then
+   order eligible events by canonical priority and freshness.
+2. Interleave a durable bounded fresh-validation slot with FIFO backlog service,
+   keeping fairness cursor advancement and task claim atomic.
+3. Separate successor-generation staging from completed current validation
+   authority; promote only a complete verified successor and retain fail-closed
+   first-publication behavior.
+4. Bind paper suppression and learning to exact setup identity, including the
+   parameter hash, instead of applying symbol-wide exclusions.
+5. Offer a bounded current-generation calculator advisory before preview and
+   delivery, with explicit deterministic fallback and unchanged authority.
+6. Monitor real scanner-intake, backlog, staging, and generation-transition
+   latency rather than inferring product health from PIDs or a stable previous
+   generation.
+7. Publish large rebuildable derived snapshots atomically under a byte budget,
+   avoid rewriting identical content, and retain deterministic rebuildability.
+8. Prove the joined production path with deterministic synthetic E2E and replay
+   tests, not only adjacent unit and artifact-presence checks.
+
+Exit gate: focused adversarial tests, deterministic E2E, full non-live tests,
+repository guards, clean exact-head review, and synchronized machine/human
+documentation. Runtime evidence remains a later separately authorized gate.
+
 ## Completed
 
 - Public market/news ingestion, bounded experiment records, deterministic
@@ -177,7 +206,9 @@ private runtime, data, or trading hypothesis is proven.
 ## Current: Product-Chain Integrity Before Reliability
 
 1. Prove validation service capacity, artifact-aware fairness, high-water
-   backpressure, and oldest-age SLO observability under synthetic contention.
+   backpressure, fresh/FIFO service balance, and oldest-age SLO observability
+   under synthetic contention. The task-branch implementation candidate must be
+   merged and independently verified before this is treated as current behavior.
 2. Verify during the bounded canary that the implemented provider-error/data-gap/
    genuine-no-market-data taxonomy preserves observations through a real outage
    and recovery while technical evidence remains absent from all learning inputs.

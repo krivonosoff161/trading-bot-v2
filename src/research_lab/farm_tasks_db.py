@@ -30,7 +30,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from src.research_lab.farm_priority import priority_value
 
@@ -535,6 +535,21 @@ class FarmTasksDB:
         ).fetchall()
         return [self._event_row(r) for r in rows]
 
+    def existing_intake_event_ids(self, event_ids: Iterable[str]) -> set[str]:
+        """Return the bounded subset already known to the canonical intake table."""
+
+        wanted = list(dict.fromkeys(str(item) for item in event_ids if str(item)))
+        found: set[str] = set()
+        for offset in range(0, len(wanted), 400):
+            batch = wanted[offset : offset + 400]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self._conn.execute(
+                f"SELECT event_id FROM intake_events WHERE event_id IN ({placeholders})",  # noqa: S608 - placeholders only
+                batch,
+            ).fetchall()
+            found.update(str(row["event_id"]) for row in rows)
+        return found
+
     def mark_event_consumed(self, event_id: str) -> None:
         self._conn.execute(
             "UPDATE intake_events SET consumed=1 WHERE event_id=?", (str(event_id),)
@@ -655,12 +670,25 @@ class FarmTasksDB:
         return int(cur.lastrowid), True
 
     def claim_next_task(
-        self, *, task_types: tuple[str, ...] | None = None, now: float | None = None
+        self,
+        *,
+        task_types: tuple[str, ...] | None = None,
+        now: float | None = None,
+        minimum_created_at: float | None = None,
+        fairness_key: str | None = None,
+        freshness_window_seconds: float | None = None,
+        fresh_every: int = 2,
+        claim_budget_key: str | None = None,
     ) -> dict[str, Any] | None:
         """Claim the highest-priority eligible task and flip it to running.
 
         Eligible = queued, or deferred whose deferred_until has elapsed; and whose
         depends_on (if any) is completed. Never returns blocked/running tasks.
+
+        A named fairness lane durably alternates a bounded recent-task slot with
+        FIFO debt slots.  Selection and cursor advancement share the same
+        ``BEGIN IMMEDIATE`` transaction, so concurrent workers cannot consume the
+        same lane or bypass the existing fenced compare-and-set claim.
         """
         now = self._effective_now(now)
         type_clause = ""
@@ -668,15 +696,61 @@ class FarmTasksDB:
         if task_types:
             type_clause = f" AND task_type IN ({','.join('?' * len(task_types))})"
             params.extend(task_types)
+        created_clause = ""
+        if minimum_created_at is not None:
+            created_clause = " AND created_at>=?"
+            params.append(float(minimum_created_at))
+        freshness_window = (
+            None
+            if freshness_window_seconds is None
+            else float(freshness_window_seconds)
+        )
+        fair = fairness_key is not None or freshness_window is not None
+        if fair:
+            if not fairness_key or freshness_window is None:
+                raise ValueError(
+                    "fairness_key and freshness_window_seconds must be provided together"
+                )
+            if freshness_window <= 0 or int(fresh_every) < 2:
+                raise ValueError(
+                    "freshness_window_seconds must be positive and fresh_every at least 2"
+                )
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             now = self._effective_now(now)
+            order_clause = "priority ASC, created_at ASC, task_id ASC"
+            cursor = 0
+            if claim_budget_key:
+                budget_row = self._conn.execute(
+                    "SELECT value FROM farm_meta WHERE key=?",
+                    (f"claim_budget:{claim_budget_key}",),
+                ).fetchone()
+                if budget_row is not None and str(budget_row["value"]) == "used":
+                    self._conn.commit()
+                    return None
+            if fair:
+                assert fairness_key is not None and freshness_window is not None
+                cursor_row = self._conn.execute(
+                    "SELECT value FROM farm_meta WHERE key=?",
+                    (f"claim_fairness:{fairness_key}",),
+                ).fetchone()
+                cursor = int(cursor_row["value"]) if cursor_row is not None else 0
+                cutoff = now - freshness_window
+                prefer_fresh = cursor % int(fresh_every) == 0
+                comparator = ">=" if prefer_fresh else "<"
+                order_clause = (
+                    "priority ASC, "
+                    f"CASE WHEN created_at {comparator} ? THEN 0 ELSE 1 END, "
+                    "created_at ASC, task_id ASC"
+                )
+                params.append(cutoff)
             row = self._conn.execute(
                 f"""SELECT * FROM tasks
                     WHERE (state='queued' OR (state='deferred' AND deferred_until<=?))
                       AND (depends_on IS NULL OR depends_on IN (SELECT task_id FROM tasks WHERE state='completed'))
                       {type_clause}
-                    ORDER BY priority ASC, created_at ASC, task_id ASC LIMIT 1""",
+                      {created_clause}
+                    ORDER BY {order_clause} LIMIT 1""",
                 params,
             ).fetchone()
             if row is None:
@@ -718,6 +792,16 @@ class FarmTasksDB:
                 fence,
                 mutation_seq,
             )
+            if fair:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO farm_meta(key, value) VALUES(?, ?)",
+                    (f"claim_fairness:{fairness_key}", str(cursor + 1)),
+                )
+            if claim_budget_key:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO farm_meta(key, value) VALUES(?, 'used')",
+                    (f"claim_budget:{claim_budget_key}",),
+                )
             self._conn.commit()
         except Exception:
             self._conn.rollback()
@@ -725,6 +809,16 @@ class FarmTasksDB:
         self._claims[tid] = fence
         self._emit_transition(tid, "running", "claimed", now)
         return self.get_task(tid)
+
+    def reset_claim_budget(self, key: str) -> bool:
+        """Re-arm one durable bounded-claim lane after its pressure clears."""
+
+        cur = self._conn.execute(
+            "DELETE FROM farm_meta WHERE key=?",
+            (f"claim_budget:{str(key)}",),
+        )
+        self._conn.commit()
+        return bool(cur.rowcount)
 
     def eligible_count(
         self, now: float | None = None, *, task_types: tuple[str, ...] | None = None

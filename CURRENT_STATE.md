@@ -16,6 +16,44 @@ This page describes the public repository, not a live runtime. It does not
 publish process identities, private database rows, observations, outcomes,
 model conversations, recipients, credentials, or workstation-specific state.
 
+## Task-Branch Candidate: Product Liveness And Deterministic E2E
+
+The `codex/product-liveness-e2e-repair` task branch contains a review candidate
+built from the verified implementation baseline above. These changes are not
+merged, are not authoritative, and do not change the current operational gate.
+Promotion requires an exact-head review, the repository gates, synchronized
+documentation, and a separate merge decision.
+
+The candidate closes bounded product-chain gaps without broadening paper-only
+authority:
+
+- Scanner intake filters caller-supplied, already-ingested event identities
+  before applying its bound. It selects by canonical priority and freshness, so
+  a long prefix of still-open historical watches cannot hide a fresh event.
+- Validation uses a durable fairness lane: one bounded recent-task opportunity
+  is interleaved with FIFO debt service. The same transaction selects the task
+  and advances the fairness cursor, preserving old-work progress while bounding
+  fresh-task starvation.
+- A successor validation build has a separate staging manifest. The last
+  completed current generation remains consumable until its successor is
+  atomically complete; staging never silently revokes current authority, and a
+  first-generation pending state remains fail-closed.
+- Paper outcome-memory suppression uses the exact symbol, timeframe, family,
+  and parameter identity. Missing identity fields are never wildcards, and a
+  new unrelated validation batch does not invalidate an active setup whose
+  exact authority remains current.
+- The bounded calculator-advisor opportunity moves before preview and delivery
+  for current-generation feature packets. A missing, rejected, timed-out, or
+  exhausted advisory remains an explicitly labelled deterministic fallback;
+  model output still cannot change prices, lifecycle, or authority.
+- Product progress reports scanner-intake age, validation backlog age and rates,
+  successor-build age, and generation transition age using truthful timestamps.
+  A stable current generation cannot conceal a stalled successor build.
+- Rebuildable derived snapshots use a byte budget, content digest, atomic
+  replace, and no-op identical writes instead of unbounded append semantics.
+  Deterministic synthetic E2E coverage must prove one causally linked product
+  flow and replay idempotency before this candidate can be promoted.
+
 ## Implemented Public Contracts
 
 | Capability | Status | Evidence ceiling |
@@ -74,7 +112,9 @@ row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-road
    not manufacture outcomes or duplicates.
 4. **Validation service SLO:** prove during the paper-only canary that the
    configured service capacity drains rather than grows the validation backlog,
-   the oldest-age SLO remains bounded, and backpressure never loses classify work.
+   the oldest-age SLO remains bounded, the candidate fresh/FIFO fairness lane
+   serves both recent and historical work, and backpressure never loses classify
+   work.
 5. **Paper authority cutover:** after all product-chain phases merge, prove
    quiescent backup/restore, shadow parity, exact-revision marker activation,
    writer/fence identity, and rollback readiness before RCC launch.

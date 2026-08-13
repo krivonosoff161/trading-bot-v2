@@ -41,9 +41,32 @@ from src.research_lab.outcome_learning import (  # noqa: E402
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.paper_signals import outcome_evidence  # noqa: E402
+from src.research_lab.system_analyst_cycle import (  # noqa: E402
+    outcome_review_source_binding,
+)
 
 
 MAX_REVIEW_ATTEMPTS = 3
+
+
+def _review_source_key(
+    source_ref: str, role_id: str, source_binding: object = None
+) -> str:
+    if role_id != "outcome_reviewer" or not isinstance(source_binding, dict):
+        return source_ref
+    binding = {
+        str(key): str(value)
+        for key, value in source_binding.items()
+        if str(key) and str(value)
+    }
+    required = {
+        "paper_generation_run_id",
+        "terminal_lifecycle_event_id",
+        "source_content_sha256",
+    }
+    if not required.issubset(binding):
+        return source_ref
+    return f"{source_ref}::{json.dumps(binding, sort_keys=True, separators=(',', ':'))}"
 
 
 def _env(name: str, default: str = "") -> str:
@@ -112,6 +135,9 @@ def _review_state(path: Path, role_id: str) -> tuple[set[str], dict[str, int]]:
         source_ref = str(row.get("source_ref") or "")
         if not source_ref:
             continue
+        source_ref = _review_source_key(
+            source_ref, role_id, row.get("source_binding")
+        )
         if bool(row.get("accepted")):
             refs.add(source_ref)
             continue
@@ -153,7 +179,12 @@ def _unreviewed_training_rows(
             or row.get("signal_id")
             or ""
         )
-        if source_ref and source_ref in completed_refs:
+        source_key = _review_source_key(
+            source_ref,
+            "outcome_reviewer",
+            outcome_review_source_binding(row),
+        )
+        if source_ref and source_key in completed_refs:
             continue
         missing.append(row)
     return missing[-limit:]
@@ -333,6 +364,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
                 source_ref=source_ref or f"outcome_{len(reviews)}",
                 source_payload=_outcome_payload(row, training_rows, private_root),
                 provider=provider,
+                source_binding=outcome_review_source_binding(row),
             )
         )
         time.sleep(args.sleep_seconds)

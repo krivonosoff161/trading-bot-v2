@@ -854,16 +854,15 @@ class TestExitAbReport:
 
 
 class TestSearchRanking:
-    def test_memory_reranks_universe(self):
+    def test_exact_known_bad_does_not_penalize_entire_symbol(self):
         from src.research_lab.paper_signals import cycle
         movers = [{"symbol": "BAD_USDT_SWAP", "inst_id": "BAD-USDT-SWAP", "score": 10, "_bucket": "meme"},
                   {"symbol": "GOOD_USDT_SWAP", "inst_id": "GOOD-USDT-SWAP", "score": 9, "_bucket": "majors"}]
-        memory = [{"symbol": "GOOD_USDT_SWAP", "diagnosis": "good_signal"}] * 3
-        known_bad = {("BAD_USDT_SWAP", "*")}
+        memory = []
+        known_bad = {("BAD_USDT_SWAP", "15m", "reversal_fade", "params-a")}
         ranked = cycle.rank_movers(movers, memory, known_bad)
-        # despite lower raw score, GOOD outranks BAD (penalty 5 vs bonus +1.5)
-        assert ranked[0]["symbol"] == "GOOD_USDT_SWAP"
-        assert "knownbad-5" in ranked[1]["_reason"]
+        assert ranked[0]["symbol"] == "BAD_USDT_SWAP"
+        assert "knownbad=exact_gate(1)" in ranked[0]["_reason"]
 
     def test_product_memory_softly_reranks_universe(self):
         from src.research_lab.paper_signals import cycle
@@ -997,20 +996,45 @@ class TestAgeOut:
 
 
 class TestKnownBadGate:
-    def test_symbol_wide_and_family_block(self, tmp_path):
+    def test_only_exact_setup_identity_is_blocked(self, tmp_path):
         import json
         d = tmp_path / "state" / "derived"
         d.mkdir(parents=True)
         (d / "setup_outcome_memory.json").write_text(json.dumps({"records": [
-            {"symbol": "BAD_USDT_SWAP", "family": "reversal_fade", "outcome_class": "CONFIRMED_BAD"}]}),
+            {"symbol": "BAD_USDT_SWAP", "timeframe": "15m", "family": "reversal_fade",
+             "params_hash": "params-a", "outcome_class": "CONFIRMED_BAD"}]}),
             encoding="utf-8")
         kb = lane.load_known_bad(tmp_path)
-        assert ("BAD_USDT_SWAP", "reversal_fade") in kb and ("BAD_USDT_SWAP", "*") in kb
-        # a DIFFERENT family on the same symbol is blocked by the symbol-wide entry
-        g = lane.gate_candidate({"inst_id": "BAD-USDT-SWAP", "symbol": "BAD_USDT_SWAP", "spread_bps": 1,
-                                 "vol_usd": 9e7, "_tf": "15m"},
-                                _series([1.0] * 60), now_ms=0, known_bad=kb, family="continuation")
-        assert g == "known_bad_in_memory"
+        assert kb == {("BAD_USDT_SWAP", "15m", "reversal_fade", "params-a")}
+        mover = {"inst_id": "BAD-USDT-SWAP", "symbol": "BAD_USDT_SWAP", "spread_bps": 1,
+                 "vol_usd": 9e7, "_tf": "15m"}
+        candles = _series([1.0] * 60)
+        assert lane.gate_candidate(
+            mover, candles, now_ms=0, known_bad=kb,
+            family="reversal_fade", params_hash="params-a",
+        ) == "known_bad_in_memory"
+        assert lane.gate_candidate(
+            mover, candles, now_ms=0, known_bad=kb,
+            family="continuation", params_hash="params-a",
+        ) == "ok"
+        assert lane.gate_candidate(
+            {**mover, "_tf": "1h"}, candles, now_ms=0, known_bad=kb,
+            family="reversal_fade", params_hash="params-a",
+        ) == "ok"
+        assert lane.gate_candidate(
+            mover, candles, now_ms=0, known_bad=kb,
+            family="reversal_fade", params_hash="params-b",
+        ) == "ok"
+
+    def test_incomplete_memory_identity_is_not_widened(self, tmp_path):
+        import json
+        d = tmp_path / "state" / "derived"
+        d.mkdir(parents=True)
+        (d / "setup_outcome_memory.json").write_text(json.dumps({"records": [
+            {"symbol": "BAD_USDT_SWAP", "family": "reversal_fade",
+             "outcome_class": "CONFIRMED_BAD"}]}), encoding="utf-8")
+
+        assert lane.load_known_bad(tmp_path) == set()
 
 
 class TestRicherDiagnosis:

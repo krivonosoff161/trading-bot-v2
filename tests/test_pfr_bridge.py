@@ -1018,6 +1018,58 @@ class TestPFRCycleIntegration:
 
         monkeypatch.setattr(pfr_bridge, "load_pfr_records", load_current)
         monkeypatch.setattr(pfr_bridge, "generate_pfr_signals", lambda *_a, **_k: [])
+        provider = CountingProvider([])
+
+        result = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("1h",),
+            provider=provider,
+            apply=True,
+            now=1e6,
+            pfr_db_path=self._pfr_db(tmp_path),
+            max_new=1,
+        )
+
+        stored = {signal.signal_id: signal for signal in store.load_signals(tmp_path)}
+        invalidated = stored[old_signal.signal_id]
+        assert invalidated.status == "invalidated"
+        assert invalidated.review["diagnosis"] == "validation_generation_superseded"
+        assert result["pfr_counts"]["pfr_stale_generation_invalidated"] == 1
+        assert provider.calls == 0
+        assert not cycle._memory_path(tmp_path).exists()
+
+    def test_same_market_tuple_different_setup_preserves_active_authority(
+        self, tmp_path, monkeypatch
+    ):
+        from src.research_lab.paper_signals import cycle, store
+
+        _seed_universe(tmp_path)
+        old_row = _row(
+            {**_MRF_ROW_DICT, "validation_generation_id": "hvg_old"}
+        )
+        old_signal, reason = pfr_bridge.build_pfr_mean_reversion_fade(
+            old_row,
+            _mrf_candles_short(),
+            now=1e6,
+            boundary_ts=0,
+            mode="live",
+        )
+        assert old_signal is not None, reason
+        store.append_signal(tmp_path, old_signal)
+        other_setup = _row({
+            **_MRF_ROW_DICT,
+            "candidate_id": "OTHER_SETUP",
+            "setup_id": "setup-OTHER",
+            "validation_generation_id": "hvg_current",
+        })
+
+        def load_current(_db, *, status_counts, **_kwargs):
+            status_counts["pfr_generation:ready"] = 1
+            return [other_setup]
+
+        monkeypatch.setattr(pfr_bridge, "load_pfr_records", load_current)
+        monkeypatch.setattr(pfr_bridge, "generate_pfr_signals", lambda *_a, **_k: [])
 
         result = cycle.run_cycle(
             tmp_path,
@@ -1031,9 +1083,147 @@ class TestPFRCycleIntegration:
         )
 
         stored = {signal.signal_id: signal for signal in store.load_signals(tmp_path)}
-        invalidated = stored[old_signal.signal_id]
-        assert invalidated.status == "invalidated"
-        assert invalidated.review["diagnosis"] == "validation_generation_superseded"
+        assert stored[old_signal.signal_id].status == "armed"
+        assert result["pfr_counts"].get("pfr_stale_generation_invalidated", 0) == 0
+
+    def test_unrelated_ready_generation_preserves_active_pfr_observation(
+        self, tmp_path, monkeypatch
+    ):
+        from src.research_lab.paper_signals import cycle, store
+
+        _seed_universe(tmp_path)
+        old_row = _row(
+            {**_MRF_ROW_DICT, "validation_generation_id": "hvg_old"}
+        )
+        old_signal, reason = pfr_bridge.build_pfr_mean_reversion_fade(
+            old_row,
+            _mrf_candles_short(),
+            now=1e6,
+            boundary_ts=0,
+            mode="live",
+        )
+        assert old_signal is not None, reason
+        store.append_signal(tmp_path, old_signal)
+        unrelated_row = _row({
+            **_MRF_ROW_DICT,
+            "candidate_id": "UNRELATED",
+            "setup_id": "setup-UNRELATED",
+            "symbol": "OTHER_USDT_SWAP",
+            "validation_generation_id": "hvg_current",
+        })
+
+        def load_current(_db, *, status_counts, **_kwargs):
+            status_counts["pfr_generation:ready"] = 1
+            return [unrelated_row]
+
+        monkeypatch.setattr(pfr_bridge, "load_pfr_records", load_current)
+        monkeypatch.setattr(pfr_bridge, "generate_pfr_signals", lambda *_a, **_k: [])
+        provider = CountingProvider([])
+
+        result = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("1h",),
+            provider=provider,
+            apply=True,
+            now=1e6,
+            pfr_db_path=self._pfr_db(tmp_path),
+            max_new=1,
+        )
+
+        stored = {signal.signal_id: signal for signal in store.load_signals(tmp_path)}
+        assert stored[old_signal.signal_id].status == "armed"
+        assert result["pfr_counts"].get("pfr_stale_generation_invalidated", 0) == 0
+
+    def test_same_generation_without_exact_setup_fails_closed_before_observation(
+        self, tmp_path, monkeypatch
+    ):
+        from src.research_lab.paper_signals import cycle, store
+
+        _seed_universe(tmp_path)
+        old_row = _row(
+            {**_MRF_ROW_DICT, "validation_generation_id": "hvg_current"}
+        )
+        old_signal, reason = pfr_bridge.build_pfr_mean_reversion_fade(
+            old_row,
+            _mrf_candles_short(),
+            now=1e6,
+            boundary_ts=0,
+            mode="live",
+        )
+        assert old_signal is not None, reason
+        store.append_signal(tmp_path, old_signal)
+        other_setup = _row({
+            **_MRF_ROW_DICT,
+            "candidate_id": "OTHER_SETUP",
+            "setup_id": "setup-OTHER",
+            "validation_generation_id": "hvg_current",
+        })
+
+        def load_current(_db, *, status_counts, **_kwargs):
+            status_counts["pfr_generation:ready"] = 1
+            return [other_setup]
+
+        monkeypatch.setattr(pfr_bridge, "load_pfr_records", load_current)
+        monkeypatch.setattr(pfr_bridge, "generate_pfr_signals", lambda *_a, **_k: [])
+        provider = CountingProvider([])
+
+        result = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("1h",),
+            provider=provider,
+            apply=True,
+            now=1e6,
+            pfr_db_path=self._pfr_db(tmp_path),
+            max_new=1,
+        )
+
+        stored = {signal.signal_id: signal for signal in store.load_signals(tmp_path)}
+        assert stored[old_signal.signal_id].status == "invalidated"
+        assert result["pfr_counts"]["pfr_stale_generation_invalidated"] == 1
+        assert provider.calls == 0
+
+    def test_invalid_generation_still_fail_closes_active_pfr_authority(
+        self, tmp_path, monkeypatch
+    ):
+        from src.research_lab.paper_signals import cycle, store
+
+        _seed_universe(tmp_path)
+        old_row = _row(
+            {**_MRF_ROW_DICT, "validation_generation_id": "hvg_old"}
+        )
+        old_signal, reason = pfr_bridge.build_pfr_mean_reversion_fade(
+            old_row,
+            _mrf_candles_short(),
+            now=1e6,
+            boundary_ts=0,
+            mode="live",
+        )
+        assert old_signal is not None, reason
+        store.append_signal(tmp_path, old_signal)
+
+        def load_invalid(_db, *, status_counts, **_kwargs):
+            status_counts["pfr_generation:code_stale"] = 1
+            return []
+
+        monkeypatch.setattr(pfr_bridge, "load_pfr_records", load_invalid)
+        monkeypatch.setattr(pfr_bridge, "generate_pfr_signals", lambda *_a, **_k: [])
+
+        result = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("1h",),
+            provider=FakeProvider([]),
+            apply=True,
+            now=1e6,
+            pfr_db_path=self._pfr_db(tmp_path),
+            max_new=1,
+        )
+
+        stored = {signal.signal_id: signal for signal in store.load_signals(tmp_path)}
+        assert stored[old_signal.signal_id].status == "invalidated"
+        assert stored[old_signal.signal_id].review["diagnosis"] == "validation_generation_superseded"
         assert result["pfr_counts"]["pfr_stale_generation_invalidated"] == 1
 
     def test_run_cycle_reports_pfr_quality_rejection_reason(self, tmp_path):

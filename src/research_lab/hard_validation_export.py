@@ -168,13 +168,14 @@ def write_prepared_requests(
     private_root: Path,
     candidates: list[CandidateForValidation],
     *,
+    artifact_root: Path | None = None,
     progress: ProgressCallback | None = None,
     check_active: ActiveCheck | None = None,
 ) -> list[str]:
     """Write an already prepared batch after the generation is fail-closed."""
     if not candidates:
         return []
-    out_dir = Path(private_root) / REQUESTS_DIR
+    out_dir = Path(artifact_root or private_root) / REQUESTS_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     exported_ids: list[str] = []
     for completed, candidate in enumerate(candidates, start=1):

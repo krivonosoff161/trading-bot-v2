@@ -10,14 +10,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from src.research_lab.honest_backtest_bridge import _artifact_stem
+from src.research_lab.storage_os_lock import storage_root_lock
 
 SCHEMA = "HardValidationGeneration.v1"
 MANIFEST_NAME = "current_generation.json"
+PENDING_MANIFEST_NAME = "pending_generation.json"
 _IDENTITY_FIELDS = (
     "task_ids",
     "task_inputs",
@@ -74,6 +79,32 @@ def manifest_path(private_root: Path) -> Path:
     return Path(private_root) / "hard_validation" / MANIFEST_NAME
 
 
+def pending_manifest_path(private_root: Path) -> Path:
+    return Path(private_root) / "hard_validation" / PENDING_MANIFEST_NAME
+
+
+def _generation_lock_path(private_root: Path) -> Path:
+    return Path(private_root) / "hard_validation" / ".generation.lock"
+
+
+@contextmanager
+def _generation_lock(private_root: Path):
+    path = _generation_lock_path(private_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        try:
+            os.write(descriptor, b"0")
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    with storage_root_lock(path, wait_seconds=5.0):
+        yield
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -83,6 +114,32 @@ def _record(path: Path, private_root: Path) -> dict[str, str]:
         "path": path.relative_to(Path(private_root)).as_posix(),
         "sha256": _sha256(path),
     }
+
+
+def _immutable_record(path: Path, private_root: Path) -> dict[str, str]:
+    """Pin one staged JSON artifact by content before manifest publication."""
+
+    payload = Path(path).read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    target = (
+        Path(private_root)
+        / "hard_validation"
+        / "generation_artifacts"
+        / digest[:2]
+        / f"{digest}.json"
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        if _sha256(target) != digest:
+            raise OSError("content-addressed validation artifact mismatch")
+    else:
+        temporary = target.with_name(f".{digest}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(payload)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return _record(target, Path(private_root))
 
 
 def _producer_code_paths() -> tuple[Path, ...]:
@@ -223,8 +280,7 @@ def _generation_id(identity: dict[str, Any]) -> str:
     return "hvg_" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _publish(private_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    path = manifest_path(private_root)
+def _publish(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
@@ -241,7 +297,12 @@ def write_pending_generation(
     tasks: list[dict[str, Any]],
     producer_time: float | None,
 ) -> dict[str, Any]:
-    """Invalidate prior authority before export/bridge/card side effects begin."""
+    """Publish a fail-closed build marker without revoking ready authority.
+
+    A completed current generation remains consumable while its successor is built.
+    When no completed generation exists, readers still observe this marker as a
+    bounded pending state rather than falling back to historical artifacts.
+    """
     identity = {
         "task_ids": sorted(set(int(task["task_id"]) for task in tasks)),
         "task_inputs": _task_inputs(tasks),
@@ -251,18 +312,18 @@ def write_pending_generation(
         "active": {},
         "incomplete_ids": [],
     }
-    return _publish(
-        Path(private_root),
-        {
+    payload = {
             "schema": SCHEMA,
             "generation_id": _generation_id(identity),
+            "build_id": "hvb_" + uuid.uuid4().hex,
             "producer_time": producer_time,
             "producer_complete": False,
             **identity,
             "paper_only": True,
             "execution_allowed": False,
-        },
-    )
+        }
+    with _generation_lock(Path(private_root)):
+        return _publish(pending_manifest_path(Path(private_root)), payload)
 
 
 def write_current_generation(
@@ -272,24 +333,27 @@ def write_current_generation(
     exported_ids: list[str],
     completed_ids: list[str],
     producer_time: float | None,
+    artifact_root: Path | None = None,
+    pending_build_id: str | None = None,
 ) -> dict[str, Any]:
     """Atomically publish only complete canonical vertical artifact chains."""
     private_root = Path(private_root)
+    source_root = Path(artifact_root or private_root)
     exported = list(dict.fromkeys(str(cid) for cid in exported_ids if str(cid)))
     completed = {str(cid) for cid in completed_ids if str(cid)}
     requests: dict[str, dict[str, str]] = {}
     active: dict[str, dict[str, Any]] = {}
     incomplete: list[str] = []
     for candidate_id in exported:
-        request_path = _current_candidate_path(private_root, "requests", candidate_id)
+        request_path = _current_candidate_path(source_root, "requests", candidate_id)
         if request_path is not None:
-            requests[candidate_id] = _record(request_path, private_root)
+            requests[candidate_id] = _immutable_record(request_path, private_root)
         if candidate_id not in completed:
             incomplete.append(candidate_id)
             continue
-        report_path = _current_candidate_path(private_root, "reports", candidate_id)
-        verdict_path = _current_candidate_path(private_root, "verdicts", candidate_id)
-        card_path = _current_setup_path(private_root, candidate_id)
+        report_path = _current_candidate_path(source_root, "reports", candidate_id)
+        verdict_path = _current_candidate_path(source_root, "verdicts", candidate_id)
+        card_path = _current_setup_path(source_root, candidate_id)
         if (
             request_path is None
             or report_path is None
@@ -305,10 +369,10 @@ def write_current_generation(
         active[candidate_id] = {
             "candidate_id": candidate_id,
             "hard_status": str(verdict.get("hard_status") or ""),
-            "request": _record(request_path, private_root),
-            "report": _record(report_path, private_root),
-            "verdict": _record(verdict_path, private_root),
-            "setup_card": _record(card_path, private_root),
+            "request": requests[candidate_id],
+            "report": _immutable_record(report_path, private_root),
+            "verdict": _immutable_record(verdict_path, private_root),
+            "setup_card": _immutable_record(card_path, private_root),
         }
     identity = {
         "task_ids": sorted(set(int(task["task_id"]) for task in tasks)),
@@ -319,26 +383,68 @@ def write_current_generation(
         "active": active,
         "incomplete_ids": sorted(incomplete),
     }
-    return _publish(
-        private_root,
-        {
+    payload = {
             "schema": SCHEMA,
             "generation_id": _generation_id(identity),
+            "source_pending_build_id": str(pending_build_id or ""),
             "producer_time": producer_time,
             "producer_complete": True,
             **identity,
             "paper_only": True,
             "execution_allowed": False,
-        },
-    )
+        }
+    with _generation_lock(private_root):
+        if pending_build_id:
+            pending = _load_dict(pending_manifest_path(private_root)) or {}
+            if str(pending.get("build_id") or "") != str(pending_build_id):
+                raise RuntimeError("validation pending generation changed before publish")
+        published = _publish(manifest_path(private_root), payload)
+        if pending_build_id:
+            pending_manifest_path(private_root).unlink(missing_ok=True)
+        return published
 
 
 def load_current_generation(private_root: Path) -> dict[str, Any] | None:
-    """Return ``None`` only for the explicit pre-manifest legacy state."""
+    """Load only completed publication authority; staging is kept separate."""
     path = manifest_path(private_root)
     if not path.exists():
         return None
     return _load_dict(path) or {}
+
+
+def load_pending_generation(private_root: Path) -> dict[str, Any] | None:
+    path = pending_manifest_path(private_root)
+    if not path.exists():
+        return None
+    pending = _load_dict(path) or {}
+    current = load_current_generation(Path(private_root))
+    if (
+        current is not None
+        and current.get("producer_complete") is True
+        and str(pending.get("build_id") or "")
+        and str(pending.get("build_id") or "")
+        == str(current.get("source_pending_build_id") or "")
+    ):
+        # Publication consumed this exact build.  A distinct successor remains
+        # visible even when timestamps are equal or filesystem cleanup failed.
+        return None
+    return pending
+
+
+def clear_pending_generation(private_root: Path, *, expected_build_id: str) -> bool:
+    """Remove only a completed successor-build marker; never current authority."""
+
+    if not expected_build_id:
+        raise ValueError("expected pending build identity is required")
+    with _generation_lock(Path(private_root)):
+        path = pending_manifest_path(Path(private_root))
+        pending = _load_dict(path)
+        if pending is None or str(pending.get("build_id") or "") != str(
+            expected_build_id
+        ):
+            return False
+        path.unlink()
+        return True
 
 
 def _current_generation_manifest_status(manifest: dict[str, Any] | None) -> str:
@@ -372,9 +478,14 @@ def current_generation_manifest_status(private_root: Path) -> str:
     ``load_current_generation_snapshot`` to verify every active artifact.
     """
 
-    return _current_generation_manifest_status(
-        load_current_generation(Path(private_root))
-    )
+    private_root = Path(private_root)
+    current = load_current_generation(private_root)
+    if current is not None:
+        return _current_generation_manifest_status(current)
+    pending = load_pending_generation(private_root)
+    if pending is not None:
+        return _current_generation_manifest_status(pending)
+    return "legacy_absent"
 
 
 def _base_manifest_valid(manifest: dict[str, Any]) -> bool:
@@ -502,6 +613,15 @@ def load_current_generation_snapshot(
     private_root = Path(private_root)
     _ensure_active(check_active)
     manifest = load_current_generation(private_root)
+    if manifest is None:
+        pending = load_pending_generation(private_root)
+        if pending is not None:
+            return CurrentGenerationSnapshot(
+                _current_generation_manifest_status(pending),
+                str(pending.get("generation_id") or ""),
+                {},
+                0,
+            )
     manifest_status = _current_generation_manifest_status(manifest)
     if manifest is None:
         return CurrentGenerationSnapshot(manifest_status, "", {}, 0)
@@ -571,6 +691,8 @@ def read_current_validation_artifact(
         raise ValueError("kind must be request, report, or verdict")
     manifest = load_current_generation(private_root)
     if manifest is None:
+        if load_pending_generation(private_root) is not None:
+            return None
         path = _legacy_candidate_path(private_root, f"{kind}s", candidate_id)
         return _load_dict(path) if path is not None else None
     payloads = _active_payloads(Path(private_root), manifest, candidate_id)
@@ -583,6 +705,8 @@ def read_current_setup_card(private_root: Path, path: Path) -> dict[str, Any] | 
         return None
     manifest = load_current_generation(private_root)
     if manifest is None:
+        if load_pending_generation(private_root) is not None:
+            return None
         return payload
     candidate_id = str(payload.get("candidate_id") or "")
     payloads = _active_payloads(Path(private_root), manifest, candidate_id)

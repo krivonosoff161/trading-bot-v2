@@ -73,9 +73,29 @@ def _card_refs_from_snapshot(path: Path) -> dict[str, dict[str, Any]]:
     except (OSError, json.JSONDecodeError):
         return {}
     refs: dict[str, dict[str, Any]] = {}
+
+    def last_seen(value: Any) -> float:
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
     for item in data.get("items") or []:
+        if not isinstance(item, dict):
+            continue
         sid = str(item.get("source_signal_id") or "")
-        if sid:
+        if not sid:
+            continue
+        current = refs.get(sid)
+        candidate_key = (
+            last_seen(item.get("last_seen_at")),
+            str(item.get("telegram_card_id") or ""),
+        )
+        current_key = (
+            last_seen((current or {}).get("last_seen_at")),
+            str((current or {}).get("telegram_card_id") or ""),
+        )
+        if current is None or candidate_key > current_key:
             refs[sid] = item
     return refs
 
@@ -171,11 +191,11 @@ def _adaptive_policy_refs(private_root: Path) -> dict[str, dict[str, Any]]:
     return refs
 
 
-def _outcome_review_refs(private_root: Path) -> dict[str, dict[str, Any]]:
+def _outcome_review_refs(private_root: Path) -> dict[str, list[dict[str, Any]]]:
     path = private_root / "state" / "llm_advice" / "outcome_reviews.jsonl"
     if not path.exists():
         return {}
-    refs: dict[str, dict[str, Any]] = {}
+    refs: dict[str, list[dict[str, Any]]] = {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -192,14 +212,119 @@ def _outcome_review_refs(private_root: Path) -> dict[str, dict[str, Any]]:
         source_ref = str(row.get("source_ref") or "")
         if not source_ref:
             continue
-        current = refs.get(source_ref)
-        if (
-            current is None
-            or bool(row.get("accepted"))
-            or not bool(current.get("accepted"))
-        ):
-            refs[source_ref] = row
+        refs.setdefault(source_ref, []).append(row)
     return refs
+
+
+def _matching_outcome_review(
+    training: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    require_source_binding: bool,
+) -> dict[str, Any] | None:
+    """Select only an accepted review bound to these exact terminal bytes."""
+
+    from src.research_lab.system_analyst_cycle import outcome_review_source_binding
+
+    expected = outcome_review_source_binding(training)
+    matched = [row for row in candidates if row.get("accepted") is True]
+    if require_source_binding:
+        matched = [row for row in matched if row.get("source_binding") == expected]
+    if not matched:
+        return None
+    return max(
+        matched,
+        key=lambda row: (
+            str(row.get("created_at") or ""),
+            str(row.get("review_id") or ""),
+        ),
+    )
+
+
+def _project_current_v2_outcomes(
+    signals: list[PaperActionSignal],
+    *,
+    trades: dict[str, dict[str, Any]],
+    trade_generation: dict[str, Any],
+) -> list[PaperActionSignal]:
+    """Overlay immutable current-run outcomes without mutating the signal ledger.
+
+    Paper Evidence v2 owns terminal lifecycle evidence in SQLite.  The append-only
+    signal ledger can therefore still say ``armed`` after the observer has closed
+    the exact generation-bound subject.  Training must follow the authoritative
+    projection, while retaining the original signal identity and geometry.
+    """
+
+    projection_items = [
+        item
+        for item in trade_generation.get("items") or []
+        if isinstance(item, dict)
+    ]
+    projection_by_signal = {
+        str(item.get("source_signal_id") or ""): item
+        for item in projection_items
+        if str(item.get("source_signal_id") or "")
+    }
+    generation_run_id = str(trade_generation.get("paper_generation_run_id") or "")
+    account_generation_id = str(trade_generation.get("account_generation_id") or "")
+    subject_generation_ids = {
+        str(value)
+        for value in trade_generation.get("paper_subject_generation_ids") or []
+        if str(value or "")
+    }
+    if not (
+        trade_generation.get("authority_database_exists")
+        and trade_generation.get("current") is True
+        and trade_generation.get("display_only") is False
+        and str(trade_generation.get("generation_status") or "") == "completed"
+        and trade_generation.get("paper_only") is True
+        and trade_generation.get("execution_allowed") is False
+        and generation_run_id
+        and account_generation_id
+        and subject_generation_ids
+    ):
+        return signals
+    projected: list[PaperActionSignal] = []
+    for signal in signals:
+        trade = trades.get(signal.signal_id) or {}
+        signal_status = str(trade.get("signal_status") or "")
+        if signal_status not in TERMINAL_STATUSES:
+            continue
+        run_id = str(trade.get("paper_generation_run_id") or "")
+        subject_generation_id = str(trade.get("paper_subject_generation_id") or "")
+        trade_account_generation_id = str(trade.get("account_generation_id") or "")
+        terminal_event = str(trade.get("terminal_lifecycle_event_id") or "")
+        projection = projection_by_signal.get(signal.signal_id)
+        if (
+            not run_id
+            or run_id != generation_run_id
+            or not subject_generation_id
+            or subject_generation_id not in subject_generation_ids
+            or trade_account_generation_id != account_generation_id
+            or not terminal_event
+            or trade.get("paper_only") is not True
+            or trade.get("execution_allowed") is not False
+            or projection is None
+            or str(projection.get("paper_generation_run_id") or "") != run_id
+            or str(projection.get("paper_subject_generation_id") or "")
+            != subject_generation_id
+            or str(projection.get("account_generation_id") or "")
+            != account_generation_id
+            or str(projection.get("terminal_lifecycle_event_id") or "")
+            != terminal_event
+        ):
+            continue
+        projected.append(
+            PaperActionSignal.from_dict(
+                {
+                    **signal.to_dict(),
+                    "status": signal_status,
+                    "outcome": dict(trade.get("outcome") or {}),
+                    "review": dict(trade.get("review") or {}),
+                }
+            )
+        )
+    return projected
 
 
 def _hash_text(text: str) -> str:
@@ -427,6 +552,11 @@ def export_training_rows(
         private_root,
         evidence_database_path=evidence_database_path,
     )
+    signals = _project_current_v2_outcomes(
+        signals,
+        trades=trades,
+        trade_generation=trade_generation,
+    )
     source_terminal_all = [sig for sig in signals if sig.status in TERMINAL_STATUSES]
     source_terminal_market = [
         sig
@@ -447,7 +577,31 @@ def export_training_rows(
     source_terminal_hash = _source_hash(source_terminal)
     advice_by_feature = _calculator_refs(private_root)
     policy_by_signal = _adaptive_policy_refs(private_root)
-    outcome_reviews_by_training = _outcome_review_refs(private_root)
+    outcome_review_candidates = _outcome_review_refs(private_root)
+    preliminary_rows = {
+        f"training_{sig.signal_id}": training_row(
+            sig,
+            telegram_card=cards.get(sig.signal_id),
+            paper_trade=trades.get(sig.signal_id),
+            calculator_advice=advice_by_feature.get(sig.feature_packet_id),
+            adaptive_policy=policy_by_signal.get(sig.signal_id),
+        )
+        for sig in source_terminal
+    }
+    outcome_reviews_by_training = {
+        training_id: review
+        for training_id, row in preliminary_rows.items()
+        if (
+            review := _matching_outcome_review(
+                row,
+                outcome_review_candidates.get(training_id, []),
+                require_source_binding=bool(
+                    trade_generation.get("authority_database_exists")
+                ),
+            )
+        )
+        is not None
+    }
     export_refs_hash = _refs_hash(
         source_terminal,
         cards=cards,

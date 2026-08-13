@@ -539,6 +539,14 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
         }
 
     monkeypatch.setattr(farm_loop, "_write_loop_status", lambda *_a, **_k: None)
+    # This test isolates evidence-database routing across downstream consumers.
+    # The queue/feature-packet trust boundary is exercised with real snapshots
+    # in test_pre_delivery_advisor_order and the full product-chain E2E test.
+    monkeypatch.setattr(
+        farm_loop,
+        "_generation_feature_packet_ids",
+        lambda *_a, **_k: [],
+    )
     monkeypatch.setattr(
         farm_loop,
         "_refresh_setup_outcome_memory",
@@ -780,9 +788,10 @@ def test_farm_v2_waits_for_code_current_validation_without_side_effects(
 
     assert out["paper_generation_v2"] == {
         "state": "waiting_validation_generation",
-        "validation_generation_status": "code_stale",
-        "validation_generation_id": "validation-generation-old-code",
-        "run_id": "",
+            "validation_generation_status": "code_stale",
+            "validation_generation_id": "validation-generation-old-code",
+            "validation_generation_started_at": 0.0,
+            "run_id": "",
         "current": False,
         "producer_membership": {
             "active_executable_signals": 0,

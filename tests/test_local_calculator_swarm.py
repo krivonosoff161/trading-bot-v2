@@ -38,7 +38,16 @@ class _SwarmProvider:
         if "situation_class" in system:
             payload = {"situation_class": "trend", "missing_data": [], "confidence": 0.7, "warnings": []}
         elif "advisory_reason" in system:
-            payload = {"advisory_reason": "compare hold", "sweep_suggestions": ["hold"], "confidence": 0.6, "warnings": []}
+            payload = {
+                "advisory_reason": "compare hold",
+                "user_facing_analysis": (
+                    "Trend context remains uncertain and requires deterministic "
+                    "confirmation."
+                ),
+                "sweep_suggestions": ["hold"],
+                "confidence": 0.6,
+                "warnings": [],
+            }
         else:
             payload = {"proposal_quality": "accept", "rejection_reason": "", "confidence": 0.8, "warnings": []}
         return json.dumps(payload), LLMUsage(provider=self.name, model=self.model_name, total_tokens=10)
@@ -52,6 +61,9 @@ def test_local_swarm_runs_three_sequential_bounded_passes(tmp_path):
     assert provider.calls == 3
     assert advice.accepted is True
     assert advice.advice["situation_class"] == "trend"
+    assert advice.advice["user_facing_analysis"] == (
+        "Trend context remains uncertain and requires deterministic confirmation."
+    )
     assert advice.advice["sweep_suggestions"] == ["hold"]
     assert advice.execution_allowed is False
     rows = [json.loads(line) for line in (tmp_path / "state" / "llm_advice" / "invocations.jsonl").read_text().splitlines()]

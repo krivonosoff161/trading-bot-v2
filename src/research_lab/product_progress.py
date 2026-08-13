@@ -27,6 +27,18 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def _first_present(
+    *sources: tuple[Mapping[str, Any], str],
+    default: Any,
+) -> Any:
+    """Return the first explicitly published value, preserving valid zeroes."""
+
+    for source, key in sources:
+        if key in source and source[key] is not None:
+            return source[key]
+    return default
+
+
 @dataclass(frozen=True)
 class ProductProgressSteadyAssessment:
     """Fail-closed interpretation shared by RCC and external canary adapters."""
@@ -198,6 +210,9 @@ def scanner_metrics(
 def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     counters = _mapping(out.get("counters"))
     validation = _mapping(counters.get("validation"))
+    validation_backlog = _mapping(out.get("validation_backlog"))
+    validation_build = _mapping(out.get("validation_generation_build"))
+    scanner_intake = _mapping(out.get("scanner_intake"))
     generation = _mapping(out.get("paper_generation_v2"))
     producer_membership = _mapping(generation.get("producer_membership"))
     bridge = _mapping(out.get("main_paper_bridge"))
@@ -250,30 +265,51 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
         ),
         "events_ingested": int(counters.get("events_ingested") or 0),
         "events_consumed": int(counters.get("events_consumed") or 0),
-        "validation_active": int(
-            validation.get("active")
-            or validation.get("backlog_active")
-            or counters.get("validation_backlog_active")
-            or 0
+        "scanner_uningested_events": int(
+            scanner_intake.get("uningested_events") or 0
         ),
-        "validation_eligible": int(
-            validation.get("eligible")
-            or validation.get("backlog_eligible")
-            or counters.get("validation_backlog_eligible")
-            or 0
+        "scanner_uningested_remaining": int(
+            scanner_intake.get("remaining_after_selection") or 0
         ),
-        "validation_oldest_age_seconds": float(
-            validation.get("oldest_age_seconds")
-            or validation.get("backlog_oldest_age_seconds")
-            or counters.get("validation_backlog_oldest_age_seconds")
-            or 0.0
+        "scanner_oldest_uningested_age_seconds": float(
+            scanner_intake.get("oldest_uningested_age_seconds") or 0.0
         ),
+        "validation_active": int(_first_present(
+            (validation_backlog, "active"),
+            (validation, "active"),
+            (validation, "backlog_active"),
+            (counters, "validation_backlog_active"),
+            default=0,
+        )),
+        "validation_eligible": int(_first_present(
+            (validation_backlog, "eligible"),
+            (validation, "eligible"),
+            (validation, "backlog_eligible"),
+            (counters, "validation_backlog_eligible"),
+            default=0,
+        )),
+        "validation_oldest_age_seconds": float(_first_present(
+            (validation_backlog, "oldest_age_seconds"),
+            (validation, "oldest_age_seconds"),
+            (validation, "backlog_oldest_age_seconds"),
+            (counters, "validation_backlog_oldest_age_seconds"),
+            default=0.0,
+        )),
         "validation_backlog_slo_seconds": float(
-            validation.get("backlog_slo_seconds") or 3600.0
+            validation_backlog.get("backlog_slo_seconds")
+            or validation.get("backlog_slo_seconds")
+            or 3600.0
         ),
         "paper_generation_run_id": run_id,
         "paper_generation_state": generation_state,
         "paper_generation_waiting": generation_waiting,
+        "validation_generation_started_at": float(
+            generation.get("validation_generation_started_at") or 0.0
+        ),
+        "validation_generation_build_active": bool(validation_build.get("active")),
+        "validation_generation_build_started_at": float(
+            validation_build.get("started_at") or 0.0
+        ),
         "validation_generation_status": str(
             generation.get("validation_generation_status") or ""
         ),
@@ -370,6 +406,9 @@ class ProductProgressSlo:
     farm_seconds: float = 300.0
     farm_startup_max_seconds: float = 600.0
     farm_startup_progress_stale_seconds: float = 60.0
+    farm_cycle_max_seconds: float = 1800.0
+    scanner_intake_seconds: float = 900.0
+    validation_generation_transition_seconds: float = 600.0
 
 
 class ProductProgressTransitionError(RuntimeError):
@@ -550,15 +589,64 @@ class ProductProgressMonitor:
             ):
                 degraded.append("scanner_bounded_work_deferred")
             if component == "farm" and current:
+                if age is not None and age > self.slo.farm_cycle_max_seconds:
+                    hard_fail.append("farm_product_cycle_timeout")
+                intake_remaining = int(
+                    metrics.get("scanner_uningested_remaining") or 0
+                )
+                intake_age = float(
+                    metrics.get("scanner_oldest_uningested_age_seconds") or 0.0
+                )
+                if (
+                    intake_remaining > 0
+                    and intake_age > self.slo.scanner_intake_seconds
+                ):
+                    hard_fail.append("scanner_intake_latency_slo_exceeded")
                 oldest = float(metrics.get("validation_oldest_age_seconds") or 0.0)
                 backlog_slo = float(
                     metrics.get("validation_backlog_slo_seconds") or 3600.0
                 )
                 if oldest > backlog_slo:
                     hard_fail.append("validation_backlog_slo_exceeded")
-                if metrics.get("paper_generation_waiting") is True:
+                generation_waiting = metrics.get("paper_generation_waiting") is True
+                if generation_waiting:
                     ready = False
-                elif metrics.get("generation_consistent") is not True:
+                    generation_status = str(
+                        metrics.get("validation_generation_status") or ""
+                    )
+                    if generation_status == "code_stale":
+                        hard_fail.append("validation_generation_code_stale")
+                    transition_started_at = float(
+                        metrics.get("validation_generation_started_at") or 0.0
+                    )
+                    if generation_status != "code_stale" and transition_started_at <= 0.0:
+                        hard_fail.append(
+                            "validation_generation_transition_unbounded"
+                        )
+                    elif generation_status != "code_stale" and (
+                        max(0.0, now - transition_started_at)
+                        > self.slo.validation_generation_transition_seconds
+                    ):
+                        hard_fail.append(
+                            "validation_generation_transition_timeout"
+                        )
+                if metrics.get("validation_generation_build_active") is True:
+                    build_started_at = float(
+                        metrics.get("validation_generation_build_started_at") or 0.0
+                    )
+                    if build_started_at <= 0.0:
+                        hard_fail.append("validation_generation_build_unbounded")
+                    elif (
+                        max(0.0, now - build_started_at)
+                        > self.slo.validation_generation_transition_seconds
+                    ):
+                        hard_fail.append("validation_generation_build_timeout")
+                    else:
+                        degraded.append("validation_generation_build_in_progress")
+                if (
+                    not generation_waiting
+                    and metrics.get("generation_consistent") is not True
+                ):
                     hard_fail.append("paper_generation_stage_mismatch")
                 mandatory_complete = metrics.get(
                     "mandatory_product_cycle_complete"

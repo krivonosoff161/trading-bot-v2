@@ -1507,6 +1507,7 @@ def _classify_due(
     import json
 
     high_water = max(1, int(validation_backlog_high_water))
+    fresh_cutoff = float(now) - 300.0
     for _ in range(limit):
         backlog = tasks.validation_backlog_metrics(now=now)
         counters["validation_backlog_active"] = int(backlog["active"])
@@ -1522,11 +1523,21 @@ def _classify_due(
         )
         if int(backlog["active"]) >= high_water:
             counters["validation_backpressure_active"] = 1
-            counters["validation_classify_yielded"] = tasks.eligible_count(
-                now, task_types=("classify_result",)
+            task = tasks.claim_next_task(
+                task_types=("classify_result",),
+                now=now,
+                minimum_created_at=fresh_cutoff,
+                claim_budget_key="validation_backpressure_fresh_classify",
             )
-            break
-        task = tasks.claim_next_task(task_types=("classify_result",), now=now)
+            if task is None:
+                counters["validation_classify_yielded"] = tasks.eligible_count(
+                    now, task_types=("classify_result",)
+                )
+                break
+            counters["validation_freshness_bypass"] = 1
+        else:
+            tasks.reset_claim_budget("validation_backpressure_fresh_classify")
+            task = tasks.claim_next_task(task_types=("classify_result",), now=now)
         if task is None:
             break
         payload = json.loads(task.get("payload_json") or "{}")

@@ -32,13 +32,94 @@ def _candidate(store: FarmTasksDB, uc_key: str, status: str = "FORWARD_PAPER") -
     )
 
 
-def _task(store: FarmTasksDB, uc_key: str, suffix: str) -> None:
+def _task(
+    store: FarmTasksDB, uc_key: str, suffix: str, *, now: float = 1.0
+) -> None:
     store.enqueue_task(
         task_type="export_validation",
         task_key=f"export::{suffix}",
         payload={"candidate_id": "source", "uc_key": uc_key},
+        now=now,
+    )
+
+
+def test_validation_claims_durably_alternate_freshness_and_fifo_debt(
+    tmp_path,
+) -> None:
+    path = tasks_db_path(tmp_path)
+    store = FarmTasksDB(path, clock=lambda: 1_000.0)
+    _task(store, "old-one", "old-one", now=1.0)
+    _task(store, "old-two", "old-two", now=2.0)
+    _task(store, "fresh-one", "fresh-one", now=950.0)
+    _task(store, "fresh-two", "fresh-two", now=960.0)
+
+    claimed_keys: list[str] = []
+    first = store.claim_next_task(
+        task_types=("export_validation",),
+        now=1_000.0,
+        fairness_key="export_validation",
+        freshness_window_seconds=300.0,
+        fresh_every=2,
+    )
+    assert first is not None
+    claimed_keys.append(first["task_key"])
+    store.skip_task(first["task_id"], "synthetic", now=1_000.0)
+    store.close()
+
+    # Cursor state is durable: reopening cannot reset selection to the fresh lane.
+    store = FarmTasksDB(path, clock=lambda: 1_000.0)
+    for _ in range(3):
+        claimed = store.claim_next_task(
+            task_types=("export_validation",),
+            now=1_000.0,
+            fairness_key="export_validation",
+            freshness_window_seconds=300.0,
+            fresh_every=2,
+        )
+        assert claimed is not None
+        claimed_keys.append(claimed["task_key"])
+        store.skip_task(claimed["task_id"], "synthetic", now=1_000.0)
+
+    assert claimed_keys == [
+        "export::fresh-one",
+        "export::old-one",
+        "export::fresh-two",
+        "export::old-two",
+    ]
+    assert store.raw_connection.execute(
+        "SELECT value FROM farm_meta WHERE key='claim_fairness:export_validation'"
+    ).fetchone()[0] == "4"
+    store.close()
+
+
+def test_validation_freshness_never_overrides_canonical_priority(tmp_path) -> None:
+    store = FarmTasksDB(tasks_db_path(tmp_path), clock=lambda: 1_000.0)
+    store.enqueue_task(
+        task_type="export_validation",
+        task_key="manual-high-priority",
+        payload={"candidate_id": "manual", "uc_key": "manual"},
+        priority=1,
         now=1.0,
     )
+    store.enqueue_task(
+        task_type="export_validation",
+        task_key="fresh-background",
+        payload={"candidate_id": "fresh", "uc_key": "fresh"},
+        priority=100,
+        now=999.0,
+    )
+
+    claimed = store.claim_next_task(
+        task_types=("export_validation",),
+        now=1_000.0,
+        fairness_key="export_validation",
+        freshness_window_seconds=300.0,
+        fresh_every=2,
+    )
+
+    assert claimed is not None
+    assert claimed["task_key"] == "manual-high-priority"
+    store.close()
 
 
 def test_hash_bound_disposition_is_atomic_and_idempotent(tmp_path) -> None:
@@ -299,6 +380,134 @@ def test_no_verdict_retry_budget_is_terminal(monkeypatch, tmp_path) -> None:
     assert len(skipped) == 1
     assert skipped[0]["machine_reason"] == "validation_no_verdict_retry_exhausted"
     assert skipped[0]["attempts"] == 3
+    store.close()
+
+
+def test_validation_backpressure_admits_one_fresh_classification(
+    monkeypatch, tmp_path
+) -> None:
+    from src.research_lab import farm_coordinator
+
+    store = FarmTasksDB(tasks_db_path(tmp_path), clock=lambda: 1_000.0)
+    _task(store, "backlog-a", "backlog-a")
+    _task(store, "backlog-b", "backlog-b")
+    store.enqueue_task(
+        task_type="classify_result",
+        task_key="classify::fresh-current-market",
+        symbol="FRESH",
+        timeframe="1h",
+        family="momentum_breakout",
+        payload={"run_dir_label": "fresh-run", "timeframe": "1h"},
+        now=950.0,
+    )
+    monkeypatch.setattr(
+        farm_coordinator,
+        "classify_run",
+        lambda *_args, **_kwargs: [
+            {
+                "uc_key": "FRESH::1h::momentum_breakout::ph::fp",
+                "symbol": "FRESH",
+                "timeframe": "1h",
+                "family": "momentum_breakout",
+                "params_hash": "ph",
+                "data_fingerprint": "fp",
+                "decision": "OBSERVE",
+                "validation_status": "FORWARD_PAPER",
+                "hard_status": "",
+                "candidate_id": "fresh-source",
+                "params": {},
+            }
+        ],
+    )
+    counters: dict[str, object] = {}
+
+    farm_coordinator._classify_due(
+        store,
+        private_root=tmp_path,
+        limit=2,
+        validation_backlog_high_water=2,
+        counters=counters,
+        now=1_000.0,
+    )
+
+    assert counters["validation_backpressure_active"] == 1
+    assert counters["validation_freshness_bypass"] == 1
+    assert counters["classified"] == 1
+    assert counters["exports_created"] == 1
+    assert len(store.tasks_in_state("queued", task_type="classify_result")) == 0
+    assert store.validation_backlog_metrics(now=1_000.0)["active"] == 3
+
+    store.enqueue_task(
+        task_type="classify_result",
+        task_key="classify::second-fresh-current-market",
+        symbol="SECOND",
+        timeframe="1h",
+        family="momentum_breakout",
+        payload={"run_dir_label": "second-run", "timeframe": "1h"},
+        now=975.0,
+    )
+    second: dict[str, object] = {}
+    farm_coordinator._classify_due(
+        store,
+        private_root=tmp_path,
+        limit=2,
+        validation_backlog_high_water=2,
+        counters=second,
+        now=1_001.0,
+    )
+    assert second["validation_classify_yielded"] == 1
+    assert second.get("validation_freshness_bypass", 0) == 0
+    assert len(store.tasks_in_state("queued", task_type="classify_result")) == 1
+    store.close()
+
+
+def test_failed_next_batch_preserves_published_ready_generation(
+    monkeypatch, tmp_path
+) -> None:
+    from src.research_lab import validation_generation
+
+    store = FarmTasksDB(tasks_db_path(tmp_path), clock=lambda: 1.0)
+    _candidate(store, "valid")
+    _task(store, "valid", "valid")
+    validation_id = validation_id_for_unique_candidate({"uc_key": "valid"})
+    validation_generation.write_current_generation(
+        tmp_path,
+        tasks=[],
+        exported_ids=[],
+        completed_ids=[],
+        producer_time=1.0,
+    )
+    current_path = validation_generation.manifest_path(tmp_path)
+    before = current_path.read_bytes()
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.prepare_requests",
+        lambda *_args, **_kwargs: (
+            {"skipped_no_artifact": 0},
+            [SimpleNamespace(candidate_id=validation_id)],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.write_prepared_requests",
+        lambda *_args, **_kwargs: [validation_id],
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.run_validation_batch",
+        lambda *_args, **_kwargs: {
+            "total": 1,
+            "validated": 0,
+            "errors": 1,
+            "results": [],
+        },
+    )
+
+    out = run_due_validations(store, tmp_path, apply=True, limit=1, now=1_000.0)
+
+    assert out["generation_unchanged"] == 1
+    assert current_path.read_bytes() == before
+    assert not validation_generation.pending_manifest_path(tmp_path).exists()
+    assert validation_generation.load_current_generation_snapshot(tmp_path).status == (
+        "ready_empty"
+    )
     store.close()
 
 
