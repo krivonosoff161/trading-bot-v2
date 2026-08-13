@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
+from scripts.strategy_lab import materialization_recovery as recovery_cli
 from src.research_lab.farm_tasks_db import FarmTasksDB, StaleTaskClaimError
 from src.research_lab.materialization_recovery import apply_plan, build_plan
 from src.research_lab.state_db import connect, ensure_experiment_queued, init_db
@@ -185,3 +187,60 @@ def test_recovery_rejects_plan_digest_and_task_scope_drift(tmp_path) -> None:
             expected_plan_digest=plan["plan_digest"],
             now=106.0,
         )
+
+
+def test_cli_quiescence_allows_exact_before_and_zero_running_after(monkeypatch) -> None:
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchone(self):
+            return self.rows[0]
+
+        def __iter__(self):
+            return iter(self.rows)
+
+    class Connection:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def execute(self, statement, _params=()):
+            if "ownership_resources" in statement:
+                return Cursor([(0,)])
+            return Cursor([(task_id,) for task_id in self.rows])
+
+        def close(self):
+            return None
+
+    for rows in ([37640], []):
+        connections = iter((Connection([]), Connection(rows)))
+        monkeypatch.setattr(recovery_cli, "_read_only", lambda _path: next(connections))
+        recovery_cli._require_quiescent(tmp_path := Path("synthetic"), 37640)
+        assert tmp_path.name == "synthetic"
+
+
+def test_cli_quiescence_rejects_any_unrelated_running_task(monkeypatch) -> None:
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchone(self):
+            return self.rows[0]
+
+        def __iter__(self):
+            return iter(self.rows)
+
+    class Connection:
+        def __init__(self, *, owner=False):
+            self.owner = owner
+
+        def execute(self, statement, _params=()):
+            return Cursor([(0,)]) if self.owner else Cursor([(37640,), (37641,)])
+
+        def close(self):
+            return None
+
+    connections = iter((Connection(owner=True), Connection()))
+    monkeypatch.setattr(recovery_cli, "_read_only", lambda _path: next(connections))
+    with pytest.raises(RuntimeError, match="no unrelated running tasks"):
+        recovery_cli._require_quiescent(Path("synthetic"), 37640)
