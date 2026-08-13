@@ -11,6 +11,7 @@ from tests.test_role_environment import _gate_artifacts
 from src.research_lab.system_analyst_cycle import (
     feedback_payloads_from_outcomes,
     feedback_payloads_from_system_results,
+    outcome_review_source_binding,
     run_system_analyst_cycle,
 )
 
@@ -19,7 +20,7 @@ FRESH_REVIEW_NOW = "2026-07-11T13:00:00+00:00"
 
 @pytest.fixture(autouse=True)
 def _trusted_training_projection(monkeypatch):
-    def load(private_root):
+    def load(private_root, **_kwargs):
         path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
         rows = []
         if path.exists():
@@ -93,6 +94,48 @@ def test_system_analyst_preview_does_not_write(tmp_path):
     summary = run_system_analyst_cycle(tmp_path, apply=False)
     assert summary["apply"] is False
     assert not (tmp_path / "state").exists()
+
+
+def test_v2_outcome_review_requires_exact_generation_terminal_and_content_binding():
+    training = {
+        **_training(),
+        "paper_generation_run_id": "paper-run-current",
+        "terminal_lifecycle_event_id": "terminal-event-current",
+        "diagnosis": "bounded-current-diagnosis",
+    }
+    exact = {
+        **_review(),
+        "source_binding": outcome_review_source_binding(training),
+    }
+
+    assert feedback_payloads_from_outcomes(
+        [training], [exact], require_source_binding=True
+    )
+    assert feedback_payloads_from_outcomes(
+        [training], [_review()], require_source_binding=True
+    ) == []
+    stale_generation = {
+        **exact,
+        "source_binding": {
+            **exact["source_binding"],
+            "paper_generation_run_id": "paper-run-stale",
+        },
+    }
+    assert feedback_payloads_from_outcomes(
+        [training], [stale_generation], require_source_binding=True
+    ) == []
+    changed_source_content = {**training, "diagnosis": "different-content"}
+    assert feedback_payloads_from_outcomes(
+        [changed_source_content], [exact], require_source_binding=True
+    ) == []
+    review_enriched_projection = {
+        **training,
+        "outcome_review_id": "review-downstream-projection",
+        "outcome_learning_bucket": "win",
+    }
+    assert outcome_review_source_binding(review_enriched_projection) == exact[
+        "source_binding"
+    ]
 
 
 def test_empty_current_generation_does_not_scan_historical_role_environments(
@@ -258,12 +301,20 @@ def test_current_generation_index_recovers_ack_state_crash_without_history_scan(
     training = {
         **_training(),
         "paper_generation_run_id": "synthetic-current-run",
+        "terminal_lifecycle_event_id": "synthetic-terminal-event",
     }
     (derived / "paper_signal_training.jsonl").write_text(
         json.dumps(training) + "\n", encoding="utf-8"
     )
     (advice / "outcome_reviews.jsonl").write_text(
-        json.dumps(_review()) + "\n", encoding="utf-8"
+        json.dumps(
+            {
+                **_review(),
+                "source_binding": outcome_review_source_binding(training),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
     import src.research_lab.role_environment as role_environment

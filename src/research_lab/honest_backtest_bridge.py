@@ -161,6 +161,7 @@ def run_validation(
     private_root: Path,
     *,
     dry_run: bool = True,
+    artifact_root: Path | None = None,
     progress: ProgressCallback | None = None,
     check_active: ActiveCheck | None = None,
 ) -> dict[str, Any]:
@@ -174,7 +175,7 @@ def run_validation(
         result = _bridge_unavailable(candidate)
         if not dry_run:
             _ensure_active(check_active)
-            _write_minimal_artifacts(private_root, candidate, result)
+            _write_minimal_artifacts(artifact_root or private_root, candidate, result)
             _report_progress(
                 progress, check_active, "validation_artifacts_written", 1, 1
             )
@@ -196,7 +197,7 @@ def run_validation(
         report = _build_report(candidate, verdict, checks)
         if not dry_run:
             _ensure_active(check_active)
-            _write_artifacts(private_root, candidate, verdict, report)
+            _write_artifacts(artifact_root or private_root, candidate, verdict, report)
             _report_progress(
                 progress, check_active, "validation_artifacts_written", 1, 1
             )
@@ -222,7 +223,7 @@ def run_validation(
         result = _insufficient_data(candidate, len(returns))
         if not dry_run:
             _ensure_active(check_active)
-            _write_minimal_artifacts(private_root, candidate, result)
+            _write_minimal_artifacts(artifact_root or private_root, candidate, result)
             _report_progress(
                 progress, check_active, "validation_artifacts_written", 1, 1
             )
@@ -241,7 +242,7 @@ def run_validation(
 
     if not dry_run:
         _ensure_active(check_active)
-        _write_artifacts(private_root, candidate, verdict, report)
+        _write_artifacts(artifact_root or private_root, candidate, verdict, report)
         _report_progress(progress, check_active, "validation_artifacts_written", 1, 1)
     _report_progress(progress, check_active, "validation_result_completed", 1, 1)
 
@@ -262,6 +263,7 @@ def run_validation_batch(
     dry_run: bool = True,
     limit: int = 50,
     candidate_ids: list[str] | None = None,
+    artifact_root: Path | None = None,
     progress: ProgressCallback | None = None,
     check_active: ActiveCheck | None = None,
 ) -> dict[str, Any]:
@@ -306,6 +308,7 @@ def run_validation_batch(
                 candidate,
                 private_root,
                 dry_run=dry_run,
+                artifact_root=artifact_root,
                 progress=progress,
                 check_active=check_active,
             )

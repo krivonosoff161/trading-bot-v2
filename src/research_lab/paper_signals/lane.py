@@ -152,8 +152,32 @@ def build_signal(symbol: str, inst_id: str, timeframe: str, candles: list[dict[s
 
 
 # ── selection gates (deterministic; every rejection is recorded by reason) ──
+KnownBadSetup = tuple[str, str, str, str]
+
+
+def is_known_bad_setup(
+    known_bad: set[KnownBadSetup],
+    *,
+    symbol: str,
+    timeframe: str,
+    family: str,
+    params_hash: str = "",
+) -> bool:
+    """Return true only for the exact outcome-memory setup identity.
+
+    A record with a params hash can reject only that parameter set.  A legacy
+    record without a params hash remains bounded to its exact symbol, timeframe
+    and family; missing identity fields never become wildcards.
+    """
+    identity = (str(symbol), str(timeframe), str(family), str(params_hash))
+    if not all(identity[:3]):
+        return False
+    return identity in known_bad
+
+
 def gate_candidate(mover: dict[str, Any], candles: list[dict[str, Any]], *, now_ms: int,
-                   known_bad: set[tuple[str, str]], family: str = "momentum_continuation") -> str:
+                   known_bad: set[KnownBadSetup], family: str = "",
+                   params_hash: str = "") -> str:
     inst = str(mover.get("inst_id") or "")
     if not inst.endswith("-USDT-SWAP"):
         return "not_tradeable_inst"
@@ -168,7 +192,13 @@ def gate_candidate(mover: dict[str, Any], candles: list[dict[str, Any]], *, now_
     if float(mover.get("vol_usd") or 0) < MIN_VOL_USD:
         return "volume_too_thin"
     sym = str(mover.get("symbol") or inst.replace("-", "_"))
-    if (sym, family) in known_bad or (sym, "*") in known_bad:   # exact family OR symbol-wide confirmed-bad
+    if family and is_known_bad_setup(
+        known_bad,
+        symbol=sym,
+        timeframe=str(tf),
+        family=family,
+        params_hash=params_hash,
+    ):
         return "known_bad_in_memory"
     return "ok"
 
@@ -567,8 +597,12 @@ def _write_chart_png(path: Path, sig: PaperActionSignal, candles: list[dict[str,
     plt.close(fig)
 
 
-def load_known_bad(private_root: Path) -> set[tuple[str, str]]:
-    """(symbol, family) pairs the outcome memory flags as confirmed-bad. Empty if unavailable."""
+def load_known_bad(private_root: Path) -> set[KnownBadSetup]:
+    """Exact confirmed-bad setup identities from outcome memory.
+
+    The key is ``(symbol, timeframe, family, params_hash)``.  Empty/malformed
+    symbol, timeframe or family values are ignored rather than widened.
+    """
     path = Path(private_root) / "state" / "derived" / "setup_outcome_memory.json"
     try:
         recs = json.loads(path.read_text(encoding="utf-8")).get("records") or []
@@ -581,8 +615,10 @@ def load_known_bad(private_root: Path) -> set[tuple[str, str]]:
             or r.get("tactical_status") == "REJECTED_CONFIRMED_BAD"
             or r.get("tactical_class") == "REJECTED_CONFIRMED_BAD"
         ):
-            sym = str(r.get("symbol"))
-            fam = str(r.get("family") or "*")
-            bad.add((sym, fam))      # block this exact (symbol, family) ...
-            bad.add((sym, "*"))      # ... and the symbol wholesale (cross-family confirmed-bad)
+            sym = str(r.get("symbol") or "")
+            tf = str(r.get("timeframe") or "")
+            fam = str(r.get("family") or "")
+            if not (sym and tf and fam):
+                continue
+            bad.add((sym, tf, fam, str(r.get("params_hash") or "")))
     return bad

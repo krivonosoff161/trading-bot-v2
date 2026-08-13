@@ -8,7 +8,12 @@ from src.research_lab.honest_backtest_bridge import _artifact_stem
 from src.research_lab import validation_generation as generation
 
 
-def _write_chain(tmp_path, candidate_id: str = "fv_test") -> dict[str, object]:
+def _write_chain(
+    tmp_path,
+    candidate_id: str = "fv_test",
+    *,
+    pending_build_id: str | None = None,
+) -> dict[str, object]:
     stem = _artifact_stem(candidate_id)
     base = tmp_path / "hard_validation"
     for subdir in ("requests", "reports", "verdicts"):
@@ -58,8 +63,15 @@ def _write_chain(tmp_path, candidate_id: str = "fv_test") -> dict[str, object]:
         exported_ids=[candidate_id],
         completed_ids=[candidate_id],
         producer_time=2.0,
+        pending_build_id=pending_build_id,
     )
-    return {"candidate_id": candidate_id, "paths": paths, "payloads": payloads}
+    manifest = generation.load_current_generation(tmp_path)
+    authority_paths = {
+        kind: tmp_path / manifest["active"][candidate_id][kind]["path"]
+        for kind in ("request", "report", "verdict", "setup_card")
+    }
+    return {"candidate_id": candidate_id, "paths": paths,
+            "authority_paths": authority_paths, "payloads": payloads}
 
 
 @pytest.mark.parametrize("kind", ["request", "report", "verdict", "setup_card"])
@@ -68,7 +80,7 @@ def test_any_link_tamper_revokes_the_complete_chain(tmp_path, kind):
     candidate_id = str(chain["candidate_id"])
     assert generation.current_candidate_ids(tmp_path) == {candidate_id}
 
-    path = chain["paths"][kind]
+    path = chain["authority_paths"][kind]
     path.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
 
     assert generation.current_candidate_ids(tmp_path) == set()
@@ -118,7 +130,9 @@ def test_missing_required_code_file_fails_closed(tmp_path, monkeypatch):
         )
 
 
-def test_canonical_card_wins_over_duplicate_and_pending_revokes_it(tmp_path):
+def test_canonical_card_wins_and_pending_successor_preserves_ready_generation(
+    tmp_path,
+):
     candidate_id = "fv_duplicate"
     duplicate = tmp_path / "setup_library" / "cards" / "000-stale.json"
     duplicate.parent.mkdir(parents=True)
@@ -133,11 +147,11 @@ def test_canonical_card_wins_over_duplicate_and_pending_revokes_it(tmp_path):
     chain = _write_chain(tmp_path, candidate_id)
     canonical = chain["paths"]["setup_card"]
     manifest = generation.load_current_generation(tmp_path)
-    assert manifest["active"][candidate_id]["setup_card"]["path"] == (
-        f"setup_library/cards/setup-{candidate_id}.json"
-    )
+    authority_card = tmp_path / manifest["active"][candidate_id]["setup_card"]["path"]
+    assert "hard_validation/generation_artifacts" in authority_card.as_posix()
     assert generation.read_current_setup_card(tmp_path, duplicate) is None
-    assert generation.read_current_setup_card(tmp_path, canonical) is not None
+    assert generation.read_current_setup_card(tmp_path, canonical) is None
+    assert generation.read_current_setup_card(tmp_path, authority_card) is not None
 
     generation.write_pending_generation(
         tmp_path,
@@ -149,8 +163,206 @@ def test_canonical_card_wins_over_duplicate_and_pending_revokes_it(tmp_path):
         }],
         producer_time=3.0,
     )
+    assert generation.pending_manifest_path(tmp_path).is_file()
+    assert generation.current_candidate_ids(tmp_path) == {candidate_id}
+    assert generation.read_current_setup_card(tmp_path, authority_card) is not None
+
+
+def test_first_pending_generation_is_fail_closed_until_atomic_publication(tmp_path):
+    pending = generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 2,
+            "task_type": "export_validation",
+            "task_key": "first",
+            "payload_json": "{}",
+        }],
+        producer_time=3.0,
+    )
+
+    assert generation.load_current_generation_snapshot(tmp_path).status == "pending"
     assert generation.current_candidate_ids(tmp_path) == set()
-    assert generation.read_current_setup_card(tmp_path, canonical) is None
+
+    _write_chain(
+        tmp_path, "fv_first", pending_build_id=str(pending["build_id"])
+    )
+
+    assert not generation.pending_manifest_path(tmp_path).exists()
+    snapshot = generation.load_current_generation_snapshot(tmp_path)
+    assert snapshot.status == "ready"
+    assert set(snapshot.payloads) == {"fv_first"}
+
+
+def test_failed_successor_publication_leaves_prior_generation_authoritative(
+    tmp_path, monkeypatch
+):
+    _write_chain(tmp_path, "fv_prior")
+    current_path = generation.manifest_path(tmp_path)
+    before = current_path.read_bytes()
+    generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 2,
+            "task_type": "export_validation",
+            "task_key": "successor",
+            "payload_json": "{}",
+        }],
+        producer_time=3.0,
+    )
+    monkeypatch.setattr(
+        generation,
+        "_publish",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("synthetic publication failure")
+        ),
+    )
+
+    with pytest.raises(OSError, match="synthetic publication failure"):
+        generation.write_current_generation(
+            tmp_path,
+            tasks=[],
+            exported_ids=[],
+            completed_ids=[],
+            producer_time=4.0,
+        )
+
+    assert current_path.read_bytes() == before
+    assert generation.current_candidate_ids(tmp_path) == {"fv_prior"}
+
+
+def test_unremovable_consumed_pending_marker_is_not_an_active_build(tmp_path) -> None:
+    pending = generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 1,
+            "task_type": "export_validation",
+            "task_key": "consumed",
+            "payload_json": "{}",
+        }],
+        producer_time=2.0,
+    )
+    _write_chain(
+        tmp_path,
+        "fv_current",
+        pending_build_id=str(pending["build_id"]),
+    )
+    current = generation.load_current_generation(tmp_path)
+    pending_path = generation.pending_manifest_path(tmp_path)
+    pending_path.write_text(json.dumps({
+        "schema": generation.SCHEMA,
+        "generation_id": "hvg_consumed",
+        "build_id": current["source_pending_build_id"],
+        "producer_time": current["producer_time"],
+        "producer_complete": False,
+        "paper_only": True,
+        "execution_allowed": False,
+    }), encoding="utf-8")
+
+    assert pending_path.is_file()
+    assert generation.load_pending_generation(tmp_path) is None
+    assert generation.current_generation_manifest_status(tmp_path) == "code_current"
+
+
+def test_distinct_equal_timestamp_pending_build_is_not_hidden_or_cleared(
+    tmp_path,
+) -> None:
+    first = generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 1,
+            "task_type": "export_validation",
+            "task_key": "first",
+            "payload_json": "{}",
+        }],
+        producer_time=3.0,
+    )
+    _write_chain(
+        tmp_path, "fv_current", pending_build_id=str(first["build_id"])
+    )
+    successor = generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 2,
+            "task_type": "export_validation",
+            "task_key": "successor",
+            "payload_json": "{}",
+        }],
+        producer_time=3.0,
+    )
+
+    assert generation.load_pending_generation(tmp_path)["build_id"] == successor[
+        "build_id"
+    ]
+    assert generation.clear_pending_generation(
+        tmp_path, expected_build_id=str(first["build_id"])
+    ) is False
+    assert generation.load_pending_generation(tmp_path)["build_id"] == successor[
+        "build_id"
+    ]
+
+
+def test_stale_builder_cannot_publish_over_newer_pending_build(tmp_path) -> None:
+    first = generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 1,
+            "task_type": "export_validation",
+            "task_key": "first",
+            "payload_json": "{}",
+        }],
+        producer_time=3.0,
+    )
+    successor = generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 2,
+            "task_type": "export_validation",
+            "task_key": "successor",
+            "payload_json": "{}",
+        }],
+        producer_time=4.0,
+    )
+
+    with pytest.raises(RuntimeError, match="pending generation changed"):
+        generation.write_current_generation(
+            tmp_path,
+            tasks=[],
+            exported_ids=[],
+            completed_ids=[],
+            producer_time=5.0,
+            pending_build_id=str(first["build_id"]),
+        )
+
+    assert generation.load_current_generation(tmp_path) is None
+    assert generation.load_pending_generation(tmp_path)["build_id"] == successor[
+        "build_id"
+    ]
+
+
+def test_same_candidate_successor_staging_change_preserves_prior_hash(
+    tmp_path,
+) -> None:
+    chain = _write_chain(tmp_path, "fv_same")
+    generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 2,
+            "task_type": "export_validation",
+            "task_key": "same-candidate-successor",
+            "payload_json": "{}",
+        }],
+        producer_time=3.0,
+    )
+    request_path = chain["paths"]["request"]
+    request_path.write_text(
+        request_path.read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+
+    snapshot = generation.load_current_generation_snapshot(tmp_path)
+
+    assert snapshot.status == "ready"
+    assert set(snapshot.payloads) == {"fv_same"}
 
 
 def test_generation_snapshot_hashes_producer_once_and_reports_real_progress(
@@ -230,7 +442,8 @@ def test_generation_snapshot_is_atomic_when_one_active_chain_is_corrupt(tmp_path
         completed_ids=["fv_one", "fv_two"],
         producer_time=3.0,
     )
-    bad = tmp_path / "setup_library" / "cards" / "setup-fv_two.json"
+    manifest = generation.load_current_generation(tmp_path)
+    bad = tmp_path / manifest["active"]["fv_two"]["setup_card"]["path"]
     bad.write_text(bad.read_text(encoding="utf-8") + "\n", encoding="utf-8")
 
     snapshot = generation.load_current_generation_snapshot(tmp_path)

@@ -21,6 +21,10 @@ from typing import Any
 
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.paper_projection_reader import read_projection_view
+from src.research_lab.runtime_storage_rotation import (
+    RuntimeStorageError,
+    update_bounded_rebuildable_snapshot,
+)
 from src.research_lab.providers.okx_public import (
     MarketDataError,
     OkxPublicMarketDataProvider,
@@ -32,6 +36,9 @@ SCHEMA = "PaperTelegramPreview.v1"
 SUMMARY_SCHEMA = "paper_telegram_preview.v1"
 CARD_TEMPLATE_VERSION = "paper_telegram_card_v7_scenario_lifecycle_ru"
 MAX_MESSAGE_CHARS = 4096
+MAX_CARD_LEDGER_ITEMS = 10_000
+MAX_CARD_LEDGER_BYTES = 64 * 1024 * 1024
+MAX_LLM_ANALYSIS_RAW_CHARS = 320
 REQUIRED_DISCLAIMER = "\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c: \u044d\u0442\u043e \u043d\u0435 \u043e\u0440\u0434\u0435\u0440."
 HUMAN_DISCLAIMER = "\u042d\u0442\u043e paper-\u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435, \u043d\u0435 \u043e\u0440\u0434\u0435\u0440 \u0438 \u043d\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u043a \u0432\u0445\u043e\u0434\u0443."
 
@@ -867,11 +874,17 @@ def _analysis_contract(
             "llm_interpretation_ref": "",
         }
     if advice_ref:
+        payload = advice.get("advice")
+        payload = payload if isinstance(payload, dict) else {}
+        advisory_text = str(payload.get("user_facing_analysis") or "").strip()[
+            :MAX_LLM_ANALYSIS_RAW_CHARS
+        ]
         return {
             "feature_packet_id": feature_packet_id,
             "analysis_mode": "llm_advisory",
             "analysis_status": "accepted",
             "llm_interpretation_ref": advice_ref,
+            "advisory_text": advisory_text,
         }
     return {
         "feature_packet_id": feature_packet_id,
@@ -884,10 +897,17 @@ def _analysis_contract(
 def _append_analysis_provenance(text: str, analysis: dict[str, str]) -> str:
     mode = analysis["analysis_mode"]
     if mode == "llm_advisory":
-        line = (
-            "<b>Анализ:</b> связан с проверенным LLM-advisory; "
-            "уровни и решение остаются детерминированными."
+        raw = str(analysis.get("advisory_text") or "").strip()
+        prefix = "<b>Анализ LLM:</b> "
+        suffix = (
+            " Расчётные уровни и решение остаются "
+            "детерминированными."
         )
+        available = max(0, MAX_MESSAGE_CHARS - len(text) - len(prefix) - len(suffix) - 2)
+        # HTML escaping can expand one source character to six characters.
+        bounded_raw = raw[: min(MAX_LLM_ANALYSIS_RAW_CHARS, available // 6)]
+        rendered = html.escape(bounded_raw, quote=False)
+        line = f"{prefix}{rendered or 'принято без публичного пояснения.'}{suffix}"
     elif mode == "deterministic_fallback":
         line = (
             "<b>Анализ:</b> детерминированный шаблон; "
@@ -1438,19 +1458,91 @@ def _load_paper_signal_candidates(
     return candidates, source_path
 
 
-def _load_card_ledger(path: Path) -> dict[str, dict[str, Any]]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    items = data.get("items") or []
-    return {
-        str(item.get("telegram_card_id")): dict(item)
-        for item in items
-        if isinstance(item, dict) and str(item.get("telegram_card_id") or "")
-    }
+def _card_ledger_payload(
+    ledger: dict[str, dict[str, Any]],
+    *,
+    current_card_ids: set[str],
+    snapshot_path: Path,
+) -> dict[str, Any]:
+    ordered = sorted(
+        ledger.values(),
+        key=lambda item: (
+            -float(item.get("last_seen_at") or 0.0),
+            str(item.get("source_signal_id") or ""),
+            str(item.get("telegram_card_id") or ""),
+        ),
+    )
+    required_ids = set(current_card_ids)
+    newest_signal_ids: set[str] = set()
+    for item in ordered:
+        signal_id = str(item.get("source_signal_id") or "")
+        if signal_id and signal_id not in newest_signal_ids:
+            newest_signal_ids.add(signal_id)
+            required_ids.add(str(item.get("telegram_card_id") or ""))
+    required = [
+        item
+        for item in ordered
+        if str(item.get("telegram_card_id") or "") in required_ids
+    ]
+    if len(required) > MAX_CARD_LEDGER_ITEMS:
+        raise RuntimeStorageError(
+            "card ledger newest-per-signal evidence exceeds retained item limit"
+        )
+    optional = [
+        item
+        for item in ordered
+        if str(item.get("telegram_card_id") or "") not in required_ids
+    ][: max(0, MAX_CARD_LEDGER_ITEMS - len(required))]
+
+    def build(optional_count: int) -> dict[str, Any]:
+        retained = required + optional[:optional_count]
+        items = sorted(
+            retained,
+            key=lambda item: (
+                str(item.get("source_signal_id") or ""),
+                str(item.get("telegram_card_id") or ""),
+            ),
+        )
+        signal_ids = {
+            str(item.get("source_signal_id") or "")
+            for item in items
+            if str(item.get("source_signal_id") or "")
+        }
+        return {
+            "schema": "paper_telegram_card_ledger.v1",
+            "items": items,
+            "cards": len(items),
+            "signals": len(signal_ids),
+            "retained_limit": MAX_CARD_LEDGER_ITEMS,
+            "retained_byte_limit": MAX_CARD_LEDGER_BYTES,
+            "pruned": max(0, len(ordered) - len(items)),
+            "paper_only": True,
+            "execution_allowed": False,
+            "sends_network": False,
+            "snapshot_path": str(snapshot_path),
+        }
+
+    def encoded_size(payload: dict[str, Any]) -> int:
+        return len(
+            (
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n"
+            ).encode("utf-8")
+        )
+
+    required_payload = build(0)
+    if encoded_size(required_payload) > MAX_CARD_LEDGER_BYTES:
+        raise RuntimeStorageError(
+            "card ledger current/newest evidence exceeds bounded byte budget"
+        )
+    low, high = 0, len(optional)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if encoded_size(build(middle)) <= MAX_CARD_LEDGER_BYTES:
+            low = middle
+        else:
+            high = middle - 1
+    return build(low)
 
 
 def _write_card_ledger(
@@ -1458,39 +1550,31 @@ def _write_card_ledger(
 ) -> dict[str, Any]:
     path = _card_ledger_path(private_root)
     now = time.time()
-    ledger = _load_card_ledger(path)
-    for preview in previews:
-        item = preview.to_dict()
-        item["last_seen_at"] = now
-        ledger[preview.telegram_card_id] = item
-    items = sorted(
-        ledger.values(),
-        key=lambda item: (
-            str(item.get("source_signal_id") or ""),
-            str(item.get("telegram_card_id") or ""),
-        ),
+    current_card_ids = {preview.telegram_card_id for preview in previews}
+
+    def update(current: Any) -> dict[str, Any]:
+        ledger = {
+            str(item.get("telegram_card_id")): dict(item)
+            for item in ((current or {}).get("items") or [])
+            if isinstance(item, dict) and str(item.get("telegram_card_id") or "")
+        }
+        for preview in previews:
+            item = preview.to_dict()
+            item["last_seen_at"] = now
+            ledger[preview.telegram_card_id] = item
+        payload = _card_ledger_payload(
+            ledger,
+            current_card_ids=current_card_ids,
+            snapshot_path=path,
+        )
+        return payload
+
+    summary, write_result = update_bounded_rebuildable_snapshot(
+        path,
+        update,
+        max_bytes=MAX_CARD_LEDGER_BYTES,
     )
-    signal_ids = {
-        str(item.get("source_signal_id") or "")
-        for item in items
-        if str(item.get("source_signal_id") or "")
-    }
-    summary = {
-        "schema": "paper_telegram_card_ledger.v1",
-        "items": items,
-        "cards": len(items),
-        "signals": len(signal_ids),
-        "paper_only": True,
-        "execution_allowed": False,
-        "sends_network": False,
-        "snapshot_path": str(path),
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return summary
+    return {**summary, "snapshot_write": write_result}
 
 
 def build_paper_telegram_preview(

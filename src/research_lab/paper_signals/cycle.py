@@ -520,12 +520,13 @@ def _product_scores_by_symbol(product_memory: dict[str, Any] | None) -> dict[str
 
 
 def rank_movers(movers: list[dict], memory: list[dict[str, Any]],
-                known_bad: set[tuple[str, str]],
+                known_bad: set[lane.KnownBadSetup],
                 product_memory: dict[str, Any] | None = None) -> list[dict]:
     """Search Layer: re-rank the live-mover universe with OUTCOME MEMORY, not raw score alone. A symbol
-    with a symbol-wide confirmed-bad record is penalised hard; a symbol with prior good_signal is
-    nudged up. Each row carries a _priority and a human _reason (why it ranks where it does)."""
-    bad_syms = {k[0] for k in known_bad if k[1] == "*"}
+    with prior good_signal is nudged up. Confirmed-bad memory is applied later,
+    when the exact timeframe/family/params identity exists; it must not penalise
+    every setup on the same symbol. Each row carries a _priority and a human
+    _reason (why it ranks where it does)."""
     good: dict[str, int] = {}
     for m in memory:
         if m.get("diagnosis") == "good_signal" or m.get("result") == "take":
@@ -535,14 +536,14 @@ def rank_movers(movers: list[dict], memory: list[dict[str, Any]],
     for mv in movers:
         sym = str(mv.get("symbol") or (mv.get("inst_id") or "").replace("-", "_"))
         base = float(mv.get("score") or 0.0)
-        penalty = 5.0 if sym in bad_syms else 0.0
         bonus = min(2.0, 0.5 * good.get(sym, 0))
         product = product_scores.get(sym) or {}
         product_score = float(product.get("score") or 0.0)
-        pr = base - penalty + bonus + product_score
+        pr = base + bonus + product_score
         out.append({**mv, "_priority": round(pr, 3),
                     "_reason": f"bucket={mv.get('_bucket')} score={base:.1f} good+{bonus:.1f} "
-                               f"knownbad-{penalty:.0f} {product.get('reason') or 'product_memory=none'} "
+                               f"knownbad=exact_gate({len(known_bad)}) "
+                               f"{product.get('reason') or 'product_memory=none'} "
                                f"move%={mv.get('move_pct')} vol=${(mv.get('vol_usd') or 0) / 1e6:.0f}M"})
     out.sort(key=lambda r: -r["_priority"])
     return out
@@ -725,6 +726,82 @@ def write_selection_snapshot(private_root: Path, ranked: list[dict], top_n: int 
     return out
 
 
+def _pfr_authority_key(value: dict[str, Any] | PaperActionSignal) -> tuple[str, ...]:
+    context = value.validator_context if isinstance(value, PaperActionSignal) else value
+    setup_id = str((context or {}).get("setup_id") or "")
+    symbol = str(value.symbol if isinstance(value, PaperActionSignal) else value.get("symbol") or "")
+    timeframe = str(value.timeframe if isinstance(value, PaperActionSignal) else value.get("timeframe") or "")
+    family = str(value.setup_family if isinstance(value, PaperActionSignal) else value.get("family") or "")
+    if not (setup_id and symbol and timeframe and family):
+        return ()
+    # ``setup_id`` is the stable validation authority identity.  The market
+    # tuple guards against malformed/colliding records, while params remain a
+    # property of that exact setup rather than a substitute authority key.
+    return (setup_id, symbol, timeframe, family)
+
+
+def _invalidate_stale_pfr_authority(
+    private_root: Path,
+    existing: list[PaperActionSignal],
+    all_pfr: list[dict[str, Any]],
+    pfr_counts: dict[str, int],
+    *,
+    apply: bool,
+) -> set[str]:
+    authority_pairs = {
+        (generation_id, key)
+        for row in all_pfr
+        if (generation_id := str(row.get("validation_generation_id") or ""))
+        and (key := _pfr_authority_key(row))
+    }
+    generations = {generation_id for generation_id, _key in authority_pairs}
+    exact_keys = {key for _generation_id, key in authority_pairs}
+    generation_status = next(
+        (
+            key.partition(":")[2]
+            for key, value in pfr_counts.items()
+            if key.startswith("pfr_generation:") and value
+        ),
+        "",
+    )
+    fail_closed = generation_status not in {"legacy_absent", "ready"}
+    stale: set[str] = set()
+    if generation_status == "legacy_absent":
+        return stale
+    for old in existing:
+        if old.status not in ACTIVE or old.source != "pfr_farm":
+            continue
+        signal_generation = str(
+            (old.validator_context or {}).get("validation_generation_id") or ""
+        )
+        old_key = _pfr_authority_key(old)
+        if old_key and (signal_generation, old_key) in authority_pairs:
+            continue
+        exact_superseded = bool(old_key and old_key in exact_keys)
+        inconsistent_current_membership = bool(signal_generation in generations)
+        if (
+            not fail_closed
+            and not exact_superseded
+            and not inconsistent_current_membership
+        ):
+            continue
+        stale.add(old.signal_id)
+        if apply:
+            old.status = "invalidated"
+            old.review = {
+                **(old.review or {}),
+                "diagnosis": "validation_generation_superseded",
+                "note": (
+                    "The exact setup authority was superseded or the current "
+                    "validation generation failed closed."
+                ),
+            }
+            store.update_signal(private_root, old)
+    if stale:
+        pfr_counts["pfr_stale_generation_invalidated"] = len(stale)
+    return stale
+
+
 def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"), max_new=5,
               apply: bool = False, provider=None, now: float | None = None,
               families_arg=None, pfr_db_path: Path | None = None,
@@ -794,6 +871,26 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
 
     observed, closed = 0, 0
     gate_counts: dict[str, int] = {}
+    pfr_counts: dict[str, int] = {}
+    all_pfr: list[dict[str, Any]] = []
+    stale_pfr_signal_ids: set[str] = set()
+    if pfr_db_path is not None:
+        all_pfr = pfr_bridge.load_pfr_records(
+            pfr_db_path,
+            private_root=private_root,
+            status_counts=pfr_counts,
+        )
+        stale_pfr_signal_ids = _invalidate_stale_pfr_authority(
+            private_root,
+            existing,
+            all_pfr,
+            pfr_counts,
+            apply=apply,
+        )
+        for old in existing:
+            if old.signal_id in stale_pfr_signal_ids:
+                pfr_key_active.discard(old.dedup_key)
+                by_key_active.discard(old.dedup_key)
     active_seen = 0
     # (1) re-observe active signals on fresh bars (+ wall-clock / no-data age-out so none strand)
     for s in existing:
@@ -849,7 +946,6 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     live_new_cap = max(0, max_new - pfr_reserved)
 
     # (2) PFR lane first: validated/PAPER_FORWARD_READY setups feed main-paper.
-    pfr_counts: dict[str, int] = {}
     pfr_gap_samples: list[dict[str, Any]] = []
     new_sigs = []
     pfr_new_keys: set[str] = set()
@@ -857,44 +953,6 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
         pfr_cap = max_new if pfr_reserved <= 0 else pfr_reserved
         if pfr_reserved:
             pfr_counts["pfr_reserved_slots"] = pfr_reserved
-        all_pfr = pfr_bridge.load_pfr_records(
-            pfr_db_path,
-            private_root=private_root,
-            status_counts=pfr_counts,
-        )
-        authorized_validation_generations = {
-            str(row.get("validation_generation_id") or "")
-            for row in all_pfr
-            if str(row.get("validation_generation_id") or "")
-        }
-        stale_pfr_signal_ids: set[str] = set()
-        if not pfr_counts.get("pfr_generation:legacy_absent"):
-            for old in existing:
-                if old.status not in ACTIVE or old.source != "pfr_farm":
-                    continue
-                signal_generation = str(
-                    (old.validator_context or {}).get("validation_generation_id") or ""
-                )
-                if signal_generation in authorized_validation_generations:
-                    continue
-                stale_pfr_signal_ids.add(old.signal_id)
-                pfr_key_active.discard(old.dedup_key)
-                by_key_active.discard(old.dedup_key)
-                if apply:
-                    old.status = "invalidated"
-                    old.review = {
-                        **(old.review or {}),
-                        "diagnosis": "validation_generation_superseded",
-                        "note": (
-                            "The signal is outside the current verified validation "
-                            "generation and no longer grants Paper Evidence v2 authority."
-                        ),
-                    }
-                    store.update_signal(private_root, old)
-        if stale_pfr_signal_ids:
-            pfr_counts["pfr_stale_generation_invalidated"] = len(
-                stale_pfr_signal_ids
-            )
         passed_pfr, rejected_pfr = pfr_bridge.apply_quality_policy(
             all_pfr, policy=pfr_quality_policy
         )
@@ -995,7 +1053,12 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                 gate_counts[observation.status] = gate_counts.get(observation.status, 0) + 1
                 continue
             candles = list(observation.rows)
-            g = lane.gate_candidate({**mv, "_tf": tf}, candles, now_ms=now_ms, known_bad=known_bad)
+            g = lane.gate_candidate(
+                {**mv, "_tf": tf},
+                candles,
+                now_ms=now_ms,
+                known_bad=known_bad,
+            )
             gate_counts[g] = gate_counts.get(g, 0) + 1
             if g != "ok":
                 continue
@@ -1029,6 +1092,17 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                     continue
                 if (symbol, tf, sig.setup_family) in learned_bad:
                     gate_counts["learned_known_bad"] = gate_counts.get("learned_known_bad", 0) + 1
+                    continue
+                if lane.is_known_bad_setup(
+                    known_bad,
+                    symbol=symbol,
+                    timeframe=tf,
+                    family=sig.setup_family,
+                    params_hash=str((sig.validator_context or {}).get("params_hash") or ""),
+                ):
+                    gate_counts["setup_outcome_known_bad"] = (
+                        gate_counts.get("setup_outcome_known_bad", 0) + 1
+                    )
                     continue
                 if now - last_seen.get(sig.dedup_key, 0) < REGEN_TTL_SECONDS:
                     gate_counts["regen_ttl"] = gate_counts.get("regen_ttl", 0) + 1

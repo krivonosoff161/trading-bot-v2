@@ -35,6 +35,9 @@ from src.research_lab.paper_projection_reader import (
     read_projection_view,
     select_current_terminal_training_rows,
 )
+from src.research_lab.runtime_storage_rotation import (
+    write_bounded_rebuildable_snapshot,
+)
 from src.research_lab.setup_lifecycle import HARD_FAILED, derive_setup_lifecycle
 from src.research_lab.trade_path_diagnostics import (
     POWER_FLOOR,
@@ -1184,9 +1187,10 @@ def write_memory_snapshot(
         ),
         "records": memory_records,
     }
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    write_bounded_rebuildable_snapshot(
+        path,
+        payload,
+        max_bytes=256 * 1024 * 1024,
     )
     return path
 

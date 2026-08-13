@@ -32,6 +32,36 @@ from src.research_lab.system_analyst_feedback import (
 DEFAULT_MAX_FEEDBACK_PER_CYCLE = 20
 
 
+def outcome_review_source_binding(row: dict[str, Any]) -> dict[str, str]:
+    """Bind one review to immutable current-generation terminal evidence."""
+
+    generation_run_id = str(row.get("paper_generation_run_id") or "")
+    terminal_event_id = str(row.get("terminal_lifecycle_event_id") or "")
+    source_content = {
+        key: value
+        for key, value in row.items()
+        if not key.startswith("outcome_review")
+        and not key.startswith("outcome_learning")
+    }
+    return {
+        "paper_generation_run_id": generation_run_id,
+        "terminal_lifecycle_event_id": terminal_event_id,
+        "source_content_sha256": evidence_content_hash(source_content),
+    }
+
+
+def _review_matches_current_training(
+    review: dict[str, Any], row: dict[str, Any]
+) -> bool:
+    expected = outcome_review_source_binding(row)
+    actual = review.get("source_binding")
+    return bool(
+        isinstance(actual, dict)
+        and all(expected.values())
+        and actual == expected
+    )
+
+
 def _string_list(value: Any, *, limit: int = 8) -> list[str]:
     if isinstance(value, dict):
         rows = [f"{key}:{value[key]}" for key in sorted(value)]
@@ -167,6 +197,8 @@ def _iso(value: Any, fallback: dt.datetime) -> str:
 def feedback_payloads_from_outcomes(
     training_rows: Iterable[dict[str, Any]],
     review_rows: Iterable[dict[str, Any]],
+    *,
+    require_source_binding: bool = False,
 ) -> list[dict[str, Any]]:
     training = {str(row.get("training_row_id") or ""): row for row in training_rows}
     payloads: list[dict[str, Any]] = []
@@ -178,6 +210,8 @@ def feedback_payloads_from_outcomes(
         source_ref = str(review.get("source_ref") or "")
         row = training.get(source_ref)
         if not row:
+            continue
+        if require_source_binding and not _review_matches_current_training(review, row):
             continue
         review_payload = (
             raw_review_payload
@@ -427,13 +461,21 @@ def run_system_analyst_cycle(
     now: str | None = None,
     max_feedback: int = DEFAULT_MAX_FEEDBACK_PER_CYCLE,
     expected_generation_run_id: str | None = None,
+    evidence_database_path: Path | str | None = None,
     check_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     if max_feedback < 1:
         raise ValueError("max_feedback must be positive")
     if check_active is not None:
         check_active()
-    training_evidence = load_current_training_evidence(private_root)
+    training_evidence = (
+        load_current_training_evidence(private_root)
+        if evidence_database_path is None
+        else load_current_training_evidence(
+            private_root,
+            evidence_database_path=evidence_database_path,
+        )
+    )
     actual_generation_run_id = str(
         training_evidence.get("paper_generation_run_id") or ""
     )
@@ -448,7 +490,11 @@ def run_system_analyst_cycle(
         row for row in training_evidence.get("items") or [] if isinstance(row, dict)
     ]
     all_payloads = (
-        feedback_payloads_from_outcomes(training_rows, load_outcome_reviews(private_root))
+        feedback_payloads_from_outcomes(
+            training_rows,
+            load_outcome_reviews(private_root),
+            require_source_binding=bool(expected_generation_run_id),
+        )
         if training_rows
         else []
     )

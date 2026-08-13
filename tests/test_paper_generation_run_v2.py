@@ -23,6 +23,10 @@ from src.research_lab.paper_signals.training_export import export_training_rows
 from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
 from src.research_lab.paper_telegram_sender import send_paper_telegram_previews
 from src.research_lab.setup_outcome_memory import summarize_product_training_memory
+from src.research_lab.system_analyst_cycle import (
+    outcome_review_source_binding,
+    run_system_analyst_cycle,
+)
 from src.research_lab.trading_policy_calibration import build_trading_policy_calibration
 
 
@@ -406,6 +410,54 @@ def test_downstream_learning_preview_and_lineage_bind_completed_generation(tmp_p
         fetch_public_chart_candles=False,
         evidence_database_path=store.path,
     )
+    sent: list[tuple[str, str]] = []
+
+    async def send_text(recipient_id: str, text: str) -> int:
+        sent.append((recipient_id, text))
+        return 101
+
+    first_delivery = send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["synthetic-test-recipient"],
+        send_text=send_text,
+        expected_generation_run_id=result["run_id"],
+    )
+    replay_delivery = send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["synthetic-test-recipient"],
+        send_text=send_text,
+        expected_generation_run_id=result["run_id"],
+    )
+    reviews = tmp_path / "state" / "llm_advice" / "outcome_reviews.jsonl"
+    reviews.parent.mkdir(parents=True, exist_ok=True)
+    reviews.write_text(
+        json.dumps(
+            {
+                "role_id": "outcome_reviewer",
+                "review_id": "review-product-e2e",
+                "source_ref": training_row["training_row_id"],
+                "source_binding": outcome_review_source_binding(training_row),
+                "accepted": True,
+                "created_at": "2026-08-13T00:00:00+00:00",
+                "payload": {"summary": "Synthetic bounded outcome review."},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    analyst = run_system_analyst_cycle(
+        tmp_path,
+        apply=True,
+        now="2026-08-13T00:00:00+00:00",
+        expected_generation_run_id=result["run_id"],
+        evidence_database_path=store.path,
+    )
     lineage = build_paper_lineage(
         tmp_path,
         evidence_database_path=store.path,
@@ -431,6 +483,9 @@ def test_downstream_learning_preview_and_lineage_bind_completed_generation(tmp_p
     assert preview["source_schema"] == "PaperProjectionEnvelope.v2"
     assert preview["current_generation_compatible"] is True
     assert preview["items"][0]["terminal_lifecycle_event_id"]
+    assert first_delivery["sent_messages"] == 1
+    assert replay_delivery["sent_messages"] == 0
+    assert len(sent) == 1
     assert lineage["current_generation_compatible"] is True
     assert lineage["items"][0]["terminal_lifecycle_event_id"]
     assert calibration["trusted_terminal_rows"] == 1
@@ -438,6 +493,8 @@ def test_downstream_learning_preview_and_lineage_bind_completed_generation(tmp_p
     assert product_memory["eligible_rows"] == 1
     assert product_memory["summary"]["terminal_rows"] == 1
     assert product_memory["paper_generation_run_id"] == result["run_id"]
+    assert analyst["routed"] == 1
+    assert analyst["paper_generation_run_id"] == result["run_id"]
     assert health["paper_generation"]["current"] is True
     assert health["paper_generation"]["stage_chain_compatible"] is True
     assert health["readiness"]["paper_chain_counts"]["status"] == "pass"

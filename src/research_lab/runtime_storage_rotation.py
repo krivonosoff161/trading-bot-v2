@@ -24,7 +24,7 @@ import sqlite3
 import sys
 import time
 import uuid
-from typing import Any, Iterable, Mapping, Sequence, TextIO
+from typing import Any, Callable, Iterable, Mapping, Sequence, TextIO
 
 from src.research_lab.archive_catalog import ArchiveCatalog, ArchiveCatalogError
 from src.research_lab.private_archive_capability import (
@@ -58,6 +58,23 @@ def _replace_with_bounded_retry(source: Path, target: Path) -> None:
             time.sleep(_WINDOWS_REPLACE_RETRY_DELAYS[attempt])
 
 
+def _snapshot_lock_path(target: Path) -> Path:
+    return target.with_suffix(target.suffix + ".lock")
+
+
+def _ensure_snapshot_lock_file(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return
+    try:
+        os.write(descriptor, b"0")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 SCHEMA = "RuntimeStorageCapability.v1"
 AUTHORITY_SCHEMA = "RuntimeStorageOwnerAuthority.v1"
 POLICY_ID = "runtime_storage_rotation.v1"
@@ -69,6 +86,138 @@ _STREAM = re.compile(r"[a-z][a-z0-9_.]{2,95}")
 
 class RuntimeStorageError(RuntimeError):
     """The runtime-storage capability or a coordinated mutation is unsafe."""
+
+
+def _snapshot_bytes(payload: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def _write_bounded_rebuildable_snapshot_locked(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    max_bytes: int,
+) -> dict[str, Any]:
+    target = Path(path)
+    budget = int(max_bytes)
+    if budget <= 0:
+        raise RuntimeStorageError("rebuildable snapshot budget must be positive")
+    encoded = _snapshot_bytes(payload)
+    size = len(encoded)
+    if size > budget:
+        raise RuntimeStorageError("rebuildable snapshot exceeds its bounded budget")
+    digest = hashlib.sha256(encoded).hexdigest()
+    digest_path = target.with_suffix(target.suffix + ".sha256")
+    if target.exists() and is_link_or_reparse(target):
+        raise RuntimeStorageError("rebuildable snapshot target is unsafe")
+    if digest_path.exists() and is_link_or_reparse(digest_path):
+        raise RuntimeStorageError("rebuildable snapshot digest target is unsafe")
+    try:
+        stat = target.stat()
+        target_bytes = target.read_bytes()
+        target_digest = hashlib.sha256(target_bytes).hexdigest()
+        recorded_digest, recorded_size, recorded_mtime = digest_path.read_text(
+            encoding="ascii"
+        ).strip().split()
+        unchanged = bool(
+            target_bytes == encoded
+            and stat.st_size == size
+            and target_digest == digest
+            and recorded_digest == digest
+            and int(recorded_size) == size
+            and int(recorded_mtime) == stat.st_mtime_ns
+        )
+    except (OSError, ValueError):
+        unchanged = False
+    if unchanged:
+        return {"changed": False, "bytes": size, "sha256": digest}
+
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    sidecar_temporary = digest_path.with_name(
+        f".{digest_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        if not target.exists() or target.read_bytes() != encoded:
+            with temporary.open("xb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            _replace_with_bounded_retry(temporary, target)
+        committed = target.read_bytes()
+        committed_digest = hashlib.sha256(committed).hexdigest()
+        if committed_digest != digest or committed != encoded:
+            raise RuntimeStorageError("rebuildable snapshot target digest mismatch")
+        expected_sidecar = f"{committed_digest} {len(committed)} {target.stat().st_mtime_ns}\n"
+        with sidecar_temporary.open("x", encoding="ascii", newline="\n") as stream:
+            stream.write(expected_sidecar)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _replace_with_bounded_retry(sidecar_temporary, digest_path)
+        if digest_path.read_text(encoding="ascii") != expected_sidecar:
+            raise RuntimeStorageError("rebuildable snapshot sidecar mismatch")
+    finally:
+        temporary.unlink(missing_ok=True)
+        sidecar_temporary.unlink(missing_ok=True)
+    return {"changed": True, "bytes": size, "sha256": digest}
+
+
+def write_bounded_rebuildable_snapshot(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Publish one byte-bounded snapshot and digest under a target OS lock.
+
+    The target bytes are re-hashed while the lock is held.  Cooperative writers
+    therefore cannot accept a stale size/mtime sidecar or interleave payload and
+    sidecar replacement.  Interrupted temporary files are removed before return.
+    """
+
+    target = Path(path)
+    lock_path = _snapshot_lock_path(target)
+    _ensure_snapshot_lock_file(lock_path)
+    try:
+        with storage_root_lock(lock_path, wait_seconds=5.0):
+            return _write_bounded_rebuildable_snapshot_locked(
+                target, payload, max_bytes=max_bytes
+            )
+    except StorageLockConflict as exc:
+        raise RuntimeStorageError("rebuildable snapshot lock is unavailable") from exc
+
+
+def update_bounded_rebuildable_snapshot(
+    path: Path,
+    update: Callable[[Mapping[str, Any] | None], Mapping[str, Any]],
+    *,
+    max_bytes: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Atomically read, update and publish one rebuildable JSON snapshot."""
+
+    target = Path(path)
+    lock_path = _snapshot_lock_path(target)
+    _ensure_snapshot_lock_file(lock_path)
+    try:
+        with storage_root_lock(lock_path, wait_seconds=5.0):
+            current: Mapping[str, Any] | None = None
+            if target.exists():
+                if is_link_or_reparse(target):
+                    raise RuntimeStorageError("rebuildable snapshot target is unsafe")
+                try:
+                    loaded = json.loads(target.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    loaded = None
+                if isinstance(loaded, Mapping):
+                    current = loaded
+            payload = dict(update(current))
+            result = _write_bounded_rebuildable_snapshot_locked(
+                target, payload, max_bytes=max_bytes
+            )
+            return payload, result
+    except StorageLockConflict as exc:
+        raise RuntimeStorageError("rebuildable snapshot lock is unavailable") from exc
 
 
 @dataclass(frozen=True)

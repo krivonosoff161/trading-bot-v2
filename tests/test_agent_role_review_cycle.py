@@ -8,6 +8,7 @@ from scripts.strategy_lab import agent_role_review_cycle
 from scripts.strategy_lab.agent_role_review_cycle import run_cycle
 from src.research_lab.llm_provider import LLMUsage
 from src.research_lab.llm_role_reviews import LOCAL_OUTCOME_REVIEW_PROMPT, request_role_review
+from src.research_lab.system_analyst_cycle import outcome_review_source_binding
 
 
 @pytest.fixture(autouse=True)
@@ -240,6 +241,53 @@ def test_agent_role_review_cycle_prefers_unreviewed_training_rows(monkeypatch, t
     assert new_refs == ["training_2", "training_3"]
 
 
+def test_outcome_review_dedup_is_bound_to_current_training_content(tmp_path):
+    current = {
+        "training_row_id": "training_bound",
+        "paper_generation_run_id": "paper-run-current",
+        "terminal_lifecycle_event_id": "terminal-event-current",
+        "diagnosis": "current",
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    review_path = tmp_path / "state" / "llm_advice" / "outcome_reviews.jsonl"
+    _write_jsonl(
+        review_path,
+        [
+            {
+                "review_id": "review_stale",
+                "role_id": "outcome_reviewer",
+                "source_ref": current["training_row_id"],
+                "source_binding": {
+                    **outcome_review_source_binding(current),
+                    "source_content_sha256": "stale-content",
+                },
+                "accepted": True,
+            }
+        ],
+    )
+
+    assert agent_role_review_cycle._unreviewed_training_rows(
+        tmp_path, [current], limit=1
+    ) == [current]
+
+    _write_jsonl(
+        review_path,
+        [
+            {
+                "review_id": "review_current",
+                "role_id": "outcome_reviewer",
+                "source_ref": current["training_row_id"],
+                "source_binding": outcome_review_source_binding(current),
+                "accepted": True,
+            }
+        ],
+    )
+    assert agent_role_review_cycle._unreviewed_training_rows(
+        tmp_path, [current], limit=1
+    ) == []
+
+
 def test_agent_role_cycle_skips_exhausted_item_and_advances(monkeypatch, tmp_path):
     rows = []
     for index in range(4):
@@ -351,12 +399,25 @@ def test_local_outcome_review_uses_compact_contract(tmp_path):
             assert "counterfactual_tests" not in system
             return super().generate(system, user)
 
+    source_binding = {
+        "paper_generation_run_id": "paper-run-current",
+        "terminal_lifecycle_event_id": "terminal-event-current",
+        "source_content_sha256": "synthetic-content-hash",
+    }
     review = request_role_review(
         tmp_path,
         role_id="outcome_reviewer",
         source_ref="training-local",
         source_payload={"schema": "OutcomeLearningCase.v1"},
         provider=LocalProvider(),
+        source_binding=source_binding,
     )
 
     assert review.accepted is True
+    assert review.source_binding == source_binding
+    persisted = json.loads(
+        (
+            tmp_path / "state" / "llm_advice" / "outcome_reviews.jsonl"
+        ).read_text(encoding="utf-8")
+    )
+    assert persisted["source_binding"] == source_binding

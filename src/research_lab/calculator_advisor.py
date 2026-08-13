@@ -21,10 +21,21 @@ from src.research_lab.llm_invocation_ledger import preflight_invocation, record_
 SCHEMA = "CalculatorAdvice.v1"
 PROMPT_VERSION = "calculator_advisor_v2_feature_packet_json"
 MAX_ADVICE_INDEX_BYTES = 8 * 1024 * 1024
+MAX_USER_FACING_ANALYSIS_CHARS = 320
+PUBLIC_ANALYSIS_STATEMENTS = frozenset(
+    {
+        "Trend context remains uncertain and requires deterministic confirmation.",
+        "Range context remains uncertain and requires deterministic confirmation.",
+        "Volatility context remains uncertain and requires deterministic confirmation.",
+        "Regime context is mixed and requires deterministic confirmation.",
+        "Data context is incomplete and requires deterministic confirmation.",
+    }
+)
 
 ALLOWED_KEYS = {
     "situation_class",
     "advisory_reason",
+    "user_facing_analysis",
     "rejection_reason",
     "missing_data",
     "sweep_suggestions",
@@ -59,7 +70,11 @@ ALIASES = {
 SYSTEM_PROMPT = (
     "You are Strategy Lab Calculator, a bounded research advisor. "
     "Return JSON only. You may classify the feature packet, explain missing data, "
-    "and suggest bounded sweep dimensions. Use only these sweep_suggestions "
+    "and suggest bounded sweep dimensions. Include user_facing_analysis as one "
+    "paper-only preview by selecting exactly one of these approved statements: "
+    + " | ".join(sorted(PUBLIC_ANALYSIS_STATEMENTS))
+    + ". Do not create or modify the statement. "
+    "Use only these sweep_suggestions "
     "dimensions: entry_timing, stop, take_profit, hold, trailing, timeframe, "
     "family, regime_filter. Do not output indicator names such as RSI_14, "
     "ATR_14, volume_spike, or concrete numeric thresholds as sweep dimensions; "
@@ -189,6 +204,21 @@ def validate_advice_payload(payload: dict[str, Any]) -> tuple[bool, list[str]]:
     warnings = payload.get("warnings")
     if warnings is not None and not isinstance(warnings, list):
         problems.append("warnings must be a list")
+    public_analysis = payload.get("user_facing_analysis")
+    if public_analysis is not None and not isinstance(public_analysis, str):
+        problems.append("user_facing_analysis must be a string")
+    if isinstance(public_analysis, str) and (
+        not public_analysis.strip()
+        or len(public_analysis.strip()) > MAX_USER_FACING_ANALYSIS_CHARS
+    ):
+        problems.append("user_facing_analysis must be 1..320 characters")
+    if isinstance(public_analysis, str) and (
+        public_analysis.strip() not in PUBLIC_ANALYSIS_STATEMENTS
+    ):
+        # Do not echo model text in diagnostics.  Public prose is a finite
+        # model-selected enum, not free-form output, so no language/encoding
+        # variant can smuggle levels, direction or order instructions.
+        problems.append("user_facing_analysis is not an approved statement")
     return (not problems, list(dict.fromkeys(problems)))
 
 

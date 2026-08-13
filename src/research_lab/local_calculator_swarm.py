@@ -11,6 +11,7 @@ from typing import Any
 from src.research_lab.agent_role_registry import role_by_id, validate_role_payload
 from src.research_lab.calculator_advisor import (
     CalculatorAdvice,
+    PUBLIC_ANALYSIS_STATEMENTS,
     advice_path,
     normalize_advice_payload,
     validate_advice_payload,
@@ -36,9 +37,13 @@ PASS_SPECS = (
     (
         "calculator_hypothesis_proposer",
         "Return exactly one JSON object and no prose. Exact shape: "
-        '{"advisory_reason":"short reason","sweep_suggestions":["hold"],"confidence":0.0,"warnings":[]}. '
+        '{"advisory_reason":"short reason","user_facing_analysis":"approved '
+        'statement","sweep_suggestions":["hold"],"confidence":0.0,"warnings":[]}. '
+        "user_facing_analysis must be exactly one of: "
+        + " | ".join(sorted(PUBLIC_ANALYSIS_STATEMENTS))
+        + ". Do not create or modify the statement. "
         "Suggestions may only be entry_timing, stop, take_profit, hold, trailing, timeframe, family, "
-        "regime_filter. Use only these four keys. Never output numeric trade levels or a direction.",
+        "regime_filter. Use only these five keys. Never output numeric trade levels or a direction.",
     ),
     (
         "calculator_hypothesis_critic",

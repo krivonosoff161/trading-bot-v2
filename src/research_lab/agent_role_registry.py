@@ -91,6 +91,7 @@ def role_contracts() -> tuple[AgentRoleContract, ...]:
             allowed_fields=(
                 "situation_class",
                 "advisory_reason",
+                "user_facing_analysis",
                 "rejection_reason",
                 "missing_data",
                 "sweep_suggestions",
@@ -122,7 +123,13 @@ def role_contracts() -> tuple[AgentRoleContract, ...]:
             model_hint="calculator",
             input_contract="DecisionFeaturePacket.v1 + CalculatorContextPass.v1",
             output_contract="CalculatorHypothesisPass.v1",
-            allowed_fields=("advisory_reason", "sweep_suggestions", "confidence", "warnings"),
+            allowed_fields=(
+                "advisory_reason",
+                "user_facing_analysis",
+                "sweep_suggestions",
+                "confidence",
+                "warnings",
+            ),
             forbidden_fields=CRITICAL_FORBIDDEN_FIELDS,
             private_log_label="strategy-lab/state/llm_advice/calculator_swarm.jsonl",
             max_calls_per_cycle=1,

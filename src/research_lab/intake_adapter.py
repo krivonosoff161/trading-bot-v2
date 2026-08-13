@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+from collections.abc import Iterable
 from typing import Any
 
 from src.research_lab.data_readiness_selector import timeframes_for_asset_class
@@ -104,18 +105,63 @@ def watch_to_intake(watch: dict[str, Any], *, window_seconds: int = DEFAULT_WIND
     }
 
 
-def watches_to_intake(watches: list[dict[str, Any]], *,
-                      window_seconds: int = DEFAULT_WINDOW_SECONDS) -> list[dict[str, Any]]:
-    """Normalize + in-batch dedup a list of watches into intake events."""
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for watch in watches:
+def watches_to_intake(
+    watches: list[dict[str, Any]],
+    *,
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    known_event_ids: Iterable[str] | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize and select bounded, not-yet-ingested watch events.
+
+    ``known_event_ids`` is deliberately supplied by the caller: this pure adapter
+    does not open the farm database.  Filtering happens before ``limit`` so a
+    long prefix of still-open, already-ingested scanner watches cannot hide a
+    fresh event.  Within one dedup window the newest representation wins; the
+    final ordering follows farm priority and alternates newest/oldest unseen
+    rows so current-market freshness cannot starve bounded FIFO debt.
+    """
+    if limit is not None and limit <= 0:
+        return []
+
+    known = {str(item) for item in (known_event_ids or ()) if str(item)}
+    selected: dict[str, tuple[int, dict[str, Any]]] = {}
+    for position, watch in enumerate(watches):
         event = watch_to_intake(watch, window_seconds=window_seconds)
-        if event is None or event["event_id"] in seen:
+        if event is None:
             continue
-        seen.add(event["event_id"])
-        out.append(event)
-    return out
+        identity = str(event["event_id"])
+        if identity in known:
+            continue
+        prior = selected.get(identity)
+        if prior is None or float(event["observed_at"]) > float(prior[1]["observed_at"]):
+            selected[identity] = (position, event)
+
+    by_priority: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+    for item in selected.values():
+        by_priority.setdefault(int(item[1]["priority"]), []).append(item)
+    ordered: list[tuple[int, dict[str, Any]]] = []
+    for priority in sorted(by_priority):
+        lane = sorted(
+            by_priority[priority],
+            key=lambda item: (
+                float(item[1]["observed_at"]),
+                item[0],
+                str(item[1]["event_id"]),
+            ),
+        )
+        left, right = 0, len(lane) - 1
+        prefer_fresh = True
+        while left <= right:
+            if prefer_fresh:
+                ordered.append(lane[right])
+                right -= 1
+            else:
+                ordered.append(lane[left])
+                left += 1
+            prefer_fresh = not prefer_fresh
+    events = [event for _, event in ordered]
+    return events if limit is None else events[:limit]
 
 
 def discovery_intake_events(snapshot: dict[str, Any], *, covered: set[str] | None = None,

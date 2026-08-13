@@ -26,7 +26,10 @@ def _steady_report(*, waiting: bool) -> dict[str, object]:
             "scanner": {"current_run": True},
             "farm": {
                 "current_run": True,
-                "metrics": {"paper_generation_waiting": waiting},
+                "metrics": {
+                    "paper_generation_waiting": waiting,
+                    "validation_generation_started_at": 100.0 if waiting else 0.0,
+                },
             },
         },
         "paper_only": True,
@@ -259,6 +262,7 @@ def test_green_t0_transition_accepts_new_bounded_generation_in_progress(
             "validation_backlog_slo_seconds": 3600.0,
             "generation_consistent": False,
             "paper_generation_waiting": True,
+            "validation_generation_started_at": 102.5,
             "product_cycle_complete": True,
             "operational_rows_retained": 0,
         },
@@ -630,6 +634,173 @@ def test_validation_generation_and_training_invariants_fail_closed(
         "paper_generation_stage_mismatch",
         "technical_outcome_entered_training",
     }
+
+
+def test_unrelated_progress_cannot_extend_pending_generation_forever(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="waiting",
+        metrics={
+            "validation_oldest_age_seconds": 0.0,
+            "validation_backlog_slo_seconds": 3600.0,
+            "generation_consistent": False,
+            "paper_generation_waiting": True,
+            "validation_generation_started_at": 102.0,
+            "product_cycle_complete": True,
+            "operational_rows_retained": 0,
+        },
+        completed_at=103.0,
+    )
+    publish_checkpoint(
+        tmp_path,
+        component="farm_progress",
+        sequence=99,
+        status="progress",
+        metrics={
+            "stage": "setup_outcome_memory_refresh",
+            "milestone": "real_chunk_completed",
+        },
+        completed_at=801.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        slo=ProductProgressSlo(
+            scanner_seconds=900.0,
+            farm_seconds=300.0,
+            validation_generation_transition_seconds=600.0,
+        ),
+        wall_clock=lambda: 802.1,
+    ).sample()
+
+    assert "validation_generation_transition_timeout" in report["hard_fail_reasons"]
+    assert assess_post_t0_product_progress(report).state == "failed"
+
+
+def test_stable_current_generation_does_not_hide_stalled_successor_build(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="completed",
+        metrics={
+            "validation_oldest_age_seconds": 0.0,
+            "validation_backlog_slo_seconds": 3600.0,
+            "generation_consistent": True,
+            "validation_generation_build_active": True,
+            "validation_generation_build_started_at": 102.0,
+            "operational_rows_retained": 0,
+        },
+        completed_at=700.0,
+    )
+
+    healthy_build = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 701.0,
+    ).sample()
+    stalled_build = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 703.0,
+    ).sample()
+
+    assert healthy_build["state"] == "degraded"
+    assert healthy_build["hard_fail_reasons"] == []
+    assert "validation_generation_build_timeout" in stalled_build[
+        "hard_fail_reasons"
+    ]
+
+
+def test_monitor_exposes_scanner_intake_and_validation_backlog_latency(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="completed",
+        metrics={
+            "scanner_uningested_remaining": 4,
+            "scanner_oldest_uningested_age_seconds": 901.0,
+            "validation_oldest_age_seconds": 3601.0,
+            "validation_backlog_slo_seconds": 3600.0,
+            "generation_consistent": True,
+            "operational_rows_retained": 0,
+        },
+        completed_at=102.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert set(report["hard_fail_reasons"]) == {
+        "scanner_intake_latency_slo_exceeded",
+        "validation_backlog_slo_exceeded",
+    }
+
+
+def test_current_zero_backlog_does_not_fall_back_to_stale_cycle_counters() -> None:
+    from src.research_lab.product_progress import farm_metrics
+
+    metrics = farm_metrics({
+        "counters": {
+            "validation": {
+                "active": 9,
+                "eligible": 8,
+                "oldest_age_seconds": 7200.0,
+            }
+        },
+        "validation_backlog": {
+            "active": 0,
+            "eligible": 0,
+            "oldest_age_seconds": 0.0,
+            "backlog_slo_seconds": 3600.0,
+        },
+    })
+
+    assert metrics["validation_active"] == 0
+    assert metrics["validation_eligible"] == 0
+    assert metrics["validation_oldest_age_seconds"] == 0.0
+
+
+def test_real_progress_does_not_hide_unbounded_product_cycle(tmp_path: Path) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    publish_checkpoint(
+        tmp_path,
+        component="farm_progress",
+        sequence=5,
+        status="progress",
+        metrics={"stage": "memory", "milestone": "real_chunk_completed"},
+        completed_at=2001.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        slo=ProductProgressSlo(
+            scanner_seconds=3000.0,
+            farm_seconds=300.0,
+            farm_cycle_max_seconds=1800.0,
+        ),
+        wall_clock=lambda: 2002.0,
+    ).sample()
+
+    assert "farm_product_progress_stale" not in report["hard_fail_reasons"]
+    assert "farm_product_cycle_timeout" in report["hard_fail_reasons"]
 
 
 def test_checkpoint_rejects_sensitive_or_nested_metrics(tmp_path: Path) -> None:
@@ -1044,7 +1215,7 @@ def test_product_monitor_hard_fails_completed_paper_pipeline_cycle_error(
     assert report["hard_fail_reasons"] == ["paper_pipeline_cycle_failed"]
 
 
-def test_validation_generation_waiting_is_starting_not_stage_mismatch(
+def test_code_stale_validation_generation_fails_closed(
     tmp_path: Path,
 ) -> None:
     publish_checkpoint(
@@ -1087,8 +1258,8 @@ def test_validation_generation_waiting_is_starting_not_stage_mismatch(
     ).sample()
 
     assert report["ready"] is False
-    assert report["state"] == "starting"
-    assert report["hard_fail_reasons"] == []
+    assert report["state"] == "failed"
+    assert report["hard_fail_reasons"] == ["validation_generation_code_stale"]
     assert metrics["paper_generation_waiting"] is True
     assert metrics["validation_generation_status"] == "code_stale"
 
