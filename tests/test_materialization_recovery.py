@@ -187,6 +187,8 @@ def test_recovery_rejects_plan_digest_and_task_scope_drift(tmp_path) -> None:
             expected_plan_digest=plan["plan_digest"],
             now=106.0,
         )
+
+
 def test_cli_quiescence_allows_exact_before_and_zero_running_after(monkeypatch) -> None:
     class Cursor:
         def __init__(self, rows):
