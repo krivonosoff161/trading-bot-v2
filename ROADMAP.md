@@ -16,35 +16,24 @@ dependency, not by a route to live trading.
 
 ## In Review On The Task Branch
 
-The unmerged `codex/product-liveness-e2e-repair` branch is an implementation
-candidate, not a completed or authoritative portfolio state. It is expected to
-pass exact-head review before any item below moves into **Completed**:
+The unmerged `codex/stale-materialization-recovery` branch is a narrow recovery
+candidate, not an authoritative operational capability. It must prove that an
+expired run-sweep whose exact compute materialization is already durable can be
+adopted without requeue, fence advance, or a second queue/outbox/materialization
+effect. Its hash-bound plan must fail closed on task, outbox, digest, status or
+queue-binding drift, and a second exact apply must change zero rows.
 
-1. Filter already-ingested scanner event identities before bounded intake, then
-   order eligible events by canonical priority and freshness.
-2. Interleave a durable bounded fresh-validation slot with FIFO backlog service,
-   keeping fairness cursor advancement and task claim atomic.
-3. Separate successor-generation staging from completed current validation
-   authority; promote only a complete verified successor and retain fail-closed
-   first-publication behavior.
-4. Bind paper suppression and learning to exact setup identity, including the
-   parameter hash, instead of applying symbol-wide exclusions.
-5. Offer a bounded current-generation calculator advisory before preview and
-   delivery, with explicit deterministic fallback and unchanged authority.
-6. Monitor real scanner-intake, backlog, staging, and generation-transition
-   latency rather than inferring product health from PIDs or a stable previous
-   generation.
-7. Publish large rebuildable derived snapshots atomically under a byte budget,
-   avoid rewriting identical content, and retain deterministic rebuildability.
-8. Prove the joined production path with deterministic synthetic E2E and replay
-   tests, not only adjacent unit and artifact-presence checks.
-
-Exit gate: focused adversarial tests, deterministic E2E, full non-live tests,
-repository guards, clean exact-head review, and synchronized machine/human
-documentation. Runtime evidence remains a later separately authorized gate.
+Exit gate: focused crash/fence/replay tests, lifecycle and integration regression,
+full non-live tests, repository guards, clean exact-head review, synchronized
+documentation, and a separate merge decision. Applying the disposition and
+starting runtime remain later operational gates.
 
 ## Completed
 
+- PR #277 integrated bounded scanner intake fairness, validation freshness and
+  stable-generation publication, exact paper identity, pre-delivery advisory
+  fallback, truthful product monitoring, bounded rebuildable snapshots and a
+  deterministic production-chain E2E/replay proof.
 - Public market/news ingestion, bounded experiment records, deterministic
   simulation contracts, independent validation bridge, fenced candidate
   lifecycle, paper observation, advisory model boundaries, and guarded paper

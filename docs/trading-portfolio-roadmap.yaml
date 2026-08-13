@@ -11,40 +11,25 @@ verified_against:
   trading-bot-v2: 5a397edfb2787f51fdac12ef5f983a894b78a2a2
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/product-liveness-e2e-repair
+  branch: codex/stale-materialization-recovery
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: 633ddb9612f013681bbc941af65c9e025c2fa8fd
+  baseline_revision: dc4d6db71fc12abde330b10d9a78258e2b0084e6
   scope:
-    - scanner_intake_known_identity_filter_before_bound
-    - scanner_intake_priority_and_freshness_selection
-    - validation_bounded_fresh_and_fifo_fairness
-    - validation_staging_separate_from_current_authority
-    - exact_paper_memory_setup_identity
-    - bounded_pre_delivery_advisor_with_deterministic_fallback
-    - truthful_product_latency_monitoring
-    - bounded_rebuildable_derived_snapshots
-    - deterministic_product_e2e_and_replay_proof
+    - hash_bound_expired_materialization_recovery
+    - preserve_existing_compute_queue_binding
+    - no_duplicate_outbox_materialization_or_compute_effect
+    - exact_task_fence_and_mutation_sequence_cas
+    - idempotent_second_apply
   evidence:
-    - src/research_lab/intake_adapter.py
     - src/research_lab/farm_tasks_db.py
-    - src/research_lab/validation_generation.py
-    - src/research_lab/validation_orchestrator.py
-    - src/research_lab/paper_signals/cycle.py
-    - src/research_lab/paper_signals/lane.py
-    - src/research_lab/paper_telegram_preview.py
-    - src/research_lab/product_progress.py
-    - src/research_lab/runtime_storage_rotation.py
-    - tests/test_intake_adapter_selection.py
-    - tests/test_validation_task_disposition.py
-    - tests/test_validation_generation.py
-    - tests/test_pre_delivery_advisor_order.py
-    - tests/test_product_progress.py
-    - tests/test_rebuildable_snapshot_lifecycle.py
-  promotion_gate: exact-head review, deterministic E2E, full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: separate owner-authorized paper-only operational proof after merge
+    - src/research_lab/materialization_recovery.py
+    - scripts/strategy_lab/materialization_recovery.py
+    - tests/test_materialization_recovery.py
+  promotion_gate: exact-head review, crash and fencing tests, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  runtime_gate: exact task disposition, Paper Evidence v2 rebind, and owner-authorized paper-only operational proof after merge
 authority_values:
   - none
   - advisory
