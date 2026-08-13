@@ -41,7 +41,6 @@ from src.research_lab.storage_os_lock import StorageLockConflict, storage_root_l
 
 
 _WINDOWS_REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
-_SNAPSHOT_LOCK_WAIT_SECONDS = 15.0
 
 
 def _replace_with_bounded_retry(source: Path, target: Path) -> None:
@@ -65,15 +64,24 @@ def _snapshot_lock_path(target: Path) -> Path:
 
 def _ensure_snapshot_lock_file(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(
+        f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.init"
+    )
+    descriptor = None
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        return
-    try:
+        descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.write(descriptor, b"0")
         os.fsync(descriptor)
-    finally:
         os.close(descriptor)
+        descriptor = None
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 SCHEMA = "RuntimeStorageCapability.v1"
@@ -181,7 +189,7 @@ def write_bounded_rebuildable_snapshot(
     lock_path = _snapshot_lock_path(target)
     _ensure_snapshot_lock_file(lock_path)
     try:
-        with storage_root_lock(lock_path, wait_seconds=_SNAPSHOT_LOCK_WAIT_SECONDS):
+        with storage_root_lock(lock_path, wait_seconds=5.0):
             return _write_bounded_rebuildable_snapshot_locked(
                 target, payload, max_bytes=max_bytes
             )
@@ -201,7 +209,7 @@ def update_bounded_rebuildable_snapshot(
     lock_path = _snapshot_lock_path(target)
     _ensure_snapshot_lock_file(lock_path)
     try:
-        with storage_root_lock(lock_path, wait_seconds=_SNAPSHOT_LOCK_WAIT_SECONDS):
+        with storage_root_lock(lock_path, wait_seconds=5.0):
             current: Mapping[str, Any] | None = None
             if target.exists():
                 if is_link_or_reparse(target):

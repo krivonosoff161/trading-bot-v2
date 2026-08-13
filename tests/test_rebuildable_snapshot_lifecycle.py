@@ -4,11 +4,13 @@ import json
 import hashlib
 import multiprocessing
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from src.research_lab import paper_telegram_preview
+from src.research_lab import runtime_storage_rotation
 from src.research_lab.paper_signals.training_export import _card_refs_from_snapshot
 from src.research_lab.paper_telegram_preview import (
     PaperTelegramPreview,
@@ -84,6 +86,46 @@ def test_same_size_external_snapshot_change_is_repaired(tmp_path) -> None:
 
     assert repaired["changed"] is True
     assert path.read_bytes() == original
+
+
+def test_snapshot_lock_is_not_visible_until_initialization_is_durable(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "snapshot.json"
+    lock_path = path.with_suffix(".json.lock")
+    write_started = threading.Event()
+    release_write = threading.Event()
+    real_write = runtime_storage_rotation.os.write
+
+    def delayed_write(descriptor: int, payload: bytes) -> int:
+        if payload == b"0":
+            write_started.set()
+            assert release_write.wait(timeout=5)
+        return real_write(descriptor, payload)
+
+    monkeypatch.setattr(runtime_storage_rotation.os, "write", delayed_write)
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            write_bounded_rebuildable_snapshot(
+                path, {"schema": "SyntheticDerived.v1"}, max_bytes=4096
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    assert write_started.wait(timeout=5)
+    time.sleep(0.05)
+    assert not lock_path.exists()
+    release_write.set()
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert lock_path.read_bytes() == b"0"
+    assert list(tmp_path.glob(".*.init")) == []
 
 
 def test_corrupt_sidecar_is_repaired_from_rehashed_target_without_payload_rewrite(
@@ -166,7 +208,7 @@ def test_card_ledger_concurrent_read_modify_write_loses_no_card(tmp_path) -> Non
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=30)
+        thread.join(timeout=10)
 
     assert errors == []
     path = tmp_path / "state" / "derived" / "paper_telegram_card_ledger.json"
