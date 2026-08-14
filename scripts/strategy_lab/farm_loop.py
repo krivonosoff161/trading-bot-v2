@@ -2436,6 +2436,31 @@ def _run_validation_maintenance(
     backlog_slo_seconds = max(
         1.0, float(getattr(args, "validation_backlog_slo_seconds", 3600.0))
     )
+    from src.research_lab.validation_generation import (
+        current_generation_manifest_status,
+        pending_generation_manifest_status,
+        validation_producer_code_digest,
+    )
+
+    producer_code_digest = validation_producer_code_digest()
+    generation_status_at_start = current_generation_manifest_status(private_root)
+    successor_build_started_at = 0.0
+    if generation_status_at_start == "code_stale":
+        prior_digest = str(
+            getattr(args, "_validation_successor_code_digest", "") or ""
+        )
+        prior_started_at = float(
+            getattr(args, "_validation_successor_build_started_at", 0.0) or 0.0
+        )
+        if prior_digest == producer_code_digest and prior_started_at > 0.0:
+            successor_build_started_at = prior_started_at
+        else:
+            successor_build_started_at = float(cycle_started_at)
+            args._validation_successor_build_started_at = successor_build_started_at
+            args._validation_successor_code_digest = producer_code_digest
+    else:
+        args._validation_successor_build_started_at = 0.0
+        args._validation_successor_code_digest = ""
 
     def backlog_snapshot() -> dict[str, Any]:
         metrics = getattr(tasks, "validation_backlog_metrics", None)
@@ -2513,6 +2538,19 @@ def _run_validation_maintenance(
             from src.research_lab.product_progress import publish_checkpoint
 
             completed_at = time.time()
+            successor_metrics: dict[str, Any] = {}
+            if successor_build_started_at > 0.0:
+                pending_status = pending_generation_manifest_status(private_root)
+                successor_metrics = {
+                    "successor_build_phase": (
+                        "pending_marker"
+                        if pending_status == "code_current"
+                        else "pre_marker"
+                    ),
+                    "successor_build_started_at": successor_build_started_at,
+                    "successor_code_digest": producer_code_digest,
+                    "successor_marker_code_status": pending_status,
+                }
             publish_checkpoint(
                 private_root,
                 component="validation_progress",
@@ -2523,6 +2561,7 @@ def _run_validation_maintenance(
                     "milestone": str(milestone)[:80],
                     "completed": int(completed),
                     "total": int(total),
+                    **successor_metrics,
                     "validation_active": int(backlog.get("active") or 0),
                     "validation_eligible": int(backlog.get("eligible") or 0),
                     "validation_fresh_eligible": int(

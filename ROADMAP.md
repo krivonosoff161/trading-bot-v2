@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-14
-- Verified against: `e03502ddd484234c64ccb1d51b56c8397789b55f`
+- Verified against: `4ebc07146c6d85fa5cd9056f9ee910b0e142840a`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -16,21 +16,20 @@ dependency, not by a route to live trading.
 
 ## In Review On The Task Branch
 
-The unmerged `codex/validation-debt-monitor-repair` branch is a bounded monitor
-repair candidate, not an operational capability. It must prove that an existing
-historical eligible validation backlog cannot block T+0 by age alone, while
-recent-task latency, a wrong-revision successor, stale progress and the existing
-generation deadline still fail closed. Historical zero service/non-positive net
-drain is degraded in its isolated research lane rather than a global product
-stop. Historical verdicts update setup memory and bounded validator review but
-cannot publish current product authority. Priority validation may publish
-liveness only after a real completed milestone; a starting marker or unrelated
-farm progress is insufficient.
+The unmerged `codex/validation-generation-startup-race-repair` branch is a
+bounded startup-monitor repair candidate, not an operational capability. It
+must prove that exact-current validation request preparation may remain in a
+pre-marker state only while real completed validation milestones stay fresh and
+one immutable process-local deadline remains open. Another code digest, a
+pre-run attempt, stale or unrelated progress, and timeout still fail closed.
+The candidate does not publish a pending generation before the task batch is
+known to contain fresh eligible product work and does not let repeated priority
+slots reset the deadline.
 
 Exit gate: focused product-progress and generation tests, lifecycle/fencing and
 integration regression, full non-live tests, repository guards, clean exact-head
-review, synchronized documentation, and a separate merge decision. Task 38065,
-runtime and Paper v2 rebind remain later operational gates.
+review, synchronized documentation, and a separate merge decision. Runtime and
+Paper v2 rebind remain later operational gates.
 
 ## Completed
 

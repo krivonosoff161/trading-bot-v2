@@ -188,6 +188,18 @@ def _producer_code_manifest() -> dict[str, str]:
     return {path.relative_to(root).as_posix(): _sha256(path) for path in paths}
 
 
+def validation_producer_code_digest() -> str:
+    """Return a public-safe identity for the exact validation producer bytes."""
+
+    encoded = json.dumps(
+        _producer_code_manifest(),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _task_inputs(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for task in tasks:

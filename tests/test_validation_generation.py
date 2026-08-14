@@ -553,3 +553,11 @@ def test_manifest_status_does_not_scan_active_artifact_chains(monkeypatch, tmp_p
     )
 
     assert generation.current_generation_manifest_status(tmp_path) == "code_current"
+
+
+def test_validation_producer_code_digest_is_stable_public_identity() -> None:
+    digest = generation.validation_producer_code_digest()
+
+    assert len(digest) == 64
+    assert digest == generation.validation_producer_code_digest()
+    assert set(digest) <= set("0123456789abcdef")
