@@ -630,7 +630,6 @@ def test_validation_generation_and_training_invariants_fail_closed(
     ).sample()["hard_fail_reasons"]
 
     assert set(reasons) == {
-        "validation_backlog_slo_exceeded",
         "paper_generation_stage_mismatch",
         "technical_outcome_entered_training",
     }
@@ -747,10 +746,125 @@ def test_monitor_exposes_scanner_intake_and_validation_backlog_latency(
         wall_clock=lambda: 103.0,
     ).sample()
 
-    assert set(report["hard_fail_reasons"]) == {
-        "scanner_intake_latency_slo_exceeded",
-        "validation_backlog_slo_exceeded",
-    }
+    assert report["hard_fail_reasons"] == [
+        "scanner_intake_latency_slo_exceeded"
+    ]
+    assert "validation_historical_backlog_slo_exceeded" in report[
+        "degraded_reasons"
+    ]
+
+
+def test_historical_validation_debt_with_positive_service_is_degraded_not_failed(
+    tmp_path: Path,
+) -> None:
+    _publish_green(tmp_path, completed_at=4101.0)
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="completed",
+        metrics={
+            "validation_active": 100,
+            "validation_eligible": 100,
+            "validation_oldest_age_seconds": 10_000.0,
+            "validation_backlog_slo_seconds": 3600.0,
+            "validation_arrival_rate_per_hour": 2.0,
+            "validation_service_rate_per_hour": 10.0,
+            "validation_net_drain_rate_per_hour": 8.0,
+            "generation_consistent": True,
+            "operational_rows_retained": 0,
+        },
+        completed_at=4101.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 4102.0,
+    ).sample()
+
+    assert report["ready"] is True
+    assert report["hard_fail_reasons"] == []
+    assert "validation_historical_backlog_slo_exceeded" in report[
+        "degraded_reasons"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("service_rate", "net_drain_rate", "expected"),
+    [
+        (0.0, 0.0, "validation_backlog_service_stalled"),
+        (3.0, 0.0, "validation_backlog_not_draining"),
+        (3.0, -1.0, "validation_backlog_not_draining"),
+    ],
+)
+def test_historical_validation_debt_degrades_after_bounded_non_drain_observation(
+    tmp_path: Path,
+    service_rate: float,
+    net_drain_rate: float,
+    expected: str,
+) -> None:
+    _publish_green(tmp_path, completed_at=4101.0)
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="completed",
+        metrics={
+            "validation_active": 100,
+            "validation_eligible": 100,
+            "validation_oldest_age_seconds": 10_000.0,
+            "validation_backlog_slo_seconds": 3600.0,
+            "validation_arrival_rate_per_hour": 3.0 - net_drain_rate,
+            "validation_service_rate_per_hour": service_rate,
+            "validation_net_drain_rate_per_hour": net_drain_rate,
+            "generation_consistent": True,
+            "operational_rows_retained": 0,
+        },
+        completed_at=4101.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 4102.0,
+    ).sample()
+
+    assert expected in report["degraded_reasons"]
+    assert expected not in report["hard_fail_reasons"]
+    assert report["state"] == "degraded"
+    assert report["ready"] is True
+
+
+def test_fresh_validation_task_latency_still_fails_closed(tmp_path: Path) -> None:
+    _publish_green(tmp_path, completed_at=101.0)
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=2,
+        status="completed",
+        metrics={
+            "validation_active": 20,
+            "validation_eligible": 20,
+            "validation_oldest_age_seconds": 20_000.0,
+            "validation_backlog_slo_seconds": 3600.0,
+            "validation_fresh_eligible": 1,
+            "validation_fresh_oldest_age_seconds": 901.0,
+            "generation_consistent": True,
+            "operational_rows_retained": 0,
+        },
+        completed_at=102.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert report["hard_fail_reasons"] == [
+        "validation_fresh_task_latency_slo_exceeded"
+    ]
 
 
 def test_current_zero_backlog_does_not_fall_back_to_stale_cycle_counters() -> None:
@@ -1262,6 +1376,154 @@ def test_code_stale_validation_generation_fails_closed(
     assert report["hard_fail_reasons"] == ["validation_generation_code_stale"]
     assert metrics["paper_generation_waiting"] is True
     assert metrics["validation_generation_status"] == "code_stale"
+
+
+def _publish_code_stale_successor_build(
+    root: Path,
+    *,
+    build_code_status: str = "code_current",
+    build_started_at: float = 101.0,
+    progress_stage: str = "validation_maintenance",
+    progress_at: float = 102.5,
+) -> None:
+    publish_checkpoint(
+        root,
+        component="scanner",
+        sequence=1,
+        status="idle",
+        metrics=scanner_metrics(
+            inputs=0,
+            fresh=0,
+            cards=0,
+            dropped=0,
+            llm_failures=0,
+            provider_failures=0,
+        ),
+        completed_at=101.0,
+    )
+    metrics = farm_metrics(
+        {
+            "validation_backlog": {
+                "active": 6243,
+                "eligible": 6241,
+                "oldest_age_seconds": 1_332_669.0,
+                "backlog_slo_seconds": 3600.0,
+            },
+            "paper_generation_v2": {
+                "state": "waiting_validation_generation",
+                "validation_generation_status": "code_stale",
+                "validation_generation_started_at": build_started_at,
+                "run_id": "",
+            },
+            "validation_generation_build": {
+                "active": True,
+                "started_at": build_started_at,
+                "code_status": build_code_status,
+            },
+            "mandatory_product_cycle_complete": True,
+        }
+    )
+    publish_checkpoint(
+        root,
+        component="farm",
+        sequence=1,
+        status="waiting",
+        metrics=metrics,
+        completed_at=102.0,
+    )
+    publish_checkpoint(
+        root,
+        component="validation_progress",
+        sequence=1,
+        status="progress",
+        metrics={
+            "stage": progress_stage,
+            "milestone": "requests_exported",
+            "completed": 2,
+            "total": 2,
+        },
+        completed_at=progress_at,
+    )
+
+
+def test_code_stale_generation_allows_exact_current_bounded_successor_build(
+    tmp_path: Path,
+) -> None:
+    _publish_code_stale_successor_build(tmp_path, progress_at=333.0)
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 334.0,
+    ).sample()
+
+    assert report["ready"] is False
+    assert report["hard_fail_reasons"] == []
+    assert "validation_generation_rebuild_in_progress" in report[
+        "degraded_reasons"
+    ]
+    assert report["components"]["validation_progress"][
+        "build_liveness_eligible"
+    ] is True
+
+
+def test_code_stale_generation_rejects_successor_from_another_revision(
+    tmp_path: Path,
+) -> None:
+    _publish_code_stale_successor_build(tmp_path, build_code_status="code_stale")
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert "validation_generation_successor_not_current" in report[
+        "hard_fail_reasons"
+    ]
+
+
+def test_code_stale_generation_rejects_wrong_or_stale_build_progress(
+    tmp_path: Path,
+) -> None:
+    _publish_code_stale_successor_build(
+        tmp_path,
+        progress_stage="setup_outcome_memory_refresh",
+    )
+    wrong_stage = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+    assert "validation_generation_build_progress_stalled" in wrong_stage[
+        "hard_fail_reasons"
+    ]
+
+    _publish_code_stale_successor_build(tmp_path, progress_at=102.0)
+    stale = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 163.0,
+    ).sample()
+    assert "validation_generation_build_progress_stalled" in stale[
+        "hard_fail_reasons"
+    ]
+
+
+def test_code_stale_generation_rejects_pre_run_successor_marker(
+    tmp_path: Path,
+) -> None:
+    _publish_code_stale_successor_build(tmp_path, build_started_at=99.0)
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert "validation_generation_successor_not_current_run" in report[
+        "hard_fail_reasons"
+    ]
 
 
 def test_checkpoint_payload_contains_only_safe_aggregates(tmp_path: Path) -> None:

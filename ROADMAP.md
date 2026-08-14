@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-12
-- Verified against: `5a397edfb2787f51fdac12ef5f983a894b78a2a2`
+- Verified: 2026-08-14
+- Verified against: `e03502ddd484234c64ccb1d51b56c8397789b55f`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -16,20 +16,27 @@ dependency, not by a route to live trading.
 
 ## In Review On The Task Branch
 
-The unmerged `codex/stale-materialization-recovery` branch is a narrow recovery
-candidate, not an authoritative operational capability. It must prove that an
-expired run-sweep whose exact compute materialization is already durable can be
-adopted without requeue, fence advance, or a second queue/outbox/materialization
-effect. Its hash-bound plan must fail closed on task, outbox, digest, status or
-queue-binding drift, and a second exact apply must change zero rows.
+The unmerged `codex/validation-debt-monitor-repair` branch is a bounded monitor
+repair candidate, not an operational capability. It must prove that an existing
+historical eligible validation backlog cannot block T+0 by age alone, while
+recent-task latency, a wrong-revision successor, stale progress and the existing
+generation deadline still fail closed. Historical zero service/non-positive net
+drain is degraded in its isolated research lane rather than a global product
+stop. Historical verdicts update setup memory and bounded validator review but
+cannot publish current product authority. Priority validation may publish
+liveness only after a real completed milestone; a starting marker or unrelated
+farm progress is insufficient.
 
-Exit gate: focused crash/fence/replay tests, lifecycle and integration regression,
-full non-live tests, repository guards, clean exact-head review, synchronized
-documentation, and a separate merge decision. Applying the disposition and
-starting runtime remain later operational gates.
+Exit gate: focused product-progress and generation tests, lifecycle/fencing and
+integration regression, full non-live tests, repository guards, clean exact-head
+review, synchronized documentation, and a separate merge decision. Task 38065,
+runtime and Paper v2 rebind remain later operational gates.
 
 ## Completed
 
+- PR #279 integrated hash-bound adoption of one exact expired task whose durable
+  compute binding already exists, preserving queue/outbox/materialization
+  idempotency without granting general reconciliation authority.
 - PR #277 integrated bounded scanner intake fairness, validation freshness and
   stable-generation publication, exact paper identity, pre-delivery advisory
   fallback, truthful product monitoring, bounded rebuildable snapshots and a
@@ -195,9 +202,11 @@ private runtime, data, or trading hypothesis is proven.
 ## Current: Product-Chain Integrity Before Reliability
 
 1. Prove validation service capacity, artifact-aware fairness, high-water
-   backpressure, fresh/FIFO service balance, and oldest-age SLO observability
-   under synthetic contention. The task-branch implementation candidate must be
-   merged and independently verified before this is treated as current behavior.
+   backpressure, fresh-product priority, historical research-lane drain and
+   oldest-age observability under synthetic contention. Prove that historical
+   validation reaches setup memory/validator review without replacing current
+   Telegram generation. The task-branch implementation candidate must be merged
+   and independently verified before this is treated as current behavior.
 2. Verify during the bounded canary that the implemented provider-error/data-gap/
    genuine-no-market-data taxonomy preserves observations through a real outage
    and recovery while technical evidence remains absent from all learning inputs.

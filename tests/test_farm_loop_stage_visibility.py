@@ -65,8 +65,11 @@ def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_
     assert seen["statuses"] == ["running_slot", "idle", "stopped"]
 
 
-def test_priority_worker_drains_validation_before_producing_more_work(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("generation_published", "expected_wakeup"), ((1, True), (0, False))
+)
+def test_priority_worker_wakes_product_only_for_current_generation_publication(
+    monkeypatch, tmp_path, generation_published, expected_wakeup
 ) -> None:
     seen = {"validation": 0, "slots": 0}
     product_wakeup = threading.Event()
@@ -85,7 +88,11 @@ def test_priority_worker_drains_validation_before_producing_more_work(
     def fake_validation(*_args, **kwargs):
         seen["validation"] += 1
         assert kwargs["status_target"] == "priority_worker"
-        return {"validated": 2, "exported": 2}
+        return {
+            "validated": 2,
+            "exported": 2,
+            "generation_published": generation_published,
+        }
 
     def fake_slot(*_args, **_kwargs):
         seen["slots"] += 1
@@ -120,7 +127,7 @@ def test_priority_worker_drains_validation_before_producing_more_work(
     )
 
     assert seen == {"validation": 1, "slots": 1}
-    assert product_wakeup.is_set()
+    assert product_wakeup.is_set() is expected_wakeup
 
 
 def test_claim_failure_signal_stops_worker_and_interrupts_foreground(tmp_path) -> None:
@@ -443,6 +450,87 @@ def test_validation_maintenance_binds_real_milestones_to_process_lease(
         "validation_maintenance:requests_exported",
         "validation_maintenance:validations_completed",
     ]
+
+
+def test_priority_validation_worker_publishes_only_completed_product_milestones(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import validation_orchestrator
+
+    clock = [100.0]
+
+    def fake_run_due(*_args, **kwargs):
+        clock[0] = 101.0
+        kwargs["progress"]("requests_exported", 1, 2)
+        clock[0] = 102.0
+        kwargs["progress"]("validations_completed", 2, 2)
+        return {"validated": 2}
+
+    monkeypatch.setattr(validation_orchestrator, "run_due_validations", fake_run_due)
+    monkeypatch.setattr(farm_loop.time, "time", lambda: clock[0])
+
+    farm_loop._run_validation_maintenance(
+        Namespace(stop_file="", task_claim_failure_signal=None),
+        object(),
+        tmp_path,
+        apply=True,
+        loop=True,
+        cycle_started_at=100.0,
+        status_target="priority_worker",
+    )
+
+    progress = json.loads(
+        (
+            tmp_path
+            / "state"
+            / "product_progress"
+            / "validation_progress.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert progress["status"] == "progress"
+    assert progress["completed_at"] == 102.0
+    assert progress["metrics"] == {
+        "completed": 2,
+        "milestone": "validations_completed",
+        "stage": "validation_maintenance",
+        "total": 2,
+        "validation_active": 0,
+        "validation_arrival_rate_per_hour": 0.0,
+        "validation_eligible": 0,
+        "validation_fresh_eligible": 0,
+        "validation_fresh_oldest_age_seconds": 0.0,
+        "validation_net_drain_rate_per_hour": 0.0,
+        "validation_service_rate_per_hour": 0.0,
+    }
+
+
+def test_priority_validation_starting_marker_is_not_product_progress(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import validation_orchestrator
+
+    monkeypatch.setattr(
+        validation_orchestrator,
+        "run_due_validations",
+        lambda *_args, **_kwargs: {"validated": 0},
+    )
+    monkeypatch.setattr(farm_loop.time, "time", lambda: 100.0)
+
+    farm_loop._run_validation_maintenance(
+        Namespace(stop_file="", task_claim_failure_signal=None),
+        object(),
+        tmp_path,
+        apply=True,
+        loop=True,
+        cycle_started_at=100.0,
+        status_target="priority_worker",
+    )
+
+    assert not (
+        tmp_path / "state" / "product_progress" / "validation_progress.json"
+    ).exists()
 
 
 def test_paper_runtime_binds_completed_chunks_to_process_lease(

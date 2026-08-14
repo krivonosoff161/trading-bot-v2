@@ -2446,6 +2446,9 @@ def _run_validation_maintenance(
             "eligible": 0,
             "by_state": {},
             "oldest_age_seconds": 0.0,
+            "freshness_window_seconds": 3600.0,
+            "fresh_eligible": 0,
+            "fresh_oldest_eligible_age_seconds": 0.0,
             "window_seconds": 3600.0,
             "arrivals": 0,
             "terminal": 0,
@@ -2506,6 +2509,40 @@ def _run_validation_maintenance(
                 ),
             }
         )
+        if status_target == "priority_worker":
+            from src.research_lab.product_progress import publish_checkpoint
+
+            completed_at = time.time()
+            publish_checkpoint(
+                private_root,
+                component="validation_progress",
+                sequence=max(1, int(completed_at * 1_000_000)),
+                status="progress",
+                metrics={
+                    "stage": "validation_maintenance",
+                    "milestone": str(milestone)[:80],
+                    "completed": int(completed),
+                    "total": int(total),
+                    "validation_active": int(backlog.get("active") or 0),
+                    "validation_eligible": int(backlog.get("eligible") or 0),
+                    "validation_fresh_eligible": int(
+                        backlog.get("fresh_eligible") or 0
+                    ),
+                    "validation_fresh_oldest_age_seconds": float(
+                        backlog.get("fresh_oldest_eligible_age_seconds") or 0.0
+                    ),
+                    "validation_arrival_rate_per_hour": float(
+                        backlog.get("arrival_rate_per_hour") or 0.0
+                    ),
+                    "validation_service_rate_per_hour": float(
+                        backlog.get("service_rate_per_hour") or 0.0
+                    ),
+                    "validation_net_drain_rate_per_hour": float(
+                        backlog.get("net_drain_rate_per_hour") or 0.0
+                    ),
+                },
+                completed_at=completed_at,
+            )
         check_active()
 
     check_active()
@@ -3168,13 +3205,19 @@ def _run_once(
         },
     )
     if apply:
-        from src.research_lab.validation_generation import load_pending_generation
+        from src.research_lab.validation_generation import (
+            load_pending_generation,
+            pending_generation_payload_status,
+        )
 
         pending_generation = load_pending_generation(private_root) or {}
         out["validation_generation_build"] = {
             "active": bool(pending_generation),
             "generation_id": str(pending_generation.get("generation_id") or ""),
             "started_at": float(pending_generation.get("producer_time") or 0.0),
+            "code_status": pending_generation_payload_status(
+                pending_generation or None
+            ),
         }
         backlog_reader = getattr(tasks, "validation_backlog_metrics", None)
         validation_backlog = (
@@ -3184,6 +3227,9 @@ def _run_once(
                 "active": 0,
                 "eligible": 0,
                 "oldest_age_seconds": 0.0,
+                "freshness_window_seconds": 3600.0,
+                "fresh_eligible": 0,
+                "fresh_oldest_eligible_age_seconds": 0.0,
             }
         )
         validation_backlog["backlog_slo_seconds"] = max(
@@ -3485,7 +3531,8 @@ def _priority_worker_loop(
                         status_target="priority_worker",
                     )
                     generation_published = bool(
-                        int(validation_maintenance.get("exported") or 0) > 0
+                        int(validation_maintenance.get("generation_published") or 0)
+                        > 0
                         or int(
                             validation_maintenance.get(
                                 "generation_empty_published"

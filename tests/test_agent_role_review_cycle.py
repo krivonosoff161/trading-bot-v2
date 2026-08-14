@@ -159,6 +159,12 @@ def test_agent_role_review_cycle_uses_real_private_artifacts(monkeypatch, tmp_pa
 
     assert summary["reviews"] == 3
     assert summary["accepted"] == 3
+    assert summary["validator_memory_backlog"] == {
+        "records": 1,
+        "reviewable": 1,
+        "pending": 1,
+        "selected": 1,
+    }
     assert summary["outcome_learning"]["by_review_kind"]["loss"] == 1
     assert summary["outcome_learning"]["by_outcome_bucket"]["gave_back"] == 1
     assert summary["execution_allowed"] is False
@@ -286,6 +292,65 @@ def test_outcome_review_dedup_is_bound_to_current_training_content(tmp_path):
     assert agent_role_review_cycle._unreviewed_training_rows(
         tmp_path, [current], limit=1
     ) == []
+
+
+def test_validator_review_dedup_is_bound_to_changed_validation_evidence(tmp_path):
+    previous = {
+        "uc_key": "uc_validation_bound",
+        "symbol": "BTC_USDT_SWAP",
+        "timeframe": "15m",
+        "family": "momentum_breakout",
+        "params_hash": "params",
+        "data_fingerprint": "data",
+        "lite_status": "FORWARD_PAPER",
+        "hard_status": "",
+        "validation_state": "PENDING",
+        "outcome_class": "INSUFFICIENT_DATA",
+    }
+    current = {
+        **previous,
+        "hard_status": "FAILED_COSTS",
+        "validation_state": "VALIDATION_FAILED",
+        "outcome_class": "CONFIRMED_BAD",
+    }
+    memory_path = tmp_path / "state" / "derived" / "setup_outcome_memory.json"
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_path.write_text(
+        json.dumps({"records": [current]}), encoding="utf-8"
+    )
+    review_path = tmp_path / "state" / "llm_advice" / "validator_reviews.jsonl"
+    _write_jsonl(
+        review_path,
+        [
+            {
+                "review_id": "review_previous_validation_state",
+                "role_id": "validator_reviewer",
+                "source_ref": previous["uc_key"],
+                "source_binding": agent_role_review_cycle.validator_review_source_binding(
+                    previous
+                ),
+                "accepted": True,
+            }
+        ],
+    )
+
+    assert agent_role_review_cycle._load_validator_memory(tmp_path, 1) == [current]
+
+    _write_jsonl(
+        review_path,
+        [
+            {
+                "review_id": "review_current_validation_state",
+                "role_id": "validator_reviewer",
+                "source_ref": current["uc_key"],
+                "source_binding": agent_role_review_cycle.validator_review_source_binding(
+                    current
+                ),
+                "accepted": True,
+            }
+        ],
+    )
+    assert agent_role_review_cycle._load_validator_memory(tmp_path, 1) == []
 
 
 def test_agent_role_cycle_skips_exhausted_item_and_advances(monkeypatch, tmp_path):
