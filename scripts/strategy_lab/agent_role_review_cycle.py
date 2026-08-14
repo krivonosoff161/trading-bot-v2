@@ -11,6 +11,7 @@ and never enables execution.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -52,7 +53,14 @@ MAX_REVIEW_ATTEMPTS = 3
 def _review_source_key(
     source_ref: str, role_id: str, source_binding: object = None
 ) -> str:
-    if role_id != "outcome_reviewer" or not isinstance(source_binding, dict):
+    if not isinstance(source_binding, dict):
+        return source_ref
+    if role_id == "validator_reviewer":
+        digest = str(source_binding.get("validation_evidence_sha256") or "")
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            return source_ref
+        return f"{source_ref}::{digest}"
+    if role_id != "outcome_reviewer":
         return source_ref
     binding = {
         str(key): str(value)
@@ -67,6 +75,35 @@ def _review_source_key(
     if not required.issubset(binding):
         return source_ref
     return f"{source_ref}::{json.dumps(binding, sort_keys=True, separators=(',', ':'))}"
+
+
+def validator_review_source_binding(row: dict[str, Any]) -> dict[str, str]:
+    """Bind one advisory review to the deterministic validation state only."""
+
+    evidence = {
+        key: row.get(key)
+        for key in (
+            "uc_key",
+            "symbol",
+            "timeframe",
+            "family",
+            "params_hash",
+            "data_fingerprint",
+            "lite_status",
+            "hard_status",
+            "validation_state",
+            "outcome_class",
+        )
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            evidence,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {"validation_evidence_sha256": digest}
 
 
 def _env(name: str, default: str = "") -> str:
@@ -190,15 +227,26 @@ def _unreviewed_training_rows(
     return missing[-limit:]
 
 
-def _load_validator_memory(private_root: Path, limit: int) -> list[dict[str, Any]]:
+def _load_validator_memory(
+    private_root: Path,
+    limit: int,
+    *,
+    stats: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     if limit <= 0:
+        if stats is not None:
+            stats.update(records=0, reviewable=0, pending=0, selected=0)
         return []
     path = private_root / "state" / "derived" / "setup_outcome_memory.json"
     if not path.exists():
+        if stats is not None:
+            stats.update(records=0, reviewable=0, pending=0, selected=0)
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except json.JSONDecodeError:
+        if stats is not None:
+            stats.update(records=0, reviewable=0, pending=0, selected=0)
         return []
     rows = [
         row
@@ -219,13 +267,30 @@ def _load_validator_memory(private_root: Path, limit: int) -> list[dict[str, Any
         private_root / "state" / "llm_advice" / "validator_reviews.jsonl",
         "validator_reviewer",
     )
-    eligible = [
-        row
-        for row in (interesting or rows)
-        if str(row.get("candidate_id") or row.get("uc_key") or row.get("symbol") or "")
-        not in completed_refs
-    ]
-    return eligible[-limit:]
+    eligible = []
+    for row in interesting or rows:
+        source_ref = str(
+            row.get("candidate_id") or row.get("uc_key") or row.get("symbol") or ""
+        )
+        source_key = _review_source_key(
+            source_ref,
+            "validator_reviewer",
+            validator_review_source_binding(row),
+        )
+        if source_ref and source_key not in completed_refs:
+            eligible.append(row)
+    # setup_outcome_memory is newest-updated first. Accepted/bounded review state
+    # removes each exact evidence version on the next cycle, so this drains the
+    # freshly validated backlog without rescanning arbitrary historical files.
+    selected = eligible[:limit]
+    if stats is not None:
+        stats.update(
+            records=len(rows),
+            reviewable=len(interesting or rows),
+            pending=len(eligible),
+            selected=len(selected),
+        )
+    return selected
 
 
 def _load_unreviewed_source_rows(
@@ -343,7 +408,10 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
         training_evidence["items"],
         args.max_outcomes,
     )
-    validator_rows = _load_validator_memory(private_root, args.max_validator)
+    validator_backlog: dict[str, int] = {}
+    validator_rows = _load_validator_memory(
+        private_root, args.max_validator, stats=validator_backlog
+    )
     source_rows = _load_unreviewed_source_rows(private_root, args.max_sources)
     analyst_rows = _load_unreviewed_system_results(
         private_root, int(getattr(args, "max_analyst", 1))
@@ -379,6 +447,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
                 source_ref=source_ref or f"validator_{len(reviews)}",
                 source_payload=_validator_payload(row),
                 provider=provider,
+                source_binding=validator_review_source_binding(row),
             )
         )
         time.sleep(args.sleep_seconds)
@@ -419,6 +488,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
             "sources": len(source_rows),
             "analyst_results": len(analyst_rows),
         },
+        "validator_memory_backlog": validator_backlog,
         "outcome_learning": learning_summary(training_rows),
         "training_evidence": {
             key: value

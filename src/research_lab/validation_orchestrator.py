@@ -15,7 +15,9 @@ network beyond the existing bridge, no order path, no .env, no Telegram.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -68,6 +70,38 @@ def _completed_progress(
     if progress is not None:
         progress(stage, int(completed), int(total))
     _check_active(check_active)
+
+
+def _is_current_product_task(task: dict[str, Any], *, reference_time: float) -> bool:
+    """Return whether a validation task may publish current product authority.
+
+    Recently created farm tasks belong to the product lane. Analyst follow-ups and
+    aged debt remain research evidence even when a fresh retry/claim is taken.
+    """
+
+    payload = _read_payload(task)
+    if str(payload.get("role_environment_id") or ""):
+        return False
+    created_at = float(task.get("created_at") or 0.0)
+    age = reference_time - created_at
+    return 0.0 <= age <= VALIDATION_FRESHNESS_WINDOW_SECONDS
+
+
+def _historical_staging_root(
+    private_root: Path, tasks: Iterable[dict[str, Any]]
+) -> Path:
+    identity = [
+        {
+            "task_id": int(task.get("task_id") or 0),
+            "fence": int(task.get("fence") or 0),
+            "mutation_seq": int(task.get("mutation_seq") or 0),
+        }
+        for task in tasks
+    ]
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:20]
+    return Path(private_root) / ".vstg" / f"hist_{digest}"
 
 
 def _artifact_paths(
@@ -244,6 +278,13 @@ def run_due_validations(
         "artifact_batches": 0,
         "artifact_ready_tasks": 0,
         "fair_scan_exhausted": 0,
+        "fresh_tasks": 0,
+        "historical_tasks": 0,
+        "fresh_validated": 0,
+        "historical_validated": 0,
+        "historical_evidence_stamped": 0,
+        "historical_generation_suppressed": 0,
+        "generation_published": 0,
         "generation_empty_published": 0,
         "generation_status_before": "unchecked",
         "generation_unchanged": 0,
@@ -421,30 +462,73 @@ def run_due_validations(
             tasks.complete_task(task["task_id"], reason="export_dry_run", now=now)
             _completed_progress(progress, check_active, "task_completed", 1, 1)
         return counters
+    reference_time = time.time() if now is None else float(now)
+    fresh_tasks = [
+        task
+        for task in export_tasks
+        if _is_current_product_task(task, reference_time=reference_time)
+    ]
+    fresh_task_ids = {int(task.get("task_id") or 0) for task in fresh_tasks}
+    historical_tasks = [
+        task
+        for task in export_tasks
+        if int(task.get("task_id") or 0) not in fresh_task_ids
+    ]
+    counters["fresh_tasks"] = len(fresh_tasks)
+    counters["historical_tasks"] = len(historical_tasks)
     prepared = [prepared_by_id[_hard_id_for_task(task)] for task in export_tasks]
 
-    # The staging manifest precedes every request/report/verdict/card write but
-    # never revokes a previously completed generation.  Consumers switch only
-    # after the new complete manifest is atomically published below.
+    # A fresh product batch gets a non-authoritative pending marker before its
+    # artifacts. Historical research artifacts use an isolated staging root and
+    # never enter the current-generation state machine.
     _check_active(check_active)
+    generation_status = current_generation_manifest_status(Path(private_root))
+    counters["generation_status_before"] = generation_status
+    if not fresh_tasks and generation_status == "code_stale":
+        write_current_generation(
+            Path(private_root),
+            tasks=[],
+            exported_ids=[],
+            completed_ids=[],
+            producer_time=now,
+        )
+        counters["generation_empty_published"] = 1
+        _completed_progress(
+            progress,
+            check_active,
+            "empty_generation_published",
+            1,
+            1,
+        )
     prior_generation_exists = load_current_generation(Path(private_root)) is not None
-    pending = write_pending_generation(
-        Path(private_root),
-        tasks=export_tasks,
-        producer_time=now,
-    )
-    staging_root = (
-        Path(private_root)
-        / ".vstg"
-        / str(pending["build_id"]).removeprefix("hvb_")[:20]
-    )
-    _completed_progress(
-        progress,
-        check_active,
-        "pending_generation_published",
-        len(export_tasks),
-        len(export_tasks),
-    )
+    pending: dict[str, Any] | None = None
+    if fresh_tasks:
+        pending = write_pending_generation(
+            Path(private_root),
+            tasks=fresh_tasks,
+            producer_time=now,
+        )
+        staging_root = (
+            Path(private_root)
+            / ".vstg"
+            / str(pending["build_id"]).removeprefix("hvb_")[:20]
+        )
+        _completed_progress(
+            progress,
+            check_active,
+            "pending_generation_published",
+            len(fresh_tasks),
+            len(fresh_tasks),
+        )
+    else:
+        staging_root = _historical_staging_root(private_root, historical_tasks)
+        _completed_progress(
+            progress,
+            check_active,
+            "historical_validation_staged",
+            len(historical_tasks),
+            len(historical_tasks),
+        )
     exported_ids = write_prepared_requests(
         private_root,
         prepared,
@@ -486,6 +570,15 @@ def run_due_validations(
             and str(result.get("candidate_id") or "") in exported_set
         )
     )
+    fresh_hard_ids = {_hard_id_for_task(task) for task in fresh_tasks}
+    historical_hard_ids = {_hard_id_for_task(task) for task in historical_tasks}
+    fresh_current_ids = [cid for cid in current_ids if cid in fresh_hard_ids]
+    historical_current_ids = [
+        cid for cid in current_ids if cid in historical_hard_ids
+    ]
+    counters["fresh_validated"] = len(fresh_current_ids)
+    counters["historical_validated"] = len(historical_current_ids)
+    counters["historical_generation_suppressed"] = len(historical_current_ids)
     _completed_progress(
         progress,
         check_active,
@@ -498,7 +591,7 @@ def run_due_validations(
     # revoke a previously completed generation.  With no prior generation, the
     # staging manifest remains a fail-closed pending state.
     if not current_ids:
-        if prior_generation_exists:
+        if prior_generation_exists and pending is not None:
             clear_pending_generation(
                 Path(private_root), expected_build_id=str(pending["build_id"])
             )
@@ -551,40 +644,55 @@ def run_due_validations(
     )
     _check_active(check_active)
     counters["setup_cards"] = _write_setup_cards(
-        staging_root, current_ids, requests=reqs
+        staging_root, fresh_current_ids, requests=reqs
     )
     _completed_progress(
         progress,
         check_active,
         "setup_cards_written",
         int(counters["setup_cards"]),
-        len(current_ids),
+        len(fresh_current_ids),
     )
     # Publish final authority while the claimed tasks still provide a recoverable
     # running marker.  If publication fails, startup orphan reconciliation can
     # requeue the tasks and the pending manifest remains fail-closed.
     _check_active(check_active)
-    write_current_generation(
-        Path(private_root),
-        tasks=export_tasks,
-        exported_ids=exported_ids,
-        completed_ids=current_ids,
-        producer_time=now,
-        artifact_root=staging_root,
-        pending_build_id=str(pending["build_id"]),
-    )
-    _completed_progress(
-        progress,
-        check_active,
-        "generation_published",
-        len(current_ids),
-        len(exported_ids),
-    )
+    if fresh_current_ids and pending is not None:
+        fresh_exported_ids = [cid for cid in exported_ids if cid in fresh_hard_ids]
+        write_current_generation(
+            Path(private_root),
+            tasks=fresh_tasks,
+            exported_ids=fresh_exported_ids,
+            completed_ids=fresh_current_ids,
+            producer_time=now,
+            artifact_root=staging_root,
+            pending_build_id=str(pending["build_id"]),
+        )
+        counters["generation_published"] = 1
+        _completed_progress(
+            progress,
+            check_active,
+            "generation_published",
+            len(fresh_current_ids),
+            len(fresh_exported_ids),
+        )
+    else:
+        if prior_generation_exists and pending is not None:
+            clear_pending_generation(
+                Path(private_root), expected_build_id=str(pending["build_id"])
+            )
+        counters["generation_unchanged"] = 1
+        _completed_progress(
+            progress,
+            check_active,
+            "historical_generation_suppressed",
+            len(historical_current_ids),
+            len(historical_current_ids),
+        )
 
-    # Publication is the commit point.  All mutable projections below are
-    # idempotent derivatives of the exact current immutable generation.  A
-    # pre-publication crash therefore leaves no successor verdict/status/feedback
-    # visible alongside the prior authority.
+    # Current publication is the product-lane commit point. Historical verdicts
+    # deliberately bypass current generation authority and become idempotent
+    # research projections below; a crash leaves their claimed tasks replayable.
     _check_active(check_active)
     counters["stamped_db"] += _stamp_farm_results_from_contexts(
         Path(private_root), verdicts, requests=reqs
@@ -640,6 +748,15 @@ def run_due_validations(
             "unique_candidate_stamped",
             completed,
             len(verdicts),
+        )
+    counters["historical_evidence_stamped"] = len(historical_current_ids)
+    if historical_current_ids:
+        _completed_progress(
+            progress,
+            check_active,
+            "historical_evidence_stamped",
+            len(historical_current_ids),
+            len(historical_current_ids),
         )
     for completed, task in enumerate(export_tasks, start=1):
         _check_active(check_active)

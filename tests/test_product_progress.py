@@ -798,7 +798,7 @@ def test_historical_validation_debt_with_positive_service_is_degraded_not_failed
         (3.0, -1.0, "validation_backlog_not_draining"),
     ],
 )
-def test_historical_validation_debt_fails_after_bounded_non_drain_observation(
+def test_historical_validation_debt_degrades_after_bounded_non_drain_observation(
     tmp_path: Path,
     service_rate: float,
     net_drain_rate: float,
@@ -830,7 +830,10 @@ def test_historical_validation_debt_fails_after_bounded_non_drain_observation(
         wall_clock=lambda: 4102.0,
     ).sample()
 
-    assert expected in report["hard_fail_reasons"]
+    assert expected in report["degraded_reasons"]
+    assert expected not in report["hard_fail_reasons"]
+    assert report["state"] == "degraded"
+    assert report["ready"] is True
 
 
 def test_fresh_validation_task_latency_still_fails_closed(tmp_path: Path) -> None:

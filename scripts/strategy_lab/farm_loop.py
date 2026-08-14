@@ -3531,7 +3531,8 @@ def _priority_worker_loop(
                         status_target="priority_worker",
                     )
                     generation_published = bool(
-                        int(validation_maintenance.get("exported") or 0) > 0
+                        int(validation_maintenance.get("generation_published") or 0)
+                        > 0
                         or int(
                             validation_maintenance.get(
                                 "generation_empty_published"

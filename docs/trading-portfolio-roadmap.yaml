@@ -21,15 +21,21 @@ task_branch_candidate:
     - real_completed_validation_maintenance_milestones
     - exact_current_bounded_successor_generation_build
     - historical_validation_debt_separate_from_fresh_product_latency
-    - bounded_service_rate_and_net_drain_failure
+    - historical_validation_research_lane_without_product_authority
+    - bounded_service_rate_and_net_drain_degradation
+    - validation_evidence_bound_advisory_review
     - no_runtime_or_task_disposition_authority
   evidence:
     - src/research_lab/product_progress.py
     - src/research_lab/validation_generation.py
     - src/research_lab/farm_tasks_db.py
+    - src/research_lab/validation_orchestrator.py
     - scripts/strategy_lab/farm_loop.py
+    - scripts/strategy_lab/agent_role_review_cycle.py
     - tests/test_product_progress.py
     - tests/test_farm_loop_stage_visibility.py
+    - tests/test_validation_historical_lane.py
+    - tests/test_agent_role_review_cycle.py
   promotion_gate: exact-head review, adversarial liveness and debt tests, full non-live tests, repository guards, synchronized documentation, and separate merge authority
   runtime_gate: exact task 38065 disposition, Paper Evidence v2 rebind, and owner-authorized paper-only operational proof after merge
 authority_values:

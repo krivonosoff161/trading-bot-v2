@@ -19,10 +19,13 @@ dependency, not by a route to live trading.
 The unmerged `codex/validation-debt-monitor-repair` branch is a bounded monitor
 repair candidate, not an operational capability. It must prove that an existing
 historical eligible validation backlog cannot block T+0 by age alone, while
-recent-task latency, zero service, non-positive net drain, a wrong-revision
-successor, stale progress and the existing generation deadline still fail
-closed. Priority validation may publish liveness only after a real completed
-milestone; a starting marker or unrelated farm progress is insufficient.
+recent-task latency, a wrong-revision successor, stale progress and the existing
+generation deadline still fail closed. Historical zero service/non-positive net
+drain is degraded in its isolated research lane rather than a global product
+stop. Historical verdicts update setup memory and bounded validator review but
+cannot publish current product authority. Priority validation may publish
+liveness only after a real completed milestone; a starting marker or unrelated
+farm progress is insufficient.
 
 Exit gate: focused product-progress and generation tests, lifecycle/fencing and
 integration regression, full non-live tests, repository guards, clean exact-head
@@ -199,9 +202,11 @@ private runtime, data, or trading hypothesis is proven.
 ## Current: Product-Chain Integrity Before Reliability
 
 1. Prove validation service capacity, artifact-aware fairness, high-water
-   backpressure, fresh/FIFO service balance, and oldest-age SLO observability
-   under synthetic contention. The task-branch implementation candidate must be
-   merged and independently verified before this is treated as current behavior.
+   backpressure, fresh-product priority, historical research-lane drain and
+   oldest-age observability under synthetic contention. Prove that historical
+   validation reaches setup memory/validator review without replacing current
+   Telegram generation. The task-branch implementation candidate must be merged
+   and independently verified before this is treated as current behavior.
 2. Verify during the bounded canary that the implemented provider-error/data-gap/
    genuine-no-market-data taxonomy preserves observations through a real outage
    and recovery while technical evidence remains absent from all learning inputs.

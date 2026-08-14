@@ -668,9 +668,9 @@ class ProductProgressMonitor:
                             metrics.get("validation_net_drain_rate_per_hour") or 0.0
                         )
                         if service_rate <= 0.0:
-                            hard_fail.append("validation_backlog_service_stalled")
+                            degraded.append("validation_backlog_service_stalled")
                         elif net_drain_rate <= 0.0:
-                            hard_fail.append("validation_backlog_not_draining")
+                            degraded.append("validation_backlog_not_draining")
                 fresh_eligible = int(metrics.get("validation_fresh_eligible") or 0)
                 fresh_oldest = float(
                     metrics.get("validation_fresh_oldest_age_seconds") or 0.0
