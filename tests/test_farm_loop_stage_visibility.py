@@ -609,6 +609,65 @@ def test_priority_validation_progress_binds_bounded_pre_marker_successor(
     assert progress["metrics"]["successor_build_started_at"] == 100.0
 
 
+def test_priority_validation_progress_marks_current_publication_before_farm_checkpoint(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import validation_generation, validation_orchestrator
+
+    clock = [100.0]
+    generation_status = ["code_stale"]
+
+    def fake_run_due(*_args, **kwargs):
+        clock[0] = 101.0
+        kwargs["progress"]("validation_request_loaded", 1, 2)
+        generation_status[0] = "code_current"
+        clock[0] = 102.0
+        kwargs["progress"]("empty_generation_published", 1, 1)
+        return {"validated": 0}
+
+    monkeypatch.setattr(validation_orchestrator, "run_due_validations", fake_run_due)
+    monkeypatch.setattr(
+        validation_generation,
+        "current_generation_manifest_status",
+        lambda _root: generation_status[0],
+    )
+    monkeypatch.setattr(
+        validation_generation,
+        "pending_generation_manifest_status",
+        lambda _root: "absent",
+    )
+    monkeypatch.setattr(
+        validation_generation,
+        "validation_producer_code_digest",
+        lambda: "a" * 64,
+    )
+    monkeypatch.setattr(farm_loop.time, "time", lambda: clock[0])
+
+    farm_loop._run_validation_maintenance(
+        Namespace(stop_file="", task_claim_failure_signal=None),
+        object(),
+        tmp_path,
+        apply=True,
+        loop=True,
+        cycle_started_at=100.0,
+        status_target="priority_worker",
+    )
+
+    progress = json.loads(
+        (
+            tmp_path
+            / "state"
+            / "product_progress"
+            / "validation_progress.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert progress["metrics"]["milestone"] == "empty_generation_published"
+    assert progress["metrics"]["successor_build_phase"] == "current_published"
+    assert progress["metrics"]["successor_current_code_status"] == "code_current"
+    assert progress["metrics"]["successor_marker_code_status"] == "absent"
+
+
 def test_paper_runtime_binds_completed_chunks_to_process_lease(
     monkeypatch,
     tmp_path: Path,

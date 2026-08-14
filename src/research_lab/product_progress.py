@@ -608,7 +608,7 @@ class ProductProgressMonitor:
             validation_progress_metrics.get("successor_code_digest") or ""
         )
         successor_expected_digest = ""
-        if successor_build_phase == "pre_marker":
+        if successor_build_phase in {"pre_marker", "current_published"}:
             try:
                 from src.research_lab.validation_generation import (
                     validation_producer_code_digest,
@@ -623,6 +623,42 @@ class ProductProgressMonitor:
         )
         successor_current_run = bool(
             successor_build_started_at >= self.run_started_at > 0.0
+        )
+        successor_current_published = bool(
+            successor_build_phase == "current_published"
+            and str(
+                validation_progress_metrics.get("successor_current_code_status") or ""
+            )
+            == "code_current"
+            and successor_code_current
+            and successor_current_run
+        )
+        current_publication_status = "unavailable"
+        current_publication_producer_time = 0.0
+        try:
+            from src.research_lab.validation_generation import (
+                current_generation_manifest_status,
+                load_current_generation,
+            )
+
+            current_publication_status = current_generation_manifest_status(
+                self.private_root
+            )
+            current_publication = load_current_generation(self.private_root) or {}
+            current_publication_producer_time = float(
+                current_publication.get("producer_time") or 0.0
+            )
+        except (OSError, TypeError, ValueError):
+            current_publication_status = "unavailable"
+            current_publication_producer_time = 0.0
+        current_publication_exact_run = bool(
+            current_publication_status == "code_current"
+            and current_publication_producer_time >= self.run_started_at > 0.0
+        )
+        current_publication_within_deadline = bool(
+            current_publication_producer_time > 0.0
+            and max(0.0, now - current_publication_producer_time)
+            <= self.slo.validation_generation_transition_seconds
         )
         successor_within_deadline = bool(
             successor_build_started_at > 0.0
@@ -736,6 +772,23 @@ class ProductProgressMonitor:
                     )
                     if generation_status == "code_stale":
                         if (
+                            current_publication_exact_run
+                            and current_publication_within_deadline
+                        ):
+                            degraded.append(
+                                "validation_generation_publication_awaiting_farm_checkpoint"
+                            )
+                        elif current_publication_exact_run:
+                            hard_fail.append(
+                                "validation_generation_transition_timeout"
+                            )
+                        elif successor_current_published and successor_within_deadline:
+                            degraded.append(
+                                "validation_generation_publication_awaiting_farm_checkpoint"
+                            )
+                        elif successor_current_published:
+                            hard_fail.append("validation_generation_build_timeout")
+                        elif (
                             build_active
                             and build_code_status == "code_current"
                             and build_current_run
