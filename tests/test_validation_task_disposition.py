@@ -324,6 +324,27 @@ def test_validation_backpressure_preserves_classify_task_and_reports_rates(
     store.close()
 
 
+def test_validation_backlog_metrics_separate_recent_eligible_latency(
+    tmp_path,
+) -> None:
+    store = FarmTasksDB(tasks_db_path(tmp_path), clock=lambda: 10_000.0)
+    _task(store, "historical", "historical", now=1.0)
+    _task(store, "fresh-oldest", "fresh-oldest", now=9_100.0)
+    _task(store, "fresh-newest", "fresh-newest", now=9_900.0)
+
+    metrics = store.validation_backlog_metrics(
+        now=10_000.0,
+        freshness_window_seconds=3600.0,
+    )
+
+    assert metrics["active"] == 3
+    assert metrics["oldest_age_seconds"] == 9999.0
+    assert metrics["freshness_window_seconds"] == 3600.0
+    assert metrics["fresh_eligible"] == 2
+    assert metrics["fresh_oldest_eligible_age_seconds"] == 900.0
+    store.close()
+
+
 def test_artifact_unavailable_retry_budget_is_terminal(monkeypatch, tmp_path) -> None:
     store = FarmTasksDB(tasks_db_path(tmp_path), clock=lambda: 1.0)
     _candidate(store, "artifact-never-arrives")

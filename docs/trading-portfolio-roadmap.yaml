@@ -1,35 +1,37 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.12"
+version: "2026.08.14"
 status: current
-verified_date: "2026-08-12"
+verified_date: "2026-08-14"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 5a397edfb2787f51fdac12ef5f983a894b78a2a2
+  trading-bot-v2: e03502ddd484234c64ccb1d51b56c8397789b55f
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/stale-materialization-recovery
+  branch: codex/validation-debt-monitor-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: dc4d6db71fc12abde330b10d9a78258e2b0084e6
+  baseline_revision: e03502ddd484234c64ccb1d51b56c8397789b55f
   scope:
-    - hash_bound_expired_materialization_recovery
-    - preserve_existing_compute_queue_binding
-    - no_duplicate_outbox_materialization_or_compute_effect
-    - exact_task_fence_and_mutation_sequence_cas
-    - idempotent_second_apply
+    - real_completed_validation_maintenance_milestones
+    - exact_current_bounded_successor_generation_build
+    - historical_validation_debt_separate_from_fresh_product_latency
+    - bounded_service_rate_and_net_drain_failure
+    - no_runtime_or_task_disposition_authority
   evidence:
+    - src/research_lab/product_progress.py
+    - src/research_lab/validation_generation.py
     - src/research_lab/farm_tasks_db.py
-    - src/research_lab/materialization_recovery.py
-    - scripts/strategy_lab/materialization_recovery.py
-    - tests/test_materialization_recovery.py
-  promotion_gate: exact-head review, crash and fencing tests, full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: exact task disposition, Paper Evidence v2 rebind, and owner-authorized paper-only operational proof after merge
+    - scripts/strategy_lab/farm_loop.py
+    - tests/test_product_progress.py
+    - tests/test_farm_loop_stage_visibility.py
+  promotion_gate: exact-head review, adversarial liveness and debt tests, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  runtime_gate: exact task 38065 disposition, Paper Evidence v2 rebind, and owner-authorized paper-only operational proof after merge
 authority_values:
   - none
   - advisory

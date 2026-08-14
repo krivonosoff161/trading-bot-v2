@@ -19,7 +19,7 @@ from typing import Any, Mapping
 SCHEMA = "ProductProgressCheckpoint.v1"
 REPORT_SCHEMA = "ProductProgressReport.v1"
 SAFE_COMPONENTS = frozenset(
-    {"scanner", "scanner_progress", "farm_progress", "farm"}
+    {"scanner", "scanner_progress", "farm_progress", "validation_progress", "farm"}
 )
 
 
@@ -295,6 +295,21 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
             (counters, "validation_backlog_oldest_age_seconds"),
             default=0.0,
         )),
+        "validation_fresh_eligible": int(
+            validation_backlog.get("fresh_eligible") or 0
+        ),
+        "validation_fresh_oldest_age_seconds": float(
+            validation_backlog.get("fresh_oldest_eligible_age_seconds") or 0.0
+        ),
+        "validation_arrival_rate_per_hour": float(
+            validation_backlog.get("arrival_rate_per_hour") or 0.0
+        ),
+        "validation_service_rate_per_hour": float(
+            validation_backlog.get("service_rate_per_hour") or 0.0
+        ),
+        "validation_net_drain_rate_per_hour": float(
+            validation_backlog.get("net_drain_rate_per_hour") or 0.0
+        ),
         "validation_backlog_slo_seconds": float(
             validation_backlog.get("backlog_slo_seconds")
             or validation.get("backlog_slo_seconds")
@@ -309,6 +324,9 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
         "validation_generation_build_active": bool(validation_build.get("active")),
         "validation_generation_build_started_at": float(
             validation_build.get("started_at") or 0.0
+        ),
+        "validation_generation_build_code_status": str(
+            validation_build.get("code_status") or "absent"
         ),
         "validation_generation_status": str(
             generation.get("validation_generation_status") or ""
@@ -408,6 +426,8 @@ class ProductProgressSlo:
     farm_startup_progress_stale_seconds: float = 60.0
     farm_cycle_max_seconds: float = 1800.0
     scanner_intake_seconds: float = 900.0
+    validation_fresh_seconds: float = 900.0
+    validation_backlog_observation_seconds: float = 3600.0
     validation_generation_transition_seconds: float = 600.0
 
 
@@ -551,6 +571,33 @@ class ProductProgressMonitor:
             and progress_age is not None
             and progress_age <= self.slo.farm_startup_progress_stale_seconds
         )
+        validation_progress_row = self._read(
+            checkpoint_path(self.private_root, "validation_progress")
+        )
+        validation_progress_at = float(
+            validation_progress_row.get("completed_at") or 0.0
+        )
+        validation_progress_current = bool(
+            validation_progress_row.get("schema") == SCHEMA
+            and validation_progress_at >= self.run_started_at
+        )
+        validation_progress_age = (
+            max(0.0, now - validation_progress_at)
+            if validation_progress_at
+            else None
+        )
+        validation_progress_metrics = _mapping(
+            validation_progress_row.get("metrics")
+        )
+        validation_build_progress_fresh = bool(
+            validation_progress_current
+            and validation_progress_row.get("status") == "progress"
+            and validation_progress_metrics.get("stage") == "validation_maintenance"
+            and str(validation_progress_metrics.get("milestone") or "").strip()
+            and validation_progress_age is not None
+            and validation_progress_age
+            <= self.slo.farm_startup_progress_stale_seconds
+        )
         for component, limit in (
             ("scanner", self.slo.scanner_seconds),
             ("farm", self.slo.farm_seconds),
@@ -607,15 +654,82 @@ class ProductProgressMonitor:
                     metrics.get("validation_backlog_slo_seconds") or 3600.0
                 )
                 if oldest > backlog_slo:
-                    hard_fail.append("validation_backlog_slo_exceeded")
+                    degraded.append("validation_historical_backlog_slo_exceeded")
+                    observation_age = max(0.0, now - self.run_started_at)
+                    if (
+                        int(metrics.get("validation_eligible") or 0) > 0
+                        and observation_age
+                        > self.slo.validation_backlog_observation_seconds
+                    ):
+                        service_rate = float(
+                            metrics.get("validation_service_rate_per_hour") or 0.0
+                        )
+                        net_drain_rate = float(
+                            metrics.get("validation_net_drain_rate_per_hour") or 0.0
+                        )
+                        if service_rate <= 0.0:
+                            hard_fail.append("validation_backlog_service_stalled")
+                        elif net_drain_rate <= 0.0:
+                            hard_fail.append("validation_backlog_not_draining")
+                fresh_eligible = int(metrics.get("validation_fresh_eligible") or 0)
+                fresh_oldest = float(
+                    metrics.get("validation_fresh_oldest_age_seconds") or 0.0
+                )
+                if (
+                    fresh_eligible > 0
+                    and fresh_oldest > self.slo.validation_fresh_seconds
+                ):
+                    hard_fail.append("validation_fresh_task_latency_slo_exceeded")
                 generation_waiting = metrics.get("paper_generation_waiting") is True
+                build_active = (
+                    metrics.get("validation_generation_build_active") is True
+                )
+                build_started_at = float(
+                    metrics.get("validation_generation_build_started_at") or 0.0
+                )
+                build_code_status = str(
+                    metrics.get("validation_generation_build_code_status") or "absent"
+                )
+                build_current_run = bool(
+                    build_started_at >= self.run_started_at > 0.0
+                )
+                build_within_deadline = bool(
+                    build_started_at > 0.0
+                    and max(0.0, now - build_started_at)
+                    <= self.slo.validation_generation_transition_seconds
+                )
                 if generation_waiting:
                     ready = False
                     generation_status = str(
                         metrics.get("validation_generation_status") or ""
                     )
                     if generation_status == "code_stale":
-                        hard_fail.append("validation_generation_code_stale")
+                        if (
+                            build_active
+                            and build_code_status == "code_current"
+                            and build_current_run
+                            and build_within_deadline
+                            and validation_build_progress_fresh
+                        ):
+                            degraded.append(
+                                "validation_generation_rebuild_in_progress"
+                            )
+                        elif not build_active:
+                            hard_fail.append("validation_generation_code_stale")
+                        elif build_code_status != "code_current":
+                            hard_fail.append(
+                                "validation_generation_successor_not_current"
+                            )
+                        elif not build_current_run:
+                            hard_fail.append(
+                                "validation_generation_successor_not_current_run"
+                            )
+                        elif not build_within_deadline:
+                            hard_fail.append("validation_generation_build_timeout")
+                        else:
+                            hard_fail.append(
+                                "validation_generation_build_progress_stalled"
+                            )
                     transition_started_at = float(
                         metrics.get("validation_generation_started_at") or 0.0
                     )
@@ -630,10 +744,7 @@ class ProductProgressMonitor:
                         hard_fail.append(
                             "validation_generation_transition_timeout"
                         )
-                if metrics.get("validation_generation_build_active") is True:
-                    build_started_at = float(
-                        metrics.get("validation_generation_build_started_at") or 0.0
-                    )
+                if build_active:
                     if build_started_at <= 0.0:
                         hard_fail.append("validation_generation_build_unbounded")
                     elif (
@@ -691,6 +802,14 @@ class ProductProgressMonitor:
             "startup_liveness_eligible": farm_startup_progress_fresh,
             "startup_max_seconds": self.slo.farm_startup_max_seconds,
             "metrics": progress_metrics,
+        }
+        components["validation_progress"] = {
+            "current_run": validation_progress_current,
+            "sequence": int(validation_progress_row.get("sequence") or 0),
+            "age_seconds": validation_progress_age,
+            "status": str(validation_progress_row.get("status") or "missing"),
+            "build_liveness_eligible": validation_build_progress_fresh,
+            "metrics": validation_progress_metrics,
         }
         return {
             "schema": REPORT_SCHEMA,

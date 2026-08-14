@@ -488,6 +488,44 @@ def current_generation_manifest_status(private_root: Path) -> str:
     return "legacy_absent"
 
 
+def pending_generation_payload_status(pending: dict[str, Any] | None) -> str:
+    """Classify one successor snapshot against the running producer code.
+
+    A pending marker is not authority.  This bounded status exists only so the
+    startup monitor can distinguish an exact current-code successor from a stale
+    or malformed marker left by another revision.
+    """
+
+    if pending is None:
+        return "absent"
+    identity = _identity(pending)
+    if (
+        pending.get("schema") != SCHEMA
+        or pending.get("producer_complete") is not False
+        or pending.get("paper_only") is not True
+        or pending.get("execution_allowed") is not False
+        or not str(pending.get("build_id") or "").startswith("hvb_")
+        or not isinstance(pending.get("active"), dict)
+        or str(pending.get("generation_id") or "") != _generation_id(identity)
+    ):
+        return "invalid_manifest"
+    try:
+        current_code = _producer_code_manifest()
+    except OSError:
+        return "producer_code_unavailable"
+    if identity.get("producer_code") != current_code:
+        return "code_stale"
+    return "code_current"
+
+
+def pending_generation_manifest_status(private_root: Path) -> str:
+    """Load and classify the currently active successor marker."""
+
+    return pending_generation_payload_status(
+        load_pending_generation(Path(private_root))
+    )
+
+
 def _base_manifest_valid(manifest: dict[str, Any]) -> bool:
     if (
         manifest.get("schema") != SCHEMA

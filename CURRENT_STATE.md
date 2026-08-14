@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-12
-- Verified against: `5a397edfb2787f51fdac12ef5f983a894b78a2a2`
+- Verified: 2026-08-14
+- Verified against: `e03502ddd484234c64ccb1d51b56c8397789b55f`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -49,16 +49,23 @@ authority:
   Deterministic synthetic E2E coverage must prove one causally linked product
   flow and replay idempotency.
 
-## Task-Branch Candidate: Expired Materialization Adoption
+Expired materialization adoption is integrated at
+`e03502ddd484234c64ccb1d51b56c8397789b55f`. It remains an exact-task,
+hash-bound operational mechanism and grants no general reconciliation authority.
 
-The `codex/stale-materialization-recovery` branch adds a narrow, non-authoritative
-recovery candidate for the cross-database crash window where an exact compute
-queue materialization is already durable but the owning task claim expires before
-its outbox acknowledgement. A hash-bound plan verifies the task fence, mutation
-sequence, sole outbox generation and immutable queue binding. Apply adopts that
-existing job into the task lifecycle without requeueing or creating a new queue,
-outbox or materialization effect; repeat apply changes zero rows. Promotion still
-requires exact-head review, full repository gates and a separate merge decision.
+## Task-Branch Candidate: Validation Startup Debt Monitoring
+
+The `codex/validation-debt-monitor-repair` branch is a non-authoritative repair
+candidate. It separates old eligible validation debt from current product
+latency: historical age remains visible and degraded, recent eligible work keeps
+its own bounded latency failure, and an old backlog must prove positive service
+and net drain after a finite observation window. A stale completed generation is
+temporarily tolerated only while an exact current-code successor from the same
+run publishes real completed validation milestones inside the existing bounded
+generation deadline. Timer-only, unrelated, stale, wrong-revision and pre-run
+markers remain fail-closed. Promotion requires exact-head review, full repository
+gates and a separate merge decision; it does not authorize runtime or task
+disposition.
 
 ## Implemented Public Contracts
 

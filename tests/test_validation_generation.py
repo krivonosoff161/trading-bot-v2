@@ -193,6 +193,52 @@ def test_first_pending_generation_is_fail_closed_until_atomic_publication(tmp_pa
     assert set(snapshot.payloads) == {"fv_first"}
 
 
+def test_pending_generation_status_binds_successor_to_current_producer_code(
+    tmp_path, monkeypatch
+):
+    generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 2,
+            "task_type": "export_validation",
+            "task_key": "successor",
+            "payload_json": "{}",
+        }],
+        producer_time=3.0,
+    )
+
+    assert generation.pending_generation_manifest_status(tmp_path) == "code_current"
+
+    monkeypatch.setattr(
+        generation,
+        "_producer_code_manifest",
+        lambda: {"synthetic": "other-revision"},
+    )
+    assert generation.pending_generation_manifest_status(tmp_path) == "code_stale"
+
+
+def test_pending_generation_status_rejects_malformed_marker(tmp_path):
+    generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 2,
+            "task_type": "export_validation",
+            "task_key": "successor",
+            "payload_json": "{}",
+        }],
+        producer_time=3.0,
+    )
+    path = generation.pending_manifest_path(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["paper_only"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert (
+        generation.pending_generation_manifest_status(tmp_path)
+        == "invalid_manifest"
+    )
+
+
 def test_failed_successor_publication_leaves_prior_generation_authoritative(
     tmp_path, monkeypatch
 ):

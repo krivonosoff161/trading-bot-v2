@@ -879,6 +879,7 @@ class FarmTasksDB:
         *,
         now: float | None = None,
         window_seconds: float = 3600.0,
+        freshness_window_seconds: float = 3600.0,
     ) -> dict[str, Any]:
         """Return bounded aggregate evidence for export-validation capacity.
 
@@ -890,6 +891,8 @@ class FarmTasksDB:
         current = self._effective_now(now)
         window = max(1.0, float(window_seconds))
         since = current - window
+        freshness_window = max(1.0, float(freshness_window_seconds))
+        fresh_since = current - freshness_window
         active_placeholders = ",".join("?" for _ in ACTIVE_STATES)
         state_rows = self._conn.execute(
             f"""SELECT state, COUNT(*) AS n
@@ -910,6 +913,26 @@ class FarmTasksDB:
             None
             if oldest_row is None or oldest_row["oldest"] is None
             else float(oldest_row["oldest"])
+        )
+        fresh_eligible_row = self._conn.execute(
+            """SELECT COUNT(*) AS n, MIN(created_at) AS oldest
+               FROM tasks
+               WHERE task_type='export_validation'
+                 AND created_at>=?
+                 AND (state='queued' OR (state='deferred' AND deferred_until<=?))
+                 AND (
+                     depends_on IS NULL
+                     OR depends_on IN (
+                         SELECT task_id FROM tasks WHERE state='completed'
+                     )
+                 )""",
+            (fresh_since, current),
+        ).fetchone()
+        fresh_eligible = int(fresh_eligible_row["n"] or 0)
+        fresh_oldest_created_at = (
+            None
+            if fresh_eligible_row["oldest"] is None
+            else float(fresh_eligible_row["oldest"])
         )
         arrivals = int(
             self._conn.execute(
@@ -941,6 +964,13 @@ class FarmTasksDB:
                 0.0
                 if oldest_created_at is None
                 else round(max(0.0, current - oldest_created_at), 3)
+            ),
+            "freshness_window_seconds": freshness_window,
+            "fresh_eligible": fresh_eligible,
+            "fresh_oldest_eligible_age_seconds": (
+                0.0
+                if fresh_oldest_created_at is None
+                else round(max(0.0, current - fresh_oldest_created_at), 3)
             ),
             "window_seconds": window,
             "arrivals": arrivals,
