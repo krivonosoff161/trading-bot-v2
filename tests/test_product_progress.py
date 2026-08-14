@@ -14,6 +14,7 @@ from src.research_lab.product_progress import (
     scanner_metrics,
 )
 from src.research_lab import product_progress
+from src.research_lab.validation_generation import validation_producer_code_digest
 
 
 def _steady_report(*, waiting: bool) -> dict[str, object]:
@@ -1465,6 +1466,136 @@ def test_code_stale_generation_allows_exact_current_bounded_successor_build(
     assert report["components"]["validation_progress"][
         "build_liveness_eligible"
     ] is True
+
+
+def _publish_code_stale_pre_marker_progress(
+    root: Path,
+    *,
+    build_started_at: float = 101.0,
+    progress_at: float = 102.5,
+    code_digest: str | None = None,
+    stage: str = "validation_maintenance",
+) -> None:
+    publish_checkpoint(
+        root,
+        component="scanner",
+        sequence=1,
+        status="idle",
+        metrics=scanner_metrics(
+            inputs=0,
+            fresh=0,
+            cards=0,
+            dropped=0,
+            llm_failures=0,
+            provider_failures=0,
+        ),
+        completed_at=101.0,
+    )
+    publish_checkpoint(
+        root,
+        component="farm",
+        sequence=1,
+        status="waiting",
+        metrics=farm_metrics(
+            {
+                "paper_generation_v2": {
+                    "state": "waiting_validation_generation",
+                    "validation_generation_status": "code_stale",
+                },
+                "mandatory_product_cycle_complete": True,
+            }
+        ),
+        completed_at=102.0,
+    )
+    publish_checkpoint(
+        root,
+        component="validation_progress",
+        sequence=1,
+        status="progress",
+        metrics={
+            "stage": stage,
+            "milestone": "validation_request_loaded",
+            "completed": 1,
+            "total": 2,
+            "successor_build_phase": "pre_marker",
+            "successor_build_started_at": build_started_at,
+            "successor_code_digest": (
+                validation_producer_code_digest()
+                if code_digest is None
+                else code_digest
+            ),
+            "successor_marker_code_status": "absent",
+        },
+        completed_at=progress_at,
+    )
+
+
+def test_code_stale_generation_allows_exact_current_bounded_pre_marker_work(
+    tmp_path: Path,
+) -> None:
+    _publish_code_stale_pre_marker_progress(tmp_path)
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert report["ready"] is False
+    assert report["hard_fail_reasons"] == []
+    assert "validation_generation_pre_marker_in_progress" in report[
+        "degraded_reasons"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("build_started_at", "progress_at", "code_digest", "now", "expected"),
+    [
+        (99.0, 102.5, None, 103.0, "validation_generation_successor_not_current_run"),
+        (101.0, 102.5, "0" * 64, 103.0, "validation_generation_successor_not_current"),
+        (101.0, 102.0, None, 163.0, "validation_generation_build_progress_stalled"),
+        (101.0, 701.5, None, 702.0, "validation_generation_build_timeout"),
+    ],
+)
+def test_code_stale_generation_pre_marker_grace_fails_closed(
+    tmp_path: Path,
+    build_started_at: float,
+    progress_at: float,
+    code_digest: str | None,
+    now: float,
+    expected: str,
+) -> None:
+    _publish_code_stale_pre_marker_progress(
+        tmp_path,
+        build_started_at=build_started_at,
+        progress_at=progress_at,
+        code_digest=code_digest,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: now,
+    ).sample()
+
+    assert expected in report["hard_fail_reasons"]
+
+
+def test_unrelated_progress_cannot_claim_pre_marker_grace(tmp_path: Path) -> None:
+    _publish_code_stale_pre_marker_progress(
+        tmp_path,
+        stage="setup_outcome_memory_refresh",
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert "validation_generation_build_progress_stalled" in report[
+        "hard_fail_reasons"
+    ]
 
 
 def test_code_stale_generation_rejects_successor_from_another_revision(

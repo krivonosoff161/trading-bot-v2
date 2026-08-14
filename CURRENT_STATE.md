@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-14
-- Verified against: `e03502ddd484234c64ccb1d51b56c8397789b55f`
+- Verified against: `4ebc07146c6d85fa5cd9056f9ee910b0e142840a`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -53,22 +53,21 @@ Expired materialization adoption is integrated at
 `e03502ddd484234c64ccb1d51b56c8397789b55f`. It remains an exact-task,
 hash-bound operational mechanism and grants no general reconciliation authority.
 
-## Task-Branch Candidate: Validation Startup Debt Monitoring
+## Task-Branch Candidate: Validation Generation Startup Race
 
-The `codex/validation-debt-monitor-repair` branch is a non-authoritative repair
-candidate. It separates old eligible validation debt from current product
-latency: historical age remains visible and degraded, recent eligible work keeps
-its own bounded latency failure, while zero service or non-positive net drain in
-the isolated historical lane remains degraded unless it creates a current-product
-safety failure. Historical batches stamp canonical candidate evidence for the
-derived setup memory and bounded validator-review cycle, but cannot publish or
-replace current Telegram product authority. A stale completed generation is
-temporarily tolerated only while an exact current-code successor from the same
-run publishes real completed validation milestones inside the existing bounded
-generation deadline. Timer-only, unrelated, stale, wrong-revision and pre-run
-markers remain fail-closed. Promotion requires exact-head review, full repository
-gates and a separate merge decision; it does not authorize runtime or task
-disposition.
+PR #280 is integrated at `4ebc07146c6d85fa5cd9056f9ee910b0e142840a`.
+The `codex/validation-generation-startup-race-repair` branch is a new
+non-authoritative repair candidate for the remaining pre-marker startup window.
+Validation request preparation can publish real completed work before it knows
+whether the bounded batch contains a fresh product candidate and therefore
+before it may safely publish a pending-generation marker. The candidate binds
+that interval to the exact current validation-producer digest, the current
+process-local attempt start, real validation milestones, and the existing
+generation-transition deadline. Repeated maintenance slots cannot reset the
+deadline. Missing intent, unrelated or stale progress, another code digest, a
+pre-run attempt, and an expired deadline remain fail-closed. Promotion requires
+exact-head review, full repository gates and a separate merge decision; it does
+not authorize runtime or task disposition.
 
 ## Implemented Public Contracts
 

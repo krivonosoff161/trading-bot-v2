@@ -8,36 +8,32 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: e03502ddd484234c64ccb1d51b56c8397789b55f
+  trading-bot-v2: 4ebc07146c6d85fa5cd9056f9ee910b0e142840a
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/validation-debt-monitor-repair
+  branch: codex/validation-generation-startup-race-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: e03502ddd484234c64ccb1d51b56c8397789b55f
+  baseline_revision: 4ebc07146c6d85fa5cd9056f9ee910b0e142840a
   scope:
     - real_completed_validation_maintenance_milestones
-    - exact_current_bounded_successor_generation_build
-    - historical_validation_debt_separate_from_fresh_product_latency
-    - historical_validation_research_lane_without_product_authority
-    - bounded_service_rate_and_net_drain_degradation
-    - validation_evidence_bound_advisory_review
+    - exact_current_bounded_pre_marker_successor_build
+    - immutable_process_local_successor_deadline
+    - repeated_priority_slots_do_not_extend_deadline
+    - wrong_revision_pre_run_stale_and_unrelated_progress_fail_closed
+    - pending_generation_not_published_before_fresh_batch_classification
     - no_runtime_or_task_disposition_authority
   evidence:
     - src/research_lab/product_progress.py
     - src/research_lab/validation_generation.py
-    - src/research_lab/farm_tasks_db.py
-    - src/research_lab/validation_orchestrator.py
     - scripts/strategy_lab/farm_loop.py
-    - scripts/strategy_lab/agent_role_review_cycle.py
     - tests/test_product_progress.py
     - tests/test_farm_loop_stage_visibility.py
-    - tests/test_validation_historical_lane.py
-    - tests/test_agent_role_review_cycle.py
-  promotion_gate: exact-head review, adversarial liveness and debt tests, full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: exact task 38065 disposition, Paper Evidence v2 rebind, and owner-authorized paper-only operational proof after merge
+    - tests/test_validation_generation.py
+  promotion_gate: exact-head review, adversarial startup liveness and timeout tests, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  runtime_gate: Paper Evidence v2 rebind and owner-authorized paper-only operational proof after merge
 authority_values:
   - none
   - advisory

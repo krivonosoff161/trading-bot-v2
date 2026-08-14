@@ -598,6 +598,37 @@ class ProductProgressMonitor:
             and validation_progress_age
             <= self.slo.farm_startup_progress_stale_seconds
         )
+        successor_build_phase = str(
+            validation_progress_metrics.get("successor_build_phase") or ""
+        )
+        successor_build_started_at = float(
+            validation_progress_metrics.get("successor_build_started_at") or 0.0
+        )
+        successor_code_digest = str(
+            validation_progress_metrics.get("successor_code_digest") or ""
+        )
+        successor_expected_digest = ""
+        if successor_build_phase == "pre_marker":
+            try:
+                from src.research_lab.validation_generation import (
+                    validation_producer_code_digest,
+                )
+
+                successor_expected_digest = validation_producer_code_digest()
+            except OSError:
+                successor_expected_digest = ""
+        successor_code_current = bool(
+            successor_expected_digest
+            and successor_code_digest == successor_expected_digest
+        )
+        successor_current_run = bool(
+            successor_build_started_at >= self.run_started_at > 0.0
+        )
+        successor_within_deadline = bool(
+            successor_build_started_at > 0.0
+            and max(0.0, now - successor_build_started_at)
+            <= self.slo.validation_generation_transition_seconds
+        )
         for component, limit in (
             ("scanner", self.slo.scanner_seconds),
             ("farm", self.slo.farm_seconds),
@@ -714,6 +745,27 @@ class ProductProgressMonitor:
                             degraded.append(
                                 "validation_generation_rebuild_in_progress"
                             )
+                        elif not build_active and successor_build_phase == "pre_marker":
+                            if not successor_code_current:
+                                hard_fail.append(
+                                    "validation_generation_successor_not_current"
+                                )
+                            elif not successor_current_run:
+                                hard_fail.append(
+                                    "validation_generation_successor_not_current_run"
+                                )
+                            elif not successor_within_deadline:
+                                hard_fail.append(
+                                    "validation_generation_build_timeout"
+                                )
+                            elif not validation_build_progress_fresh:
+                                hard_fail.append(
+                                    "validation_generation_build_progress_stalled"
+                                )
+                            else:
+                                degraded.append(
+                                    "validation_generation_pre_marker_in_progress"
+                                )
                         elif not build_active:
                             hard_fail.append("validation_generation_code_stale")
                         elif build_code_status != "code_current":
