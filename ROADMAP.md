@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-14
-- Verified against: `4ebc07146c6d85fa5cd9056f9ee910b0e142840a`
+- Verified against: `0c120eb4609b3ffa49a87bc1e7eaa8d04e769892`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -16,20 +16,20 @@ dependency, not by a route to live trading.
 
 ## In Review On The Task Branch
 
-The unmerged `codex/validation-generation-startup-race-repair` branch is a
-bounded startup-monitor repair candidate, not an operational capability. It
-must prove that exact-current validation request preparation may remain in a
-pre-marker state only while real completed validation milestones stay fresh and
-one immutable process-local deadline remains open. Another code digest, a
-pre-run attempt, stale or unrelated progress, and timeout still fail closed.
-The candidate does not publish a pending generation before the task batch is
-known to contain fresh eligible product work and does not let repeated priority
-slots reset the deadline.
+PR #281 integrated the bounded pre-marker startup proof at
+`0c120eb4609b3ffa49a87bc1e7eaa8d04e769892`. The same task branch now contains a
+narrow non-authoritative handoff follow-up: an exact current-run generation that
+has already been published must override a stale preceding farm checkpoint for
+only the remainder of the immutable transition deadline. Validation progress
+records `current_published`, while the monitor independently verifies the
+current manifest and producer time. Old-run, stale-code, malformed and unbounded
+publication evidence remains fail-closed.
 
-Exit gate: focused product-progress and generation tests, lifecycle/fencing and
-integration regression, full non-live tests, repository guards, clean exact-head
-review, synchronized documentation, and a separate merge decision. Runtime and
-Paper v2 rebind remain later operational gates.
+Exit gate: reproduce the real published-generation/stale-farm-checkpoint race,
+focused product-progress and generation tests, lifecycle/fencing and integration
+regression, full non-live tests, repository guards, clean exact-head review,
+synchronized documentation, and a separate merge decision. Runtime and Paper v2
+rebind remain later operational gates.
 
 ## Completed
 

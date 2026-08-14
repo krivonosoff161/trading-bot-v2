@@ -14,7 +14,10 @@ from src.research_lab.product_progress import (
     scanner_metrics,
 )
 from src.research_lab import product_progress
-from src.research_lab.validation_generation import validation_producer_code_digest
+from src.research_lab.validation_generation import (
+    validation_producer_code_digest,
+    write_current_generation,
+)
 
 
 def _steady_report(*, waiting: bool) -> dict[str, object]:
@@ -1546,6 +1549,53 @@ def test_code_stale_generation_allows_exact_current_bounded_pre_marker_work(
     assert "validation_generation_pre_marker_in_progress" in report[
         "degraded_reasons"
     ]
+
+
+def test_stale_farm_checkpoint_accepts_exact_current_publication_until_refresh(
+    tmp_path: Path,
+) -> None:
+    _publish_code_stale_pre_marker_progress(tmp_path, progress_at=102.0)
+    write_current_generation(
+        tmp_path,
+        tasks=[],
+        exported_ids=[],
+        completed_ids=[],
+        producer_time=101.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 163.0,
+    ).sample()
+
+    assert "validation_generation_build_progress_stalled" not in report[
+        "hard_fail_reasons"
+    ]
+    assert "validation_generation_publication_awaiting_farm_checkpoint" in report[
+        "degraded_reasons"
+    ]
+
+
+def test_exact_current_publication_cannot_mask_unbounded_stale_farm_checkpoint(
+    tmp_path: Path,
+) -> None:
+    _publish_code_stale_pre_marker_progress(tmp_path, progress_at=699.0)
+    write_current_generation(
+        tmp_path,
+        tasks=[],
+        exported_ids=[],
+        completed_ids=[],
+        producer_time=101.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 702.0,
+    ).sample()
+
+    assert "validation_generation_transition_timeout" in report["hard_fail_reasons"]
 
 
 @pytest.mark.parametrize(

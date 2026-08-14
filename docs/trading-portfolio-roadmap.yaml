@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 4ebc07146c6d85fa5cd9056f9ee910b0e142840a
+  trading-bot-v2: 0c120eb4609b3ffa49a87bc1e7eaa8d04e769892
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
   branch: codex/validation-generation-startup-race-repair
@@ -16,7 +16,7 @@ task_branch_candidate:
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: 4ebc07146c6d85fa5cd9056f9ee910b0e142840a
+  baseline_revision: 0c120eb4609b3ffa49a87bc1e7eaa8d04e769892
   scope:
     - real_completed_validation_maintenance_milestones
     - exact_current_bounded_pre_marker_successor_build
@@ -24,6 +24,9 @@ task_branch_candidate:
     - repeated_priority_slots_do_not_extend_deadline
     - wrong_revision_pre_run_stale_and_unrelated_progress_fail_closed
     - pending_generation_not_published_before_fresh_batch_classification
+    - exact_current_publication_overrides_only_stale_preceding_farm_checkpoint
+    - current_published_handoff_uses_original_bounded_transition_deadline
+    - next_historical_slot_cannot_erase_current_publication_proof
     - no_runtime_or_task_disposition_authority
   evidence:
     - src/research_lab/product_progress.py

@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-14
-- Verified against: `4ebc07146c6d85fa5cd9056f9ee910b0e142840a`
+- Verified against: `0c120eb4609b3ffa49a87bc1e7eaa8d04e769892`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -53,21 +53,22 @@ Expired materialization adoption is integrated at
 `e03502ddd484234c64ccb1d51b56c8397789b55f`. It remains an exact-task,
 hash-bound operational mechanism and grants no general reconciliation authority.
 
-## Task-Branch Candidate: Validation Generation Startup Race
+## Task-Branch Candidate: Published Generation Checkpoint Handoff
 
-PR #280 is integrated at `4ebc07146c6d85fa5cd9056f9ee910b0e142840a`.
-The `codex/validation-generation-startup-race-repair` branch is a new
-non-authoritative repair candidate for the remaining pre-marker startup window.
-Validation request preparation can publish real completed work before it knows
-whether the bounded batch contains a fresh product candidate and therefore
-before it may safely publish a pending-generation marker. The candidate binds
-that interval to the exact current validation-producer digest, the current
-process-local attempt start, real validation milestones, and the existing
-generation-transition deadline. Repeated maintenance slots cannot reset the
-deadline. Missing intent, unrelated or stale progress, another code digest, a
-pre-run attempt, and an expired deadline remain fail-closed. Promotion requires
-exact-head review, full repository gates and a separate merge decision; it does
-not authorize runtime or task disposition.
+PR #281 is integrated at `0c120eb4609b3ffa49a87bc1e7eaa8d04e769892`.
+Its first operational startup exposed one narrower handoff race: validation had
+already published an exact current-code empty generation, while the last
+completed farm checkpoint still described the preceding generation as
+`code_stale`. Later historical-maintenance milestones were therefore
+mislabelled `pre_marker`, and the monitor raised a false stalled-build failure.
+The task branch now carries a non-authoritative follow-up candidate which marks
+that exact publication as `current_published` and lets the foreground farm
+consume it only within the existing immutable transition deadline. The monitor
+also verifies the current manifest directly, including its current-run producer
+time, so a subsequent historical slot cannot erase the proof. A publication
+from another run, stale code, malformed authority, or an expired handoff remains
+fail-closed. Promotion still requires exact-head review and full repository
+gates and grants no runtime or task-disposition authority.
 
 ## Implemented Public Contracts
 

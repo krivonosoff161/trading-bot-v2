@@ -2541,15 +2541,19 @@ def _run_validation_maintenance(
             successor_metrics: dict[str, Any] = {}
             if successor_build_started_at > 0.0:
                 pending_status = pending_generation_manifest_status(private_root)
+                current_status = current_generation_manifest_status(private_root)
+                if current_status == "code_current":
+                    successor_phase = "current_published"
+                elif pending_status == "code_current":
+                    successor_phase = "pending_marker"
+                else:
+                    successor_phase = "pre_marker"
                 successor_metrics = {
-                    "successor_build_phase": (
-                        "pending_marker"
-                        if pending_status == "code_current"
-                        else "pre_marker"
-                    ),
+                    "successor_build_phase": successor_phase,
                     "successor_build_started_at": successor_build_started_at,
                     "successor_code_digest": producer_code_digest,
                     "successor_marker_code_status": pending_status,
+                    "successor_current_code_status": current_status,
                 }
             publish_checkpoint(
                 private_root,
