@@ -940,19 +940,6 @@ def _run_v2_post_delivery_maintenance_chain(
         out["trading_policy_calibration"],
         run_id=run_id,
     )
-    out["setup_outcome_memory_refresh"] = _refresh_setup_outcome_memory(
-        args,
-        private_root,
-        apply=apply,
-        loop=loop,
-        cycle_started_at=cycle_started_at,
-        evidence_database_path=evidence_database_path,
-    )
-    _require_current_paper_generation(
-        "setup outcome memory",
-        out["setup_outcome_memory_refresh"],
-        run_id=run_id,
-    )
     runtime.raise_if_failed()
     out["paper_product_quality_report"] = build_paper_product_quality_report(
         private_root,
@@ -975,13 +962,60 @@ def _run_v2_post_delivery_maintenance_chain(
         },
     )
     # Delivery, deterministic generation consumers, analyst routing, role
-    # reconciliation, calibration, setup memory, and the quality report are the
-    # mandatory paper-product boundary. Calculator and broad role-review LLM
-    # calls that follow are advisory maintenance: they remain observable and
-    # bounded by the ordinary steady-state SLO, but cannot consume the whole RCC
-    # cold-start budget before T+0.
+    # reconciliation, calibration and the quality report are the mandatory
+    # paper-product boundary.  Setup-outcome memory is a derived historical
+    # snapshot: its direct consumers are the next research/review cycle, while
+    # current paper truth and known-bad gating are read from generation-bound
+    # production sources.  Do not let a legitimate cold cache rebuild consume
+    # the 600-second T+0 budget, and never publish a partial snapshot as full.
     out["mandatory_product_cycle_complete"] = True
     _publish_farm_product_checkpoint(private_root, out)
+
+    try:
+        out["setup_outcome_memory_backfill"] = _refresh_setup_outcome_memory(
+            args,
+            private_root,
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            evidence_database_path=evidence_database_path,
+            stage="setup_outcome_memory_backfill",
+            expected_generation_run_id=run_id,
+            external_check_active=check_active,
+        )
+        _require_current_paper_generation(
+            "setup outcome memory backfill",
+            out["setup_outcome_memory_backfill"],
+            run_id=run_id,
+        )
+    except FarmCycleStopRequested:
+        raise
+    except Exception as exc:  # noqa: BLE001 - isolated historical derived lane
+        # A current-generation/fence/owner/stop failure is never downgraded. A
+        # historical cache or derived-artifact fault is reported precisely as
+        # degraded and leaves the prior complete snapshot untouched.  The next
+        # cycle may resume only identity-bound cache entries.
+        check_active()
+        out["setup_outcome_memory_backfill"] = {
+            "schema": "setup_outcome_memory_backfill.v1",
+            "state": "failed",
+            "error_type": type(exc).__name__,
+            "paper_generation_run_id": run_id,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+        _write_loop_status(
+            private_root,
+            stage="setup_outcome_memory_backfill",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            details={
+                "milestone": "historical_backfill_failed",
+                "error_type": type(exc).__name__,
+                "paper_generation_run_id": run_id,
+            },
+        )
 
 
 def _run_legacy_main_paper_derived_chain(
@@ -1500,10 +1534,15 @@ def _print_cycle(out: dict) -> None:
             f"rows={product_train.get('rows', 0)} source_rows={product_train.get('source_rows', 0)} "
             f"paper_only={product_train.get('paper_only')}"
         )
-    memory_refresh = out.get("setup_outcome_memory_refresh") or {}
+    memory_refresh = (
+        out.get("setup_outcome_memory_backfill")
+        or out.get("setup_outcome_memory_refresh")
+        or {}
+    )
     if memory_refresh:
         print(
-            "  setup_outcome_memory_refresh: "
+            "  setup_outcome_memory_backfill: "
+            f"state={memory_refresh.get('state', 'completed')} "
             f"total={memory_refresh.get('total', 0)} "
             f"product_rows={memory_refresh.get('product_rows', 0)} "
             f"product_terminal={memory_refresh.get('product_terminal_rows', 0)} "
@@ -1734,7 +1773,13 @@ def _cycle_signature(out: dict) -> tuple:
         sorted((out.get("product_signal_training_export") or {}).items())
     )
     memory_refresh = tuple(
-        sorted((out.get("setup_outcome_memory_refresh") or {}).items())
+        sorted(
+            (
+                out.get("setup_outcome_memory_backfill")
+                or out.get("setup_outcome_memory_refresh")
+                or {}
+            ).items()
+        )
     )
     product_quality = tuple(
         sorted((out.get("paper_product_quality_report") or {}).items())
@@ -2332,6 +2377,9 @@ def _refresh_setup_outcome_memory(
     loop: bool,
     cycle_started_at: float,
     evidence_database_path: Path | str | None = None,
+    stage: str = "setup_outcome_memory_refresh",
+    expected_generation_run_id: str = "",
+    external_check_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Run the production memory refresh with real, completed milestones."""
 
@@ -2340,6 +2388,8 @@ def _refresh_setup_outcome_memory(
     failure_signal = getattr(args, "task_claim_failure_signal", None)
 
     def check_active() -> None:
+        if external_check_active is not None:
+            external_check_active()
         if failure_signal is not None:
             failure_signal.raise_if_failed()
         stop_file = str(getattr(args, "stop_file", "") or "")
@@ -2352,7 +2402,7 @@ def _refresh_setup_outcome_memory(
         check_active()
         _write_loop_status(
             private_root,
-            stage="setup_outcome_memory_refresh",
+            stage=stage,
             apply=apply,
             loop=loop,
             cycle_started_at=cycle_started_at,
@@ -2382,6 +2432,12 @@ def _refresh_setup_outcome_memory(
         evidence_database_path=evidence_database_path,
     )
     product_memory = product_memory_evidence["summary"]
+    if expected_generation_run_id and str(
+        product_memory_evidence.get("paper_generation_run_id") or ""
+    ) != expected_generation_run_id:
+        raise RuntimeError(
+            "setup outcome memory backfill generation changed before snapshot publication"
+        )
     progress(
         "product_memory_summarized",
         int(product_memory.get("rows") or 0),
@@ -2394,7 +2450,12 @@ def _refresh_setup_outcome_memory(
     )
     progress("snapshot_written", len(records), len(records))
     return {
-        "schema": "setup_outcome_memory_refresh.v1",
+        "schema": (
+            "setup_outcome_memory_backfill.v1"
+            if stage == "setup_outcome_memory_backfill"
+            else "setup_outcome_memory_refresh.v1"
+        ),
+        "state": "completed",
         "snapshot_path": str(snapshot_path),
         "total": summary.get("total", 0),
         "paper_ready_without_hard_pass": summary.get(

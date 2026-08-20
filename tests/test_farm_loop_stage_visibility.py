@@ -1850,3 +1850,51 @@ def test_production_memory_refresh_publishes_incremental_cache_evidence(
     assert captured["product_paper_memory"] is product_evidence
     assert out["paper_generation_run_id"] == "run-v2"
     assert out["current_generation_compatible"] is True
+
+
+def test_historical_memory_backfill_rejects_stale_generation_before_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import setup_outcome_memory as memory
+
+    args = SimpleNamespace(task_claim_failure_signal=None, stop_file="")
+    snapshot_written = False
+
+    monkeypatch.setattr(
+        memory,
+        "build_memory_index",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(memory, "summarize_memory", lambda _records: {"total": 0})
+    monkeypatch.setattr(
+        memory,
+        "summarize_product_training_memory",
+        lambda *_args, **_kwargs: {
+            "summary": {"rows": 0, "terminal_rows": 0, "paper_pnl_usdt": 0.0},
+            "paper_generation_run_id": "newer-run",
+            "generation_status": "complete",
+            "current_generation_compatible": True,
+        },
+    )
+
+    def forbidden_snapshot(*_args, **_kwargs):
+        nonlocal snapshot_written
+        snapshot_written = True
+        pytest.fail("stale-generation backfill must not publish a snapshot")
+
+    monkeypatch.setattr(memory, "write_memory_snapshot", forbidden_snapshot)
+    monkeypatch.setattr(farm_loop, "_write_loop_status", lambda *_a, **_k: True)
+
+    with pytest.raises(RuntimeError, match="generation changed"):
+        farm_loop._refresh_setup_outcome_memory(
+            args,
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=100.0,
+            stage="setup_outcome_memory_backfill",
+            expected_generation_run_id="run-current",
+        )
+
+    assert snapshot_written is False
