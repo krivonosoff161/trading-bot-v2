@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-14
-- Verified against: `0c120eb4609b3ffa49a87bc1e7eaa8d04e769892`
+- Verified: 2026-08-20
+- Verified against: `d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -16,20 +16,23 @@ dependency, not by a route to live trading.
 
 ## In Review On The Task Branch
 
-PR #281 integrated the bounded pre-marker startup proof at
-`0c120eb4609b3ffa49a87bc1e7eaa8d04e769892`. The same task branch now contains a
-narrow non-authoritative handoff follow-up: an exact current-run generation that
-has already been published must override a stale preceding farm checkpoint for
-only the remainder of the immutable transition deadline. Validation progress
-records `current_published`, while the monitor independently verifies the
-current manifest and producer time. Old-run, stale-code, malformed and unbounded
-publication evidence remains fail-closed.
+PR #282 integrated the exact current-generation startup handoff at
+`d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b`. Its next exact-main launch did not
+reach T+0 because a cold 26,845-source setup-outcome-memory recompute still sat
+inside the mandatory product boundary and exhausted the unchanged 600-second
+ceiling. This candidate separates that derived historical snapshot from current
+product truth: current generation, known-bad, analyst, role, calibration and
+quality remain mandatory; only the identity-bound historical backfill runs after
+the completed product checkpoint. Its partial cache is never a complete memory
+snapshot. The branch also supplies a crash-safe canonical evidence-seal library;
+activating an external finalizer remains an operational gate.
 
-Exit gate: reproduce the real published-generation/stale-farm-checkpoint race,
-focused product-progress and generation tests, lifecycle/fencing and integration
-regression, full non-live tests, repository guards, clean exact-head review,
-synchronized documentation, and a separate merge decision. Runtime and Paper v2
-rebind remain later operational gates.
+Exit gate: exact 26,845-source cold/warm, one-source delta, classifier/schema,
+corruption, interruption/resume, stale-generation, owner/stop, no-duplicate and
+evidence-seal adversarial tests; lifecycle/fencing and integration regression;
+full non-live tests, repository guards, clean exact-head review, synchronized
+documentation, and a separate merge decision. Runtime and Paper v2 rebind remain
+later operational gates.
 
 ## Completed
 
