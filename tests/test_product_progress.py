@@ -1063,6 +1063,9 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
             "system_analyst_feedback": {"feedback_candidates": 9, "routed": 8},
             "setup_outcome_memory_backfill": {
                 "state": "failed",
+                "completed": 202,
+                "total": 26_845,
+                "deferred_reason": "slice_budget",
                 "product_rows": 10,
                 "product_terminal_rows": 2,
                 "reject_characterization": {
@@ -1098,6 +1101,9 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
     assert metrics["memory_rows"] == 10
     assert metrics["memory_backfill_state"] == "failed"
     assert metrics["memory_backfill_complete"] is False
+    assert metrics["memory_backfill_completed"] == 202
+    assert metrics["memory_backfill_total"] == 26_845
+    assert metrics["memory_backfill_deferred_reason"] == "slice_budget"
     assert metrics["memory_terminal_rows"] == 2
     assert metrics["memory_reject_cache_hits"] == 26
     assert metrics["memory_reject_snapshot_bootstrap_hits"] == 27

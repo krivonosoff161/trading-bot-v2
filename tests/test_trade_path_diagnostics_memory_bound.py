@@ -578,3 +578,34 @@ def test_incremental_reject_cache_stop_prevents_publication(
         )
 
     assert not cache.exists()
+
+
+def test_incremental_reject_cache_yields_a_bounded_slice_and_resumes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [_source_row(index, label="") for index in range(5)]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+
+    with pytest.raises(diagnostics.IncrementalRefreshDeferred) as deferred:
+        diagnostics.characterize_rejects_incremental(
+            tmp_path,
+            cache_path=cache,
+            max_recomputed_rows=2,
+        )
+
+    assert deferred.value.stats["cache_complete"] is False
+    assert deferred.value.stats["recomputed"] == 2
+    partial = json.loads(cache.read_text(encoding="utf-8"))
+    assert partial["complete"] is False
+    assert len(partial["items"]) == 2
+
+    rows, resumed = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+    assert len(rows) == 5
+    assert resumed["cache_complete"] is True
+    assert resumed["cache_hits"] == 2

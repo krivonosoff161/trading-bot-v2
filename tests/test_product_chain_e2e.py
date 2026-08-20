@@ -28,6 +28,7 @@ from src.research_lab.ownership import ProcessIdentity
 from src.research_lab.paper_evidence_store import PaperEvidenceStore
 from src.research_lab.paper_generation_run import run_paper_generation_v2
 from src.research_lab.paper_signals.cycle import run_cycle as run_paper_signal_cycle
+from src.research_lab.paper_signals import lane as paper_lane
 from src.research_lab.paper_signals.store import load_signals
 from src.research_lab.paper_signals.training_export import export_training_rows
 from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
@@ -199,6 +200,19 @@ def _seed_candles(root: Path) -> None:
     end = rows[-1]["ts"]
     (target / f"AAA_USDT_SWAP_{start}_{end}_1h.json").write_text(
         json.dumps(rows), encoding="utf-8"
+    )
+    derived = root / "state" / "derived"
+    derived.mkdir(parents=True, exist_ok=True)
+    (derived / "setup_outcome_memory.json").write_text(
+        json.dumps(
+            {
+                "schema": "setup_outcome_memory.v2",
+                "complete": True,
+                "known_bad_set_sha256": paper_lane._known_bad_digest(set()),
+                "records": [],
+            }
+        ),
+        encoding="utf-8",
     )
 
 

@@ -1886,7 +1886,10 @@ def test_historical_memory_backfill_rejects_stale_generation_before_snapshot(
     monkeypatch.setattr(memory, "write_memory_snapshot", forbidden_snapshot)
     monkeypatch.setattr(farm_loop, "_write_loop_status", lambda *_a, **_k: True)
 
-    with pytest.raises(RuntimeError, match="generation changed"):
+    with pytest.raises(
+        farm_loop.SetupOutcomeMemoryGenerationChanged,
+        match="generation changed",
+    ):
         farm_loop._refresh_setup_outcome_memory(
             args,
             tmp_path,
@@ -1898,3 +1901,49 @@ def test_historical_memory_backfill_rejects_stale_generation_before_snapshot(
         )
 
     assert snapshot_written is False
+
+
+def test_historical_memory_backfill_yields_without_snapshot_or_delivery_replay(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import setup_outcome_memory as memory
+
+    args = SimpleNamespace(
+        task_claim_failure_signal=None,
+        stop_file="",
+        setup_memory_backfill_max_seconds=5.0,
+        setup_memory_backfill_max_recomputed_rows=2,
+    )
+    def defer(*_args, **_kwargs):
+        raise memory.SetupOutcomeMemoryBackfillDeferred(
+            {
+                "sources": 26_845,
+                "cache_hits": 200,
+                "recomputed": 2,
+                "cache_complete": False,
+                "deferred_reason": "slice_budget",
+            }
+        )
+
+    monkeypatch.setattr(memory, "build_memory_index", defer)
+    monkeypatch.setattr(
+        memory,
+        "write_memory_snapshot",
+        lambda *_a, **_k: pytest.fail("deferred backfill must not publish a snapshot"),
+    )
+    monkeypatch.setattr(farm_loop, "_write_loop_status", lambda *_a, **_k: True)
+
+    out = farm_loop._refresh_setup_outcome_memory(
+        args,
+        tmp_path,
+        apply=True,
+        loop=True,
+        cycle_started_at=100.0,
+        stage="setup_outcome_memory_backfill",
+        expected_generation_run_id="run-current",
+    )
+
+    assert out["state"] == "deferred"
+    assert out["completed"] == 202
+    assert out["total"] == 26_845

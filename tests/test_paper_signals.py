@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -293,12 +295,29 @@ class _RecordingEmptyProvider:
         return []
 
 
+def _seed_known_bad_authority(root: Path) -> None:
+    derived = root / "state" / "derived"
+    derived.mkdir(parents=True, exist_ok=True)
+    (derived / "setup_outcome_memory.json").write_text(
+        json.dumps(
+            {
+                "schema": "setup_outcome_memory.v2",
+                "complete": True,
+                "known_bad_set_sha256": lane._known_bad_digest(set()),
+                "records": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _seed_universe(root: Path):
     d = root / "discovery"
     d.mkdir(parents=True, exist_ok=True)
     (d / "live_universe.json").write_text(
         '{"detail": {"g": [{"inst_id": "AAA-USDT-SWAP", "symbol": "AAA_USDT_SWAP", '
         '"score": 9, "spread_bps": 2, "vol_usd": 50000000, "move_pct": 10}]}}', encoding="utf-8")
+    _seed_known_bad_authority(root)
 
 
 def _seed_large_universe(root: Path, n: int = 12):
@@ -319,6 +338,7 @@ def _seed_large_universe(root: Path, n: int = 12):
         json.dumps({"detail": {"g": rows}}, ensure_ascii=False),
         encoding="utf-8",
     )
+    _seed_known_bad_authority(root)
 
 
 class TestCycle:
@@ -1035,6 +1055,68 @@ class TestKnownBadGate:
              "outcome_class": "CONFIRMED_BAD"}]}), encoding="utf-8")
 
         assert lane.load_known_bad(tmp_path) == set()
+
+    def test_missing_or_corrupt_snapshot_never_becomes_empty_known_bad(self, tmp_path):
+        with pytest.raises(lane.KnownBadAuthorityUnavailable, match="missing"):
+            lane.load_known_bad(tmp_path)
+
+        d = tmp_path / "state" / "derived"
+        d.mkdir(parents=True)
+        (d / "setup_outcome_memory.json").write_text("not-json", encoding="utf-8")
+        with pytest.raises(lane.KnownBadAuthorityUnavailable, match="unreadable"):
+            lane.load_known_bad(tmp_path)
+
+    def test_canonical_apply_cycle_fails_closed_when_known_bad_authority_missing(
+        self,
+        tmp_path,
+    ):
+        from src.research_lab.paper_signals import cycle
+
+        _seed_universe(tmp_path)
+        (tmp_path / "state" / "derived" / "setup_outcome_memory.json").unlink()
+
+        with pytest.raises(lane.KnownBadAuthorityUnavailable, match="missing"):
+            cycle.run_cycle(
+                tmp_path,
+                timeframes=("15m",),
+                provider=_FakeProvider([100 + i * 0.5 for i in range(80)]),
+                apply=True,
+                now=1e6,
+                require_known_bad_authority=True,
+            )
+
+    def test_complete_snapshot_gates_when_refresh_accelerator_is_absent(self, tmp_path):
+        d = tmp_path / "state" / "derived"
+        d.mkdir(parents=True)
+        records = [
+            {
+                "symbol": "BAD_USDT_SWAP",
+                "timeframe": "15m",
+                "family": "reversal_fade",
+                "params_hash": "params-a",
+                "outcome_class": "CONFIRMED_BAD",
+            }
+        ]
+        digest = lane._known_bad_digest(
+            {("BAD_USDT_SWAP", "15m", "reversal_fade", "params-a")}
+        )
+        (d / "setup_outcome_memory.json").write_text(
+            json.dumps(
+                {
+                    "schema": "setup_outcome_memory.v2",
+                    "complete": True,
+                    "known_bad_set_sha256": digest,
+                    "records": records,
+                }
+            ),
+            encoding="utf-8",
+        )
+        authority = lane.load_known_bad_authority(tmp_path)
+
+        assert authority.state == "valid_snapshot_accelerator_missing"
+        assert authority.setups == {
+            ("BAD_USDT_SWAP", "15m", "reversal_fade", "params-a")
+        }
 
 
 class TestRicherDiagnosis:

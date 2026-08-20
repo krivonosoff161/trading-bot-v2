@@ -33,6 +33,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 TASK_CLAIM_LEASE_SECONDS = 900.0
 STATUS_PUBLISH_MAX_OUTAGE_SECONDS = 120.0
+SETUP_MEMORY_BACKFILL_MAX_SECONDS = 30.0
+SETUP_MEMORY_BACKFILL_MAX_RECOMPUTED_ROWS = 500
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -61,6 +63,18 @@ from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 
 class FarmCycleStopRequested(RuntimeError):
     """A canonical stop intent cancelled an interruptible long farm stage."""
+
+
+class SetupOutcomeMemoryCriticalFailure(RuntimeError):
+    """A historical lane observed a current runtime safety boundary failure."""
+
+
+class SetupOutcomeMemoryGenerationChanged(SetupOutcomeMemoryCriticalFailure):
+    """The exact generation bound to a backfill changed before publication."""
+
+
+class SetupOutcomeMemoryPublicationConflict(SetupOutcomeMemoryCriticalFailure):
+    """A complete derived snapshot could not be safely published."""
 
 
 class _ValidationGenerationWaiting(RuntimeError):
@@ -983,12 +997,16 @@ def _run_v2_post_delivery_maintenance_chain(
             expected_generation_run_id=run_id,
             external_check_active=check_active,
         )
-        _require_current_paper_generation(
-            "setup outcome memory backfill",
-            out["setup_outcome_memory_backfill"],
-            run_id=run_id,
-        )
-    except FarmCycleStopRequested:
+        if out["setup_outcome_memory_backfill"].get("state") == "completed":
+            _require_current_paper_generation(
+                "setup outcome memory backfill",
+                out["setup_outcome_memory_backfill"],
+                run_id=run_id,
+            )
+    except (
+        FarmCycleStopRequested,
+        SetupOutcomeMemoryCriticalFailure,
+    ):
         raise
     except Exception as exc:  # noqa: BLE001 - isolated historical derived lane
         # A current-generation/fence/owner/stop failure is never downgraded. A
@@ -2381,15 +2399,31 @@ def _refresh_setup_outcome_memory(
     expected_generation_run_id: str = "",
     external_check_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Run the production memory refresh with real, completed milestones."""
+    """Run one observable, bounded historical derived-memory slice.
+
+    The result never becomes product authority: only a fully built, exact-run
+    snapshot is published.  A normal slice yield persists identity-bound cache
+    acceleration and returns ``deferred``; stop, owner/fence, generation, and
+    snapshot-publication failures remain critical and must propagate.
+    """
 
     from src.research_lab import setup_outcome_memory as memory
 
     failure_signal = getattr(args, "task_claim_failure_signal", None)
 
     def check_active() -> None:
-        if external_check_active is not None:
-            external_check_active()
+        try:
+            if external_check_active is not None:
+                external_check_active()
+        except FarmCycleStopRequested:
+            raise
+        except Exception as exc:
+            raise SetupOutcomeMemoryCriticalFailure(
+                "setup outcome memory backfill lost current runtime authority"
+            ) from exc
+        # Preserve the existing owner/lease failure contract verbatim.  It is a
+        # fenced process-authority failure, not a recoverable historical lane
+        # error, and callers/tests rely on the explicit diagnostic.
         if failure_signal is not None:
             failure_signal.raise_if_failed()
         stop_file = str(getattr(args, "stop_file", "") or "")
@@ -2415,16 +2449,67 @@ def _refresh_setup_outcome_memory(
         check_active()
 
     build_stats: dict[str, Any] = {}
-    records = memory.build_memory_index(
-        private_root,
-        progress=progress,
-        check_active=check_active,
-        reject_cache_path=private_root
+    is_backfill = stage == "setup_outcome_memory_backfill"
+    max_seconds = (
+        float(
+            getattr(
+                args,
+                "setup_memory_backfill_max_seconds",
+                SETUP_MEMORY_BACKFILL_MAX_SECONDS,
+            )
+        )
+        if is_backfill
+        else 0.0
+    )
+    max_rows = (
+        int(
+            getattr(
+                args,
+                "setup_memory_backfill_max_recomputed_rows",
+                SETUP_MEMORY_BACKFILL_MAX_RECOMPUTED_ROWS,
+            )
+        )
+        if is_backfill
+        else 0
+    )
+    if is_backfill and (max_seconds <= 0.0 or max_rows <= 0):
+        raise ValueError("setup outcome memory backfill bounds must be positive")
+    deadline_monotonic = time.monotonic() + max_seconds if is_backfill else None
+    build_kwargs: dict[str, Any] = {
+        "progress": progress,
+        "check_active": check_active,
+        "reject_cache_path": private_root
         / "state"
         / "derived"
         / "setup_outcome_memory_reject_cache.json",
-        build_stats=build_stats,
-    )
+        "build_stats": build_stats,
+    }
+    if is_backfill:
+        build_kwargs.update(
+            max_recomputed_rows=max_rows,
+            deadline_monotonic=deadline_monotonic,
+        )
+    try:
+        records = memory.build_memory_index(private_root, **build_kwargs)
+    except memory.SetupOutcomeMemoryBackfillDeferred as exc:
+        stats = dict(exc.stats)
+        progress(
+            "backfill_deferred",
+            int(stats.get("cache_hits") or 0) + int(stats.get("recomputed") or 0),
+            int(stats.get("sources") or 0),
+        )
+        return {
+            "schema": "setup_outcome_memory_backfill.v1",
+            "state": "deferred",
+            "deferred_reason": str(stats.get("deferred_reason") or "slice_budget"),
+            "total": int(stats.get("sources") or 0),
+            "completed": int(stats.get("cache_hits") or 0)
+            + int(stats.get("recomputed") or 0),
+            "paper_generation_run_id": expected_generation_run_id,
+            "reject_characterization": stats,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
     summary = memory.summarize_memory(records)
     progress("memory_summarized", len(records), len(records))
     product_memory_evidence = memory.summarize_product_training_memory(
@@ -2435,7 +2520,7 @@ def _refresh_setup_outcome_memory(
     if expected_generation_run_id and str(
         product_memory_evidence.get("paper_generation_run_id") or ""
     ) != expected_generation_run_id:
-        raise RuntimeError(
+        raise SetupOutcomeMemoryGenerationChanged(
             "setup outcome memory backfill generation changed before snapshot publication"
         )
     progress(
@@ -2443,11 +2528,16 @@ def _refresh_setup_outcome_memory(
         int(product_memory.get("rows") or 0),
         int(product_memory.get("rows") or 0),
     )
-    snapshot_path = memory.write_memory_snapshot(
-        private_root,
-        records=records,
-        product_paper_memory=product_memory_evidence,
-    )
+    try:
+        snapshot_path = memory.write_memory_snapshot(
+            private_root,
+            records=records,
+            product_paper_memory=product_memory_evidence,
+        )
+    except Exception as exc:
+        raise SetupOutcomeMemoryPublicationConflict(
+            "setup outcome memory backfill snapshot publication failed"
+        ) from exc
     progress("snapshot_written", len(records), len(records))
     return {
         "schema": (
@@ -3027,6 +3117,9 @@ def _run_once(
                             and Path(getattr(args, "stop_file", "")).exists()
                         )
                     ),
+                    require_known_bad_authority=bool(
+                        getattr(args, "paper_evidence_v2_required", False)
+                    ),
                 )
                 priority_checkpoint("paper_signals")
                 if cycle_stop_requested():
@@ -3251,6 +3344,11 @@ def _run_once(
                             {"where": "agent_role_reviews", "error": str(exc)}
                         )
             except FarmCycleStopRequested:
+                raise
+            except paper_cycle.lane.KnownBadAuthorityUnavailable:
+                # Missing/corrupt derived known-bad authority is not an idle
+                # research-lane condition.  Continuing would silently turn an
+                # unknown historical rejection set into an empty set.
                 raise
             except _ValidationGenerationWaiting as exc:
                 out["paper_telegram_delivery"] = {

@@ -398,6 +398,11 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
         "memory_rows": int(memory.get("product_rows") or 0),
         "memory_backfill_state": str(memory.get("state") or "not_started"),
         "memory_backfill_complete": bool(memory.get("state") == "completed"),
+        "memory_backfill_completed": int(memory.get("completed") or 0),
+        "memory_backfill_total": int(memory.get("total") or 0),
+        "memory_backfill_deferred_reason": str(
+            memory.get("deferred_reason") or ""
+        ),
         "memory_terminal_rows": int(memory.get("product_terminal_rows") or 0),
         "memory_reject_cache_hits": int(reject_memory.get("cache_hits") or 0),
         "memory_reject_snapshot_bootstrap_hits": int(

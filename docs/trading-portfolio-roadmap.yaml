@@ -21,18 +21,25 @@ task_branch_candidate:
     - synthetic_cold_cache_causal_proof_at_26845_sources
     - identity_bound_resumable_reject_cache_checkpoints
     - post_t0_historical_setup_memory_backfill
+    - bounded_backfill_slices_with_observable_deferred_progress
     - current_generation_stale_fence_owner_and_stop_fail_closed
-    - current_product_truth_and_known_bad_gates_remain_pre_t0
+    - complete_digest_bound_known_bad_snapshot_remains_pre_t0
+    - missing_or_corrupt_known_bad_snapshot_fails_closed
     - crash_safe_final_report_manifest_handoff_seal
     - no_runtime_or_task_disposition_authority
   evidence:
     - src/research_lab/product_progress.py
+    - src/research_lab/setup_outcome_memory.py
+    - src/research_lab/paper_signals/lane.py
+    - src/research_lab/paper_signals/cycle.py
     - src/research_lab/trade_path_diagnostics.py
     - src/research_lab/canary_evidence_finalization.py
     - scripts/strategy_lab/farm_loop.py
     - tests/test_product_progress.py
     - tests/test_farm_loop_stage_visibility.py
     - tests/test_trade_path_diagnostics_memory_bound.py
+    - tests/test_paper_generation_cutover.py
+    - tests/test_paper_signals.py
     - tests/test_canary_evidence_finalization.py
   promotion_gate: exact-head review, cold/warm cache and interruption-resume adversarial tests, lifecycle/fencing and full non-live tests, repository guards, synchronized documentation, and separate merge authority
   runtime_gate: Paper Evidence v2 rebind and owner-authorized paper-only operational proof after merge
@@ -244,7 +251,6 @@ modules:
       - tests/test_paper_runtime.py
       - tests/test_pfr_bridge.py
       - tests/test_paper_data_outcome_censor.py
-      - tests/test_paper_generation_cutover.py
       - tests/test_paper_generation_run_v2.py
     missing_evidence: a completed private cutover and acceptance window demonstrating atomic generation continuity, real outage recovery, and zero technical outcome leakage into learning inputs
     next_gate: prove backup/restore, shadow parity, exact-revision activation, writer identity and the provider-error/data-gap/genuine-no-market-data taxonomy during the paper-only canary without execution

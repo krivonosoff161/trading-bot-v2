@@ -24,6 +24,7 @@ No money path, no orders, no live, no .env. Everything is read-only and derived.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass, field
@@ -40,6 +41,7 @@ from src.research_lab.runtime_storage_rotation import (
 )
 from src.research_lab.setup_lifecycle import HARD_FAILED, derive_setup_lifecycle
 from src.research_lab.trade_path_diagnostics import (
+    IncrementalRefreshDeferred,
     POWER_FLOOR,
     REJECT_CLASSIFIER_VERSION,
     characterize_rejects,
@@ -47,6 +49,14 @@ from src.research_lab.trade_path_diagnostics import (
 )
 
 ELIGIBLE_LITE = {"FORWARD_PAPER", "REGIME_SPECIFIC"}
+
+
+class SetupOutcomeMemoryBackfillDeferred(RuntimeError):
+    """A historical derived-memory slice yielded without publishing a snapshot."""
+
+    def __init__(self, stats: dict[str, Any]) -> None:
+        super().__init__("setup outcome memory backfill yielded before completion")
+        self.stats = dict(stats)
 
 # Closed outcome vocabulary (research-only labels). POSITIVE_VALIDATED is the ONLY class a
 # hard-passed setup gets; none of these is a trade signal or grants paper-forward access.
@@ -852,6 +862,8 @@ def build_memory_index(
     check_active: Callable[[], None] | None = None,
     reject_cache_path: Path | None = None,
     build_stats: dict[str, Any] | None = None,
+    max_recomputed_rows: int | None = None,
+    deadline_monotonic: float | None = None,
 ) -> list[dict[str, Any]]:
     """One unified outcome record per unique candidate (derived; never written back to source)."""
     private_root = Path(private_root)
@@ -897,24 +909,31 @@ def build_memory_index(
             "cache_written": False,
         }
     else:
-        reject_rows, reject_stats = characterize_rejects_incremental(
-            private_root,
-            cache_path=Path(reject_cache_path),
-            bootstrap_snapshot_path=Path(private_root)
-            / "state"
-            / "derived"
-            / "setup_outcome_memory.json",
-            progress=(
-                None
-                if progress is None
-                else lambda stage, completed, total: progress(
-                    f"rejects:{stage}",
-                    completed,
-                    total,
-                )
-            ),
-            check_active=check_active,
-        )
+        try:
+            reject_rows, reject_stats = characterize_rejects_incremental(
+                private_root,
+                cache_path=Path(reject_cache_path),
+                bootstrap_snapshot_path=Path(private_root)
+                / "state"
+                / "derived"
+                / "setup_outcome_memory.json",
+                progress=(
+                    None
+                    if progress is None
+                    else lambda stage, completed, total: progress(
+                        f"rejects:{stage}",
+                        completed,
+                        total,
+                    )
+                ),
+                check_active=check_active,
+                max_recomputed_rows=max_recomputed_rows,
+                deadline_monotonic=deadline_monotonic,
+            )
+        except IncrementalRefreshDeferred as exc:
+            if build_stats is not None:
+                build_stats["reject_characterization"] = dict(exc.stats)
+            raise SetupOutcomeMemoryBackfillDeferred(exc.stats) from exc
     if build_stats is not None:
         build_stats["reject_characterization"] = reject_stats
     subreason = {r["uc_key"]: r for r in reject_rows}
@@ -1174,8 +1193,31 @@ def write_memory_snapshot(
     out_dir = Path(private_root) / "state" / "derived"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "setup_outcome_memory.json"
+    known_bad = sorted(
+        (
+            str(row.get("symbol") or ""),
+            str(row.get("timeframe") or ""),
+            str(row.get("family") or ""),
+            str(row.get("params_hash") or ""),
+        )
+        for row in memory_records
+        if isinstance(row, dict)
+        and (
+            row.get("outcome_class") == "CONFIRMED_BAD"
+            or row.get("tactical_status") == "REJECTED_CONFIRMED_BAD"
+            or row.get("tactical_class") == "REJECTED_CONFIRMED_BAD"
+        )
+        and all(
+            str(row.get(key) or "") for key in ("symbol", "timeframe", "family")
+        )
+    )
+    known_bad_digest = hashlib.sha256(
+        json.dumps(known_bad, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     payload = {
-        "schema": "setup_outcome_memory.v1",
+        "schema": "setup_outcome_memory.v2",
+        "complete": True,
+        "known_bad_set_sha256": known_bad_digest,
         "reject_classifier_version": REJECT_CLASSIFIER_VERSION,
         "disclaimer": "Derived read-model rebuilt from canonical sources. Research-only: no "
         "outcome here grants PAPER_FORWARD_READY or is a trade signal.",
