@@ -1,48 +1,38 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.20"
+version: "2026.08.21"
 status: current
-verified_date: "2026-08-20"
+verified_date: "2026-08-21"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b
+  trading-bot-v2: ce592269dc4f4d4c1360f0fca68c35de2eaf55b3
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/startup-memory-critical-path-repair
+  branch: codex/lease-supervisor-windows-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b
+  baseline_revision: ce592269dc4f4d4c1360f0fca68c35de2eaf55b3
   scope:
-    - synthetic_cold_cache_causal_proof_at_26845_sources
-    - identity_bound_resumable_reject_cache_checkpoints
-    - post_t0_historical_setup_memory_backfill
-    - bounded_backfill_slices_with_observable_deferred_progress
-    - current_generation_stale_fence_owner_and_stop_fail_closed
-    - complete_digest_bound_known_bad_snapshot_remains_pre_t0
-    - missing_or_corrupt_known_bad_snapshot_fails_closed
-    - crash_safe_final_report_manifest_handoff_seal
-    - no_runtime_or_task_disposition_authority
+    - causal_windows_lease_supervisor_gil_blocking_matrix
+    - initial_renewal_proof_before_parent_gil_block
+    - additional_renewals_during_parent_gil_block
+    - synthetic_scheduler_pressure_classification
+    - persistent_sqlite_contention_stays_fail_closed
+    - no_production_supervisor_or_runtime_authority_change
   evidence:
-    - src/research_lab/product_progress.py
-    - src/research_lab/setup_outcome_memory.py
-    - src/research_lab/paper_signals/lane.py
-    - src/research_lab/paper_signals/cycle.py
-    - src/research_lab/trade_path_diagnostics.py
-    - src/research_lab/canary_evidence_finalization.py
-    - scripts/strategy_lab/farm_loop.py
-    - tests/test_product_progress.py
-    - tests/test_farm_loop_stage_visibility.py
-    - tests/test_trade_path_diagnostics_memory_bound.py
-    - tests/test_paper_generation_cutover.py
-    - tests/test_paper_signals.py
-    - tests/test_canary_evidence_finalization.py
-  promotion_gate: exact-head review, cold/warm cache and interruption-resume adversarial tests, lifecycle/fencing and full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: Paper Evidence v2 rebind and owner-authorized paper-only operational proof after merge
+    - src/research_lab/process_lease_supervisor.py
+    - src/research_lab/ownership.py
+    - tests/test_process_lease_supervisor.py
+    - tests/test_process_lease_heartbeat.py
+    - tests/test_owner_fencing_v2.py
+    - tests/test_task_claim_heartbeat.py
+  promotion_gate: exact-head review, Windows repeat and scheduler-pressure evidence, focused and lifecycle/fencing/integration regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  runtime_gate: read-only Paper Evidence v2 and canonical DB preflight after green post-merge gate; a canary still requires separate explicit owner authority
 authority_values:
   - none
   - advisory

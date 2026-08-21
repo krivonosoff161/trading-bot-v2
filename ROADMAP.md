@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-20
-- Verified against: `d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b`
+- Verified: 2026-08-21
+- Verified against: `ce592269dc4f4d4c1360f0fca68c35de2eaf55b3`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -16,27 +16,25 @@ dependency, not by a route to live trading.
 
 ## In Review On The Task Branch
 
-PR #282 integrated the exact current-generation startup handoff at
-`d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b`. Its next exact-main launch did not
-reach T+0 because a cold 26,845-source setup-outcome-memory recompute still sat
-inside the mandatory product boundary and exhausted the unchanged 600-second
-ceiling. Draft review-only PR #283 separates that derived historical snapshot
-from current product truth: current generation, complete digest-bound known-bad
-authority, analyst, role, calibration and quality remain mandatory; only the
-identity-bound historical backfill runs after the completed product checkpoint
-in bounded monotonic-time/recomputed-row slices. Its partial cache is never a
-complete memory snapshot. A missing accelerator cache can backfill later, but a
-missing, corrupt, incomplete or digest-mismatched known-bad snapshot blocks
-canonical Paper Evidence v2 instead of silently acting empty. The branch also
-supplies a crash-safe canonical evidence-seal library; activating an external
-finalizer remains an operational gate.
+PR #283 integrated the cold setup-memory startup boundary at
+`ce592269dc4f4d4c1360f0fca68c35de2eaf55b3`. It keeps complete known-bad and
+current-product authority mandatory, while its historical cache backfill runs
+only after the product checkpoint. Paper Evidence v2 rebind and runtime remain
+separate operational gates.
 
-Exit gate: exact 26,845-source cold/warm, one-source delta, classifier/schema,
-accelerator and snapshot corruption, interruption/resume, stale-generation,
-owner/stop, no-duplicate and evidence-seal adversarial tests; lifecycle/fencing
-and integration regression; full non-live tests, repository guards, clean
-exact-head review, synchronized documentation, and a separate merge decision.
-Runtime and Paper v2 rebind remain later operational gates.
+The current task branch addresses a different post-merge blocker: its Windows
+GIL-blocking supervisor test had an artificial 0.8-second lease and began the
+block before a first renewal. Under synthetic CPU pressure, the spawned child
+could correctly detect the already expired lease and fail closed. The candidate
+therefore establishes an initial renewal, then demands further renewal during
+the parent GIL block. It adds an independent persistent SQLite-writer case that
+must still fail closed before expiry with the canonical stop request. Production
+lease timings and production supervisor code are unchanged.
+
+Exit gate: independent Windows repeats and scheduler-pressure matrix, focused
+and lifecycle/fencing/integration regressions, full non-live tests, repository
+guards, clean exact-head review, synchronized documentation, and a separate
+merge decision. Runtime and Paper v2 rebind remain later operational gates.
 
 ## Completed
 

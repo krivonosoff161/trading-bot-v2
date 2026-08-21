@@ -121,19 +121,65 @@ def test_atomic_status_publication_retries_transient_windows_reader(
 
 def test_supervisor_renews_while_foreground_gil_is_blocked(tmp_path: Path) -> None:
     path = tmp_path / "ownership.sqlite"
-    supervisor = _supervisor(tmp_path, _acquired(path))
+    # The production lease is 90 seconds.  This synthetic test must not turn
+    # Windows process-start scheduling into an expiry race before it has proved
+    # that the spawned supervisor can renew.  Establish the first real renewal
+    # first, then verify that additional renewals happen while the parent holds
+    # the GIL.
+    supervisor = _supervisor(
+        tmp_path,
+        _acquired(path, lease_seconds=3.0),
+        lease_seconds=3.0,
+    )
     supervisor.start()
     supervisor.record_progress("before_gil_bound_artifact_cleanup")
+    assert _wait_until(lambda: int(supervisor.snapshot().get("renewals") or 0) >= 1)
+    renewals_before_gil_block = int(supervisor.snapshot().get("renewals") or 0)
 
     _hold_foreground_gil(1200)
-    supervisor.record_progress("after_gil_bound_artifact_cleanup")
 
-    assert _wait_until(lambda: int(supervisor.snapshot().get("renewals") or 0) >= 2)
+    assert _wait_until(
+        lambda: int(supervisor.snapshot().get("renewals") or 0)
+        >= renewals_before_gil_block + 2
+    )
+    supervisor.record_progress("after_gil_bound_artifact_cleanup")
     assert _lease_expiry(path) > time.time()
     assert supervisor.failure is None
     supervisor.stop()
     assert supervisor.process.is_alive() is False
     assert supervisor.bridge_thread.is_alive() is False
+
+
+def test_supervisor_sqlite_contention_fails_closed_before_lease_expiry(
+    tmp_path: Path,
+) -> None:
+    """A real SQLite writer block remains a supervisor failure, not a skip."""
+
+    path = tmp_path / "ownership.sqlite"
+    lease = _acquired(path, lease_seconds=3.0)
+    blocker = sqlite3.connect(path, timeout=0, isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")
+    supervisor = _supervisor(
+        tmp_path,
+        lease,
+        lease_seconds=3.0,
+        max_transient_seconds=0.12,
+    )
+    try:
+        supervisor.start()
+        supervisor.record_progress("blocked_sqlite_writer")
+
+        assert supervisor.failure_event.wait(2.0)
+        snapshot = supervisor.snapshot()
+        assert snapshot["state"] == "failed"
+        assert snapshot["failure_type"] == "ProcessLeaseRenewalBudgetExceeded"
+        assert int(snapshot["renewals"] or 0) == 0
+        assert time.time() < _lease_expiry(path)
+        assert (tmp_path / "STOP_FARM_FULL_CYCLE.txt").is_file()
+    finally:
+        blocker.rollback()
+        blocker.close()
+        supervisor.stop()
 
 
 def test_no_progress_fails_before_expiry_and_requests_canonical_stop(
