@@ -813,7 +813,8 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
               max_live_fetches: int | None = 12,
               max_network_fetches: int | None = None,
               max_wall_seconds: float | None = None,
-              should_stop: Callable[[], bool] | None = None) -> dict[str, Any]:
+              should_stop: Callable[[], bool] | None = None,
+              require_known_bad_authority: bool = True) -> dict[str, Any]:
     private_root = Path(private_root)
     started_mono = time.monotonic()
     deadline = (
@@ -851,7 +852,22 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     for s in existing:
         cell = (str(s.symbol), str(s.timeframe), str(s.setup_family))
         last_seen_cell[cell] = max(last_seen_cell.get(cell, 0.0), float(s.created_at or 0.0))
-    known_bad = lane.load_known_bad(private_root)
+    try:
+        known_bad_authority = lane.load_known_bad_authority(private_root)
+    except lane.KnownBadAuthorityUnavailable:
+        # Canonical Paper Evidence v2 treats the complete, digest-bound setup
+        # outcome snapshot as a current-product authority.  Its absence must
+        # therefore stop that lane rather than silently becoming an empty set.
+        # Older/reference callers can opt out explicitly; their result carries
+        # no authoritative Paper Evidence v2 claim.
+        if require_known_bad_authority:
+            raise
+        known_bad_authority = lane.KnownBadAuthority(
+            frozenset(),
+            "non_authoritative_authority_unavailable",
+            "snapshot_unavailable",
+        )
+    known_bad = set(known_bad_authority.setups)
     mem = load_memory(private_root)
     product_memory = load_product_memory(private_root)
     learned_bad = learn_known_bad(mem)
@@ -1158,6 +1174,9 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
 
     report = {"mode": mode, "apply": apply, "observed": observed, "closed": closed,
               "generated": len(new_sigs), "gate_counts": gate_counts,
+              "known_bad_authority_state": known_bad_authority.state,
+              "known_bad_snapshot_state": known_bad_authority.snapshot_state,
+              "known_bad_exact_identities": len(known_bad),
               "live_fetches": live_fetches,
               "max_live_fetches": max_live_fetches,
               "network_fetches": network_fetches,

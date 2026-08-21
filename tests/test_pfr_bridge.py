@@ -41,12 +41,38 @@ from src.research_lab.strategies.mean_reversion import signals_mean_reversion_fa
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
+def _seed_complete_known_bad_authority(root: Path) -> None:
+    """Seed an explicit empty complete authority for a direct PFR cycle.
+
+    PFR tests exercise canonical paper-cycle behavior, not the separate
+    missing/corrupt-known-bad failure contract.  An empty, digest-bound v2
+    snapshot is therefore the correct synthetic precondition.
+    """
+
+    derived = root / "state" / "derived"
+    derived.mkdir(parents=True, exist_ok=True)
+    (derived / "setup_outcome_memory.json").write_text(
+        json.dumps(
+            {
+                "schema": "setup_outcome_memory.v2",
+                "complete": True,
+                "known_bad_set_sha256": lane._known_bad_digest(set()),
+                "records": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _make_db(path: Path, rows: list[dict]) -> None:
     """Minimal strategy_lab.sqlite for PFR tests.
 
     candidates table uses composite PK (run_id, candidate_id) — same as the real DB.
     The JOIN in pfr_bridge.load_pfr_records must use both columns to avoid inflation.
     """
+    root = path.parent.parent if path.parent.name == "state" else path.parent
+    _seed_complete_known_bad_authority(root)
     conn = sqlite3.connect(str(path))
     c = conn.cursor()
     c.execute("""CREATE TABLE farm_results (
@@ -956,6 +982,7 @@ def _seed_universe(root: Path) -> None:
     # Empty universe so only PFR signals are generated
     (d / "live_universe.json").write_text(
         '{"detail": {}}', encoding="utf-8")
+    _seed_complete_known_bad_authority(root)
 
 
 class TestPFRCycleIntegration:
@@ -1411,6 +1438,7 @@ class TestPFRCycleIntegration:
             data_fingerprint="fp", dedup_key="T_USDT_SWAP|1h|mean_reversion_fade",
         )
         store.append_signal(tmp_path, sig)
+        _seed_complete_known_bad_authority(tmp_path)
 
         class NoFetchProvider:
             def fetch_ohlcv(self, *args, **kwargs):

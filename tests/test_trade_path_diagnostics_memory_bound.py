@@ -251,6 +251,141 @@ def test_incremental_reject_cache_matches_full_characterization_on_cache_miss(
     assert stats["recomputed"] == len(full)
 
 
+def test_exact_26845_source_cold_cache_matches_warm_cache(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """The incident-sized cold corpus is semantically equal after a warm resume."""
+
+    source = [
+        _source_row(index, label="runs/a" if index < 13_423 else "runs/b")
+        for index in range(26_845)
+    ]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+
+    calls: list[str] = []
+
+    def load_run(_root: Path, label: str):
+        calls.append(label)
+        return {
+            row["params_hash"]: {
+                "metrics": {"n_trades": 10, "avg_net_pct": -0.1},
+                "trades": [],
+            }
+            for row in source
+            if row["run_dir_label"] == label
+        }
+
+    monkeypatch.setattr(diagnostics, "_index_run_results", load_run)
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+
+    cold, cold_stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+    calls.clear()
+    warm, warm_stats = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+
+    assert cold_stats["cache_input_state"] == "missing"
+    assert cold_stats["recomputed"] == 26_845
+    assert cold_stats["run_artifacts_reread"] == 2
+    assert cold_stats["cache_complete"] is True
+    assert warm_stats["cache_hits"] == 26_845
+    assert warm_stats["recomputed"] == 0
+    assert warm_stats["run_artifacts_reread"] == 0
+    assert warm_stats["cache_input_state"] == "ready_complete"
+    assert calls == []
+    assert json.dumps(cold, sort_keys=True) == json.dumps(warm, sort_keys=True)
+
+
+def test_incremental_reject_cache_checkpoint_resumes_after_interruption(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [
+        _source_row(0, label="runs/a"),
+        _source_row(1, label="runs/a"),
+        _source_row(2, label="runs/b"),
+    ]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    calls: list[str] = []
+
+    def load_run(_root: Path, label: str):
+        calls.append(label)
+        return {
+            row["params_hash"]: {
+                "metrics": {"n_trades": 10, "avg_net_pct": -0.1},
+                "trades": [],
+            }
+            for row in source
+            if row["run_dir_label"] == label
+        }
+
+    class Interrupted(RuntimeError):
+        pass
+
+    def stop_after_first_checkpoint(stage: str, _completed: int, _total: int) -> None:
+        if stage == "incremental_cache_checkpointed":
+            raise Interrupted("synthetic stop after safe checkpoint")
+
+    monkeypatch.setattr(diagnostics, "_index_run_results", load_run)
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+    with pytest.raises(Interrupted, match="safe checkpoint"):
+        diagnostics.characterize_rejects_incremental(
+            tmp_path,
+            cache_path=cache,
+            progress=stop_after_first_checkpoint,
+        )
+
+    partial = json.loads(cache.read_text(encoding="utf-8"))
+    assert partial["complete"] is False
+    assert sorted(partial["items"]) == ["uc-0", "uc-1"]
+    calls.clear()
+    rows, resumed = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+
+    assert [row["uc_key"] for row in rows] == ["uc-0", "uc-1", "uc-2"]
+    assert resumed["cache_input_state"] == "ready_partial"
+    assert resumed["cache_hits"] == 2
+    assert resumed["recomputed"] == 1
+    assert calls == ["runs/b"]
+    assert json.loads(cache.read_text(encoding="utf-8"))["complete"] is True
+
+
+def test_incremental_reject_cache_corruption_and_one_source_delta_fail_safe(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [_source_row(index, label="") for index in range(3)]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+
+    diagnostics.characterize_rejects_incremental(tmp_path, cache_path=cache)
+    cache.write_text("not-json", encoding="utf-8")
+    _rows, corrupt = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+    assert corrupt["cache_input_state"] == "unreadable"
+    assert corrupt["recomputed"] == 3
+
+    source[1] = {**source[1], "updated_at": 2.0}
+    _rows, delta = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+    assert delta["cache_hits"] == 2
+    assert delta["recomputed"] == 1
+
+
 def test_incremental_reject_cache_invalidates_classifier_context_change(
     monkeypatch,
     tmp_path: Path,
@@ -443,3 +578,34 @@ def test_incremental_reject_cache_stop_prevents_publication(
         )
 
     assert not cache.exists()
+
+
+def test_incremental_reject_cache_yields_a_bounded_slice_and_resumes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = [_source_row(index, label="") for index in range(5)]
+    monkeypatch.setattr(diagnostics, "_load_rejected_uc", lambda _root: source)
+    monkeypatch.setattr(diagnostics, "oi_micro_families", set)
+    cache = tmp_path / "state" / "derived" / "reject-cache.json"
+
+    with pytest.raises(diagnostics.IncrementalRefreshDeferred) as deferred:
+        diagnostics.characterize_rejects_incremental(
+            tmp_path,
+            cache_path=cache,
+            max_recomputed_rows=2,
+        )
+
+    assert deferred.value.stats["cache_complete"] is False
+    assert deferred.value.stats["recomputed"] == 2
+    partial = json.loads(cache.read_text(encoding="utf-8"))
+    assert partial["complete"] is False
+    assert len(partial["items"]) == 2
+
+    rows, resumed = diagnostics.characterize_rejects_incremental(
+        tmp_path,
+        cache_path=cache,
+    )
+    assert len(rows) == 5
+    assert resumed["cache_complete"] is True
+    assert resumed["cache_hits"] == 2

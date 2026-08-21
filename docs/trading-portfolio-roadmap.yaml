@@ -1,41 +1,47 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.14"
+version: "2026.08.20"
 status: current
-verified_date: "2026-08-14"
+verified_date: "2026-08-20"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 0c120eb4609b3ffa49a87bc1e7eaa8d04e769892
+  trading-bot-v2: d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/validation-generation-startup-race-repair
+  branch: codex/startup-memory-critical-path-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: 0c120eb4609b3ffa49a87bc1e7eaa8d04e769892
+  baseline_revision: d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b
   scope:
-    - real_completed_validation_maintenance_milestones
-    - exact_current_bounded_pre_marker_successor_build
-    - immutable_process_local_successor_deadline
-    - repeated_priority_slots_do_not_extend_deadline
-    - wrong_revision_pre_run_stale_and_unrelated_progress_fail_closed
-    - pending_generation_not_published_before_fresh_batch_classification
-    - exact_current_publication_overrides_only_stale_preceding_farm_checkpoint
-    - current_published_handoff_uses_original_bounded_transition_deadline
-    - next_historical_slot_cannot_erase_current_publication_proof
+    - synthetic_cold_cache_causal_proof_at_26845_sources
+    - identity_bound_resumable_reject_cache_checkpoints
+    - post_t0_historical_setup_memory_backfill
+    - bounded_backfill_slices_with_observable_deferred_progress
+    - current_generation_stale_fence_owner_and_stop_fail_closed
+    - complete_digest_bound_known_bad_snapshot_remains_pre_t0
+    - missing_or_corrupt_known_bad_snapshot_fails_closed
+    - crash_safe_final_report_manifest_handoff_seal
     - no_runtime_or_task_disposition_authority
   evidence:
     - src/research_lab/product_progress.py
-    - src/research_lab/validation_generation.py
+    - src/research_lab/setup_outcome_memory.py
+    - src/research_lab/paper_signals/lane.py
+    - src/research_lab/paper_signals/cycle.py
+    - src/research_lab/trade_path_diagnostics.py
+    - src/research_lab/canary_evidence_finalization.py
     - scripts/strategy_lab/farm_loop.py
     - tests/test_product_progress.py
     - tests/test_farm_loop_stage_visibility.py
-    - tests/test_validation_generation.py
-  promotion_gate: exact-head review, adversarial startup liveness and timeout tests, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+    - tests/test_trade_path_diagnostics_memory_bound.py
+    - tests/test_paper_generation_cutover.py
+    - tests/test_paper_signals.py
+    - tests/test_canary_evidence_finalization.py
+  promotion_gate: exact-head review, cold/warm cache and interruption-resume adversarial tests, lifecycle/fencing and full non-live tests, repository guards, synchronized documentation, and separate merge authority
   runtime_gate: Paper Evidence v2 rebind and owner-authorized paper-only operational proof after merge
 authority_values:
   - none
@@ -245,7 +251,6 @@ modules:
       - tests/test_paper_runtime.py
       - tests/test_pfr_bridge.py
       - tests/test_paper_data_outcome_censor.py
-      - tests/test_paper_generation_cutover.py
       - tests/test_paper_generation_run_v2.py
     missing_evidence: a completed private cutover and acceptance window demonstrating atomic generation continuity, real outage recovery, and zero technical outcome leakage into learning inputs
     next_gate: prove backup/restore, shadow parity, exact-revision activation, writer identity and the provider-error/data-gap/genuine-no-market-data taxonomy during the paper-only canary without execution

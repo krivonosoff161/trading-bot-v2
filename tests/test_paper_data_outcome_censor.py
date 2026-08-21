@@ -85,6 +85,7 @@ def test_operational_outage_preserves_active_signal_and_deduplicates_incident(tm
         apply=True,
         now=2_000.0,
         max_new=0,
+        require_known_bad_authority=False,
     )
     second = cycle.run_cycle(
         tmp_path,
@@ -92,6 +93,7 @@ def test_operational_outage_preserves_active_signal_and_deduplicates_incident(tm
         apply=True,
         now=2_100.0,
         max_new=0,
+        require_known_bad_authority=False,
     )
 
     current = store.load_signals(tmp_path)[0]
@@ -134,7 +136,14 @@ def test_successful_empty_or_gapped_data_does_not_close_observation(
 ):
     store.append_signal(tmp_path, _signal())
 
-    cycle.run_cycle(tmp_path, provider=provider, apply=True, now=2_000.0, max_new=0)
+    cycle.run_cycle(
+        tmp_path,
+        provider=provider,
+        apply=True,
+        now=2_000.0,
+        max_new=0,
+        require_known_bad_authority=False,
+    )
 
     current = store.load_signals(tmp_path)[0]
     assert current.status == "armed"
@@ -144,11 +153,32 @@ def test_successful_empty_or_gapped_data_does_not_close_observation(
 def test_recovery_is_recorded_once_and_observation_resumes(tmp_path):
     signal = _signal()
     store.append_signal(tmp_path, signal)
-    cycle.run_cycle(tmp_path, provider=_Raises(), apply=True, now=2_000.0, max_new=0)
+    cycle.run_cycle(
+        tmp_path,
+        provider=_Raises(),
+        apply=True,
+        now=2_000.0,
+        max_new=0,
+        require_known_bad_authority=False,
+    )
 
     provider = _Rows(_candles(start=1_800_000, count=4))
-    cycle.run_cycle(tmp_path, provider=provider, apply=True, now=2_100.0, max_new=0)
-    cycle.run_cycle(tmp_path, provider=provider, apply=True, now=2_200.0, max_new=0)
+    cycle.run_cycle(
+        tmp_path,
+        provider=provider,
+        apply=True,
+        now=2_100.0,
+        max_new=0,
+        require_known_bad_authority=False,
+    )
+    cycle.run_cycle(
+        tmp_path,
+        provider=provider,
+        apply=True,
+        now=2_200.0,
+        max_new=0,
+        require_known_bad_authority=False,
+    )
 
     rows = [
         json.loads(line)

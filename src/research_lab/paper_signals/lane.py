@@ -7,8 +7,10 @@ order, .env, AUTO_TRADE, or a private endpoint.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -153,6 +155,19 @@ def build_signal(symbol: str, inst_id: str, timeframe: str, candles: list[dict[s
 
 # ── selection gates (deterministic; every rejection is recorded by reason) ──
 KnownBadSetup = tuple[str, str, str, str]
+
+
+class KnownBadAuthorityUnavailable(RuntimeError):
+    """A required complete known-bad snapshot is missing or not trustworthy."""
+
+
+@dataclass(frozen=True)
+class KnownBadAuthority:
+    """Exact known-bad identities with explicit derived-snapshot provenance."""
+
+    setups: frozenset[KnownBadSetup]
+    state: str
+    snapshot_state: str
 
 
 def is_known_bad_setup(
@@ -597,19 +612,12 @@ def _write_chart_png(path: Path, sig: PaperActionSignal, candles: list[dict[str,
     plt.close(fig)
 
 
-def load_known_bad(private_root: Path) -> set[KnownBadSetup]:
-    """Exact confirmed-bad setup identities from outcome memory.
-
-    The key is ``(symbol, timeframe, family, params_hash)``.  Empty/malformed
-    symbol, timeframe or family values are ignored rather than widened.
-    """
-    path = Path(private_root) / "state" / "derived" / "setup_outcome_memory.json"
-    try:
-        recs = json.loads(path.read_text(encoding="utf-8")).get("records") or []
-    except Exception:  # noqa: BLE001
-        return set()
+def _known_bad_from_records(records: list[object]) -> set[KnownBadSetup]:
+    """Extract only exact, fully identified confirmed-bad setup keys."""
     bad = set()
-    for r in recs:
+    for r in records:
+        if not isinstance(r, dict):
+            continue
         if (
             r.get("outcome_class") == "CONFIRMED_BAD"
             or r.get("tactical_status") == "REJECTED_CONFIRMED_BAD"
@@ -622,3 +630,74 @@ def load_known_bad(private_root: Path) -> set[KnownBadSetup]:
                 continue
             bad.add((sym, tf, fam, str(r.get("params_hash") or "")))
     return bad
+
+
+def _known_bad_digest(items: set[KnownBadSetup]) -> str:
+    payload = [list(item) for item in sorted(items)]
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def load_known_bad_authority(private_root: Path) -> KnownBadAuthority:
+    """Load the exact known-bad gate with a fail-closed snapshot contract.
+
+    A complete snapshot is the only historical authority available to this
+    paper-lane reader.  The reject cache is merely a refresh accelerator: when
+    it is absent, a structurally complete snapshot continues to gate the exact
+    identities.  Missing, corrupt, incomplete, or digest-mismatched snapshots
+    are not converted into an empty set, because that could re-admit a setup
+    already proven bad.
+    """
+
+    root = Path(private_root)
+    path = root / "state" / "derived" / "setup_outcome_memory.json"
+    if not path.is_file():
+        raise KnownBadAuthorityUnavailable("known-bad snapshot is missing")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise KnownBadAuthorityUnavailable("known-bad snapshot is unreadable") from exc
+    if not isinstance(payload, dict):
+        raise KnownBadAuthorityUnavailable("known-bad snapshot is invalid")
+    records = payload.get("records")
+    if not isinstance(records, list):
+        raise KnownBadAuthorityUnavailable("known-bad snapshot records are invalid")
+
+    schema = str(payload.get("schema") or "")
+    setups = _known_bad_from_records(records)
+    if schema == "setup_outcome_memory.v2":
+        if payload.get("complete") is not True:
+            raise KnownBadAuthorityUnavailable("known-bad snapshot is incomplete")
+        declared = str(payload.get("known_bad_set_sha256") or "")
+        if declared != _known_bad_digest(setups):
+            raise KnownBadAuthorityUnavailable("known-bad snapshot digest mismatch")
+        accelerator = root / "state" / "derived" / "setup_outcome_memory_reject_cache.json"
+        if accelerator.is_file():
+            return KnownBadAuthority(
+                frozenset(setups),
+                "complete_trusted_snapshot",
+                "complete_trusted_snapshot",
+            )
+        return KnownBadAuthority(
+            frozenset(setups),
+            "valid_snapshot_accelerator_missing",
+            "complete_trusted_snapshot",
+        )
+
+    # v1 was atomically written only after a complete `build_memory_index`.
+    # It remains a bounded legacy authority for its exact records; a future
+    # v2 write upgrades it to an explicit completeness/digest contract.
+    if schema in {"", "setup_outcome_memory.v1"}:
+        return KnownBadAuthority(
+            frozenset(setups),
+            "legacy_complete_snapshot",
+            "legacy_complete_snapshot",
+        )
+    raise KnownBadAuthorityUnavailable("known-bad snapshot schema is unsupported")
+
+
+def load_known_bad(private_root: Path) -> set[KnownBadSetup]:
+    """Compatibility view over the explicit fail-closed known-bad authority."""
+
+    return set(load_known_bad_authority(private_root).setups)

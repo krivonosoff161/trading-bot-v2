@@ -1061,7 +1061,11 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
             "calculator_advisor": {"processed": 7, "accepted": 4, "blocked": 3},
             "agent_role_reviews": {"reviews": 8, "accepted": 7, "rejected": 1},
             "system_analyst_feedback": {"feedback_candidates": 9, "routed": 8},
-            "setup_outcome_memory_refresh": {
+            "setup_outcome_memory_backfill": {
+                "state": "failed",
+                "completed": 202,
+                "total": 26_845,
+                "deferred_reason": "slice_budget",
                 "product_rows": 10,
                 "product_terminal_rows": 2,
                 "reject_characterization": {
@@ -1070,6 +1074,8 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
                     "recomputed": 3,
                     "run_artifacts_reread": 1,
                     "run_artifacts_unavailable": 2,
+                    "cache_input_state": "ready_partial",
+                    "cache_complete": True,
                 },
             },
             "runtime_storage_maintenance": {"state": "ready"},
@@ -1093,10 +1099,17 @@ def test_farm_metrics_exposes_delivery_analysis_and_memory_aggregates() -> None:
     assert metrics["analyst_feedback_candidates"] == 9
     assert metrics["analyst_routed"] == 8
     assert metrics["memory_rows"] == 10
+    assert metrics["memory_backfill_state"] == "failed"
+    assert metrics["memory_backfill_complete"] is False
+    assert metrics["memory_backfill_completed"] == 202
+    assert metrics["memory_backfill_total"] == 26_845
+    assert metrics["memory_backfill_deferred_reason"] == "slice_budget"
     assert metrics["memory_terminal_rows"] == 2
     assert metrics["memory_reject_cache_hits"] == 26
     assert metrics["memory_reject_snapshot_bootstrap_hits"] == 27
     assert metrics["memory_reject_recomputed"] == 3
+    assert metrics["memory_reject_cache_input_state"] == "ready_partial"
+    assert metrics["memory_reject_cache_complete"] is True
     assert metrics["memory_run_artifacts_reread"] == 1
     assert metrics["memory_run_artifacts_unavailable"] == 2
     assert metrics["storage_maintenance_state"] == "ready"

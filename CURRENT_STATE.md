@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-14
-- Verified against: `0c120eb4609b3ffa49a87bc1e7eaa8d04e769892`
+- Verified: 2026-08-20
+- Verified against: `d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -53,22 +53,30 @@ Expired materialization adoption is integrated at
 `e03502ddd484234c64ccb1d51b56c8397789b55f`. It remains an exact-task,
 hash-bound operational mechanism and grants no general reconciliation authority.
 
-## Task-Branch Candidate: Published Generation Checkpoint Handoff
+## Task-Branch Candidate: Cold Setup-Memory Startup Boundary
 
-PR #281 is integrated at `0c120eb4609b3ffa49a87bc1e7eaa8d04e769892`.
-Its first operational startup exposed one narrower handoff race: validation had
-already published an exact current-code empty generation, while the last
-completed farm checkpoint still described the preceding generation as
-`code_stale`. Later historical-maintenance milestones were therefore
-mislabelled `pre_marker`, and the monitor raised a false stalled-build failure.
-The task branch now carries a non-authoritative follow-up candidate which marks
-that exact publication as `current_published` and lets the foreground farm
-consume it only within the existing immutable transition deadline. The monitor
-also verifies the current manifest directly, including its current-run producer
-time, so a subsequent historical slot cannot erase the proof. A publication
-from another run, stale code, malformed authority, or an expired handoff remains
-fail-closed. Promotion still requires exact-head review and full repository
-gates and grants no runtime or task-disposition authority.
+PR #282 is integrated at `d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b`. Its
+first exact-main attempt did not reach T+0: a 26,845-source cold/incremental
+setup-outcome-memory refresh remained inside the mandatory product boundary and
+exhausted the unchanged 600-second ceiling. That is a real startup critical-path
+failure, not a Telegram, listener, ownership or storage-capacity finding.
+
+Draft review-only PR #283 carries a non-authoritative candidate that preserves
+current generation, known-bad, analyst, role, calibration and quality gates
+before T+0, but moves only the derived historical setup-memory refresh into a
+typed backfill after the completed product checkpoint. Each historical slice is
+bounded by both monotonic time and recomputed rows; its partial identity-bound
+reject cache is an accelerator, never a published complete memory snapshot.
+For canonical Paper Evidence v2, the complete digest-bound known-bad snapshot
+remains a true current-product authority: a missing, corrupt, incomplete or
+digest-mismatched snapshot fails the paper lane closed rather than becoming an
+empty rejection set. A missing accelerator cache alone does not weaken that
+gate when the complete snapshot is present. Owner/fence/stop, stale-generation
+and snapshot-publication errors remain critical rather than degraded historical
+work. The branch also adds a canonical crash-safe final-evidence seal protocol;
+the existing external canary finalizer is not switched by this code-only PR.
+Promotion requires exact-head review, full repository gates and a separately
+authorized Paper Evidence v2 rebind plus paper-only canary.
 
 ## Implemented Public Contracts
 
@@ -79,7 +87,7 @@ gates and grants no runtime or task-disposition authority.
 | Deterministic simulation | implemented bounded | Declared truth tiers and synthetic parity are covered; full market execution fidelity is not claimed. |
 | Independent validation bridge | implemented bounded | `honest-backtest` can try to falsify a candidate; a pass means only not rejected. |
 | Fenced candidate lifecycle | implemented bounded | Owner, fence, claim, generation, and idempotency contracts are tested. Continuous validation maintenance honors the configured batch capacity, scans a bounded window past terminal orphan/ineligible and artifact-unavailable head tasks, and applies upstream classification backpressure at a configurable high-water mark without discarding classify work. Aggregate backlog, oldest age, arrival, service, and drain estimates are observable; a finite retry budget terminalizes repeated failures. A batch with no exportable candidate preserves a current-code generation, but replaces a `code_stale` generation with one idempotent current-code `ready_empty` authority after rechecking active ownership; pending, invalid, unavailable, and ambiguous states remain fail-closed. Private runtime continuity and SLO compliance remain operational questions. |
-| Paper observation | implemented bounded | Current-generation authority is content-verified once per cycle, active cards are loaded directly without a historical catalog scan, and signal evaluation preserves prefix no-lookahead semantics inside a declared-history-bounded recent horizon with completed-chunk progress and fail-closed cancellation. Public-data failures are classified as `provider_error`, `data_gap`, or `genuine_no_market_data`; they preserve the active observation, append separate operational incident/recovery evidence, and are censored from family ranking, paper/product training, setup memory, adaptive consumers, and LLM outcome review. The canonical farm requires an explicitly activated Paper Evidence v2 cutover, binds its writer lease to the same owner/process identity, atomically promotes bridge through projection, and blocks stale-generation Telegram delivery. Generation-bound preview, training, lineage, outcome retest and actual Telegram delivery complete before bounded analyst, role and setup-memory maintenance. The hot analyst path reads only non-empty current inputs and dispatches only the exact current-generation role IDs it produced; historical role evidence directories are not work queues. Setup-outcome memory now reuses a derived classifier-version/context-bound cache only when the complete candidate source digest and run-artifact identity still match. A prior complete snapshot can bootstrap unchanged pre-snapshot rows once; new, changed, missing, or invalidated run groups are deterministically reread, and cache/recompute counts are product-progress evidence. The cache is not authority and never bypasses current-generation training selection. Stop and claim-failure checks surround these stages, and only the final completed product cycle can publish farm readiness. Current lifecycle readers reuse one validated generation snapshot and do not fall back to historical validation cards while a current generation is pending or stale. Its producer generation accepts only validation-bound `pfr_farm` members. Broad `farm` observations cannot self-grant paper authority, enter the v2 bridge, account, lifecycle, or training surfaces; they may reach the existing Telegram preview only as explicitly labelled `farm_calculated` research cards under a separate content-hash freshness envelope with authority `none`. A changed source snapshot blocks delivery, malformed PFR identity still fails closed, and aggregate membership counts remain observable. Continuous private-runtime recovery remains unproved. |
+| Paper observation | implemented bounded | Current-generation authority is content-verified once per cycle, active cards are loaded directly without a historical catalog scan, and signal evaluation preserves prefix no-lookahead semantics inside a declared-history-bounded recent horizon with completed-chunk progress and fail-closed cancellation. Public-data failures are classified as `provider_error`, `data_gap`, or `genuine_no_market_data`; they preserve the active observation, append separate operational incident/recovery evidence, and are censored from family ranking, paper/product training, setup memory, adaptive consumers, and LLM outcome review. The canonical farm requires an explicitly activated Paper Evidence v2 cutover, binds its writer lease to the same owner/process identity, atomically promotes bridge through projection, and blocks stale-generation Telegram delivery. Generation-bound preview, training, lineage, outcome retest, actual Telegram delivery, analyst, role, calibration and quality consumers complete before the final current-product checkpoint. Setup-outcome memory is then a typed historical backfill: only a complete identity-bound snapshot may be published, while a partial cache is resumable acceleration rather than memory authority. The complete v2 known-bad snapshot is digest-bound current-product authority: missing, corrupt, incomplete or mismatched snapshots block canonical v2 paper processing; a missing accelerator cache with a valid complete snapshot does not. Historical cache miss/corruption/schema mismatch recomputes only after the checkpoint in bounded slices, and stop, owner/fence, stale-generation and publication failures prevent publication. The cache never bypasses current-generation training selection or known-bad gating. Current lifecycle readers reuse one validated generation snapshot and do not fall back to historical validation cards while a current generation is pending or stale. Its producer generation accepts only validation-bound `pfr_farm` members. Broad `farm` observations cannot self-grant paper authority, enter the v2 bridge, account, lifecycle, or training surfaces; they may reach the existing Telegram preview only as explicitly labelled `farm_calculated` research cards under a separate content-hash freshness envelope with authority `none`. A changed source snapshot blocks delivery, malformed PFR identity still fails closed, and aggregate membership counts remain observable. Continuous private-runtime recovery remains unproved. |
 | Research Control Center | implemented bounded | The canonical paper-only supervisor separates process/authority, listener ownership, database, real product-progress and Telegram poll-liveness lanes. A slow Windows TCP inventory cannot starve the 15-second process/owner/fence lane; its independent 90-second freshness contract still fails closed on repeated loss, while a complete foreign or missing Ollama listener remains an immediate hard failure. Listener timeout cleanup uses Job Object kill-on-close rather than synchronous termination behind a blocked kernel inventory call. Before its first heartbeat RCC publishes revision-bound, digest-verified startup stages; only sanitized exception types are retained, and a dead or PID-reused process fails startup immediately instead of consuming the full readiness budget. T+0 requires completed scanner and the final farm product-cycle checkpoint from the current run plus an identity-matched, fresh successful Telegram poll; an intermediate delivery checkpoint or live PID alone is insufficient. A first farm cycle that crosses the ordinary 300-second completion SLO may remain `starting` only while the canonical farm publishes fresh real stage/milestone completion evidence, and never beyond the bounded 600-second cold-start budget; missing, stale or timer-only progress still fails closed. The final checkpoint exposes delivery ambiguity, advisory/role degradation, analyst routing, setup-memory refresh, and storage-maintenance state as safe aggregates. Its accepted report carries the immutable launch-time product boundary into steady monitoring, which re-verifies component sequences instead of rebasing the run at T+0. If a newer monotonic generation enters the shared bounded `product_transitioning` state before the external monitor finishes initialization, the handoff remains valid; regressions, inconsistent reports and unbounded non-ready states still fail closed. After T+0 a content-safe `pending` validation publication remains observable while the fenced worker makes real progress; it does not re-enter the startup timeout. RCC and external canary adapters share one fail-closed post-T+0 classifier, so an arbitrary `ready=false` cannot be mistaken for that bounded transition. A new external ACK ambiguity, stale Telegram polling, stale stages, worker/claim failure, validation SLO breach, generation corruption, storage-maintenance failure, or technical learning leakage fails closed. Carried ambiguous ACK debt remains visible but is never retried automatically. A completed zero-signal pass is honest idle and bounded provider/advisory degradation remains observable. A fresh 48-hour canary is still required. |
 | LLM advisory contour | implemented bounded | Inputs and outputs are bounded proposals; deterministic code owns calculations, verdicts, state changes, and permissions. Telegram cards expose whether a validation-bound setup has a separately persisted, accepted calculator advisory, uses a deterministic fallback, or is an authority-none farm research template. Product progress separately counts validated setups, research-observation cards and analyst inputs, so a packet of research images is not mislabeled as validated signals or model learning. Raw advisory prose never changes or enters subscriber levels. |
 | Evidence/storage capability | implemented bounded | Content-bound archives, synthetic migration, and plan-digest-bound backup retention exist. An off-by-default exact-root capability now seals bounded farm stdout, journals, lineage, invocation metadata, and selected derived audit streams at writer boundaries; it uses the same content-addressed catalog, releases sources only after restore proof, retains compact recent/semantic projections, and fails closed on archive or budget loss. Its shared OS lock applies one monotonic wait budget across both in-process and interprocess contention, so a short concurrent contour write is retried while a persistent holder still fails closed. Private activation endurance remains operationally unproved. |
@@ -116,10 +124,13 @@ row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-road
 
 ## Open Evidence Gates
 
-1. **Storage containment:** apply the reviewed retention plan only after
-   post-merge code verification, preserve one integrity/restore-verified full
-   generation, prove archive restoration and second-apply idempotence, then
-   enforce the storage budget before runtime.
+1. **Startup-memory critical path:** merge and independently verify the
+   non-authoritative cold-cache repair, then prove a cold accelerator-cache
+   backfill cannot delay T+0 while its later progress remains observable. A
+   complete known-bad snapshot is still mandatory current-product authority;
+   missing or corrupt authority must block rather than be inferred empty.
+   Earlier Package06 storage-capacity blockage is not the current launch
+   blocker; ordinary retention proof remains a separate operational concern.
 2. **Operational reliability:** complete the bounded paper-only canary without
    a real hard fail. Its preflight must first prove the reviewed backup/free-space
    budget. A clean unit-test suite is not runtime proof.

@@ -2,6 +2,7 @@
 """Setup Outcome Memory: outcome-class unification, the read-through gate (so a repeated
 signal consults prior outcomes before compute), derived rebuild, and the invariant that no
 research outcome is ever paper-forward-ready. Deterministic — no real sweep/sim/money path."""
+import json
 import sys
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from src.research_lab.setup_outcome_memory import (  # noqa: E402
     summarize_memory,
     summarize_product_training_memory,
     tactical_setups,
+    write_memory_snapshot,
 )
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.trade_path_diagnostics import characterize_rejects  # noqa: E402
@@ -697,3 +699,24 @@ class TestCoordinatorGateUsedNextCycle:
         assert out["counters"]["sweeps_skipped_memory"] == 0
         assert out["counters"]["planned_run_sweep"] >= 1
         tasks.close()
+
+
+def test_written_snapshot_has_complete_known_bad_digest(tmp_path) -> None:
+    records = [
+        {
+            "symbol": "BAD_USDT_SWAP",
+            "timeframe": "15m",
+            "family": "reversal_fade",
+            "params_hash": "params-a",
+            "outcome_class": "CONFIRMED_BAD",
+            "paper_forward_ready": False,
+            "hard_status": "",
+        }
+    ]
+
+    path = write_memory_snapshot(tmp_path, records=records, product_paper_memory={})
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["schema"] == "setup_outcome_memory.v2"
+    assert payload["complete"] is True
+    assert len(payload["known_bad_set_sha256"]) == 64

@@ -226,7 +226,10 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
     role_reviews = _mapping(out.get("agent_role_reviews"))
     analyst = _mapping(out.get("system_analyst_feedback"))
     analyst_training = _mapping(analyst.get("training_evidence"))
-    memory = _mapping(out.get("setup_outcome_memory_refresh"))
+    memory = _mapping(
+        out.get("setup_outcome_memory_backfill")
+        or out.get("setup_outcome_memory_refresh")
+    )
     reject_memory = _mapping(memory.get("reject_characterization"))
     storage = _mapping(out.get("runtime_storage_maintenance"))
     preview_tiers = _mapping(preview.get("by_validation_tier"))
@@ -393,12 +396,25 @@ def farm_metrics(out: Mapping[str, Any]) -> dict[str, int | bool | str | float]:
         "analyst_routed": int(analyst.get("routed") or 0),
         "analyst_input_rows": int(analyst_training.get("eligible_rows") or 0),
         "memory_rows": int(memory.get("product_rows") or 0),
+        "memory_backfill_state": str(memory.get("state") or "not_started"),
+        "memory_backfill_complete": bool(memory.get("state") == "completed"),
+        "memory_backfill_completed": int(memory.get("completed") or 0),
+        "memory_backfill_total": int(memory.get("total") or 0),
+        "memory_backfill_deferred_reason": str(
+            memory.get("deferred_reason") or ""
+        ),
         "memory_terminal_rows": int(memory.get("product_terminal_rows") or 0),
         "memory_reject_cache_hits": int(reject_memory.get("cache_hits") or 0),
         "memory_reject_snapshot_bootstrap_hits": int(
             reject_memory.get("snapshot_bootstrap_hits") or 0
         ),
         "memory_reject_recomputed": int(reject_memory.get("recomputed") or 0),
+        "memory_reject_cache_input_state": str(
+            reject_memory.get("cache_input_state") or "absent"
+        ),
+        "memory_reject_cache_complete": bool(
+            reject_memory.get("cache_complete")
+        ),
         "memory_run_artifacts_reread": int(
             reject_memory.get("run_artifacts_reread") or 0
         ),

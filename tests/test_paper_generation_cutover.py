@@ -547,13 +547,19 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
         "_generation_feature_packet_ids",
         lambda *_a, **_k: [],
     )
-    monkeypatch.setattr(
-        farm_loop,
-        "_refresh_setup_outcome_memory",
-        lambda *_a, **kwargs: (
-            calls.append(("memory", kwargs.get("evidence_database_path"))) or bound()
-        ),
-    )
+    def refresh(*_args, **kwargs):
+        checkpoint = json.loads(
+            (tmp_path / "state" / "product_progress" / "farm.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert checkpoint["metrics"]["mandatory_product_cycle_complete"] is True
+        assert kwargs["stage"] == "setup_outcome_memory_backfill"
+        assert kwargs["expected_generation_run_id"] == "run-current"
+        calls.append(("memory", kwargs.get("evidence_database_path")))
+        return bound(state="completed")
+
+    monkeypatch.setattr(farm_loop, "_refresh_setup_outcome_memory", refresh)
 
     from src.research_lab import (
         outcome_retest_result,
@@ -684,6 +690,8 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
         "validation_bound_members"
     ] == 1
     assert out["mandatory_product_cycle_complete"] is True
+    assert "setup_outcome_memory_refresh" not in out
+    assert out["setup_outcome_memory_backfill"]["state"] == "completed"
     checkpoint = json.loads(
         (tmp_path / "state" / "product_progress" / "farm.json").read_text(
             encoding="utf-8"
@@ -695,6 +703,95 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
     # The post-delivery chain now checks liveness around the two formerly
     # unbounded analyst/role-maintenance stages as well as the generation chain.
     assert runtime.failures_checked == 6
+
+
+def test_v2_historical_memory_failure_is_distinct_after_t0_and_does_not_replay_delivery(
+    tmp_path,
+    monkeypatch,
+):
+    """A derived-history failure cannot turn a delivered current product into a retry."""
+
+    runtime = _FakeRuntime()
+    args = type("Args", (), {"paper_generation_runtime": runtime})()
+    writes: list[dict] = []
+
+    def bound(**extra):
+        return {
+            "paper_generation_run_id": "run-current",
+            "current_generation_compatible": True,
+            **extra,
+        }
+
+    from src.research_lab import (
+        paper_product_quality_report,
+        role_environment_dispatch,
+        system_analyst_cycle,
+        trading_policy_calibration,
+    )
+
+    monkeypatch.setattr(
+        farm_loop,
+        "_write_loop_status",
+        lambda *_a, **kwargs: writes.append(kwargs.get("details") or {}),
+    )
+    monkeypatch.setattr(
+        system_analyst_cycle,
+        "run_system_analyst_cycle",
+        lambda *_a, **_k: bound(),
+    )
+    monkeypatch.setattr(
+        role_environment_dispatch,
+        "dispatch_role_environments",
+        lambda *_a, **_k: bound(environment_ids={}),
+    )
+    monkeypatch.setattr(
+        role_environment_dispatch,
+        "reconcile_role_work_results",
+        lambda *_a, **_k: bound(),
+    )
+    monkeypatch.setattr(
+        trading_policy_calibration,
+        "build_trading_policy_calibration",
+        lambda *_a, **_k: bound(),
+    )
+    monkeypatch.setattr(
+        paper_product_quality_report,
+        "build_paper_product_quality_report",
+        lambda *_a, **_k: bound(),
+    )
+    monkeypatch.setattr(
+        farm_loop,
+        "_refresh_setup_outcome_memory",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("synthetic history fault")),
+    )
+
+    out = {
+        "paper_generation_v2": {"run_id": "run-current"},
+        "paper_telegram_delivery": bound(sent_messages=1),
+    }
+    farm_loop._run_v2_post_delivery_maintenance_chain(
+        args,
+        tmp_path,
+        tasks=object(),
+        apply=True,
+        loop=True,
+        cycle_started_at=1.0,
+        out=out,
+    )
+
+    assert out["mandatory_product_cycle_complete"] is True
+    assert out["paper_telegram_delivery"]["sent_messages"] == 1
+    assert out["setup_outcome_memory_backfill"] == {
+        "schema": "setup_outcome_memory_backfill.v1",
+        "state": "failed",
+        "error_type": "OSError",
+        "paper_generation_run_id": "run-current",
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    assert any(
+        row.get("milestone") == "historical_backfill_failed" for row in writes
+    )
 
 
 def test_farm_v2_preview_mismatch_fails_closed_before_training(tmp_path, monkeypatch):

@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -82,6 +83,14 @@ REJECT_CACHE_SCHEMA = "RejectCharacterizationCache.v1"
 REJECT_CLASSIFIER_VERSION = "trade_path_reject_taxonomy.v1"
 
 
+class IncrementalRefreshDeferred(RuntimeError):
+    """A bounded historical refresh yielded after safely checkpointing its cache."""
+
+    def __init__(self, stats: dict[str, Any]) -> None:
+        super().__init__("incremental reject refresh yielded before completion")
+        self.stats = dict(stats)
+
+
 def _source_digest(row: dict[str, Any]) -> str:
     payload = {
         key: row.get(key)
@@ -139,30 +148,54 @@ def _classifier_context_digest() -> str:
     ).hexdigest()
 
 
+def _load_reject_cache_with_status(
+    path: Path,
+    *,
+    classifier_context_digest: str,
+) -> tuple[dict[str, dict[str, Any]], str, bool]:
+    """Load a derived accelerator without ever treating it as memory authority.
+
+    ``complete`` describes only whether the last refresh saw every current
+    source.  Individually identity-bound entries in an interrupted cache are
+    still safe accelerators; a partial cache is never published as the setup
+    outcome-memory snapshot consumed by later cycles.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}, "missing", False
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}, "unreadable", False
+    if not isinstance(payload, dict):
+        return {}, "invalid_payload", False
+    if payload.get("schema") != REJECT_CACHE_SCHEMA:
+        return {}, "schema_mismatch", False
+    if payload.get("classifier_version") != REJECT_CLASSIFIER_VERSION:
+        return {}, "classifier_version_mismatch", False
+    if payload.get("classifier_context_digest") != classifier_context_digest:
+        return {}, "classifier_context_mismatch", False
+    items = payload.get("items")
+    if not isinstance(items, dict):
+        return {}, "items_invalid", False
+    return ({
+        str(key): value
+        for key, value in items.items()
+        if isinstance(key, str) and isinstance(value, dict)
+    }, "ready_complete" if bool(payload.get("complete", True)) else "ready_partial", bool(payload.get("complete", True)))
+
+
 def _load_reject_cache(
     path: Path,
     *,
     classifier_context_digest: str,
 ) -> dict[str, dict[str, Any]]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if (
-        not isinstance(payload, dict)
-        or payload.get("schema") != REJECT_CACHE_SCHEMA
-        or payload.get("classifier_version") != REJECT_CLASSIFIER_VERSION
-        or payload.get("classifier_context_digest") != classifier_context_digest
-    ):
-        return {}
-    items = payload.get("items")
-    if not isinstance(items, dict):
-        return {}
-    return {
-        str(key): value
-        for key, value in items.items()
-        if isinstance(key, str) and isinstance(value, dict)
-    }
+    """Compatibility wrapper for callers interested only in safe cache items."""
+
+    items, _state, _complete = _load_reject_cache_with_status(
+        path,
+        classifier_context_digest=classifier_context_digest,
+    )
+    return items
 
 
 def _snapshot_bootstrap(
@@ -358,7 +391,19 @@ def _characterize_reject_rows(
     *,
     progress: Callable[[str, int, int], None] | None = None,
     check_active: Callable[[], None] | None = None,
+    on_group_complete: Callable[[list[tuple[dict[str, Any], dict[str, Any]]]], None]
+    | None = None,
+    checkpoint_rows: int | None = None,
+    should_yield: Callable[[int, int], bool] | None = None,
 ) -> list[dict[str, Any]]:
+    """Characterize rows while safely yielding between bounded checkpoints.
+
+    A yield is deliberately different from a stop/fence failure: callers first
+    persist the identity-bound accelerator rows that were already completed,
+    then resume the remaining source rows in a later historical slice.  The
+    full setup-memory snapshot is still published only after this function
+    returns every requested row.
+    """
     oi_micro = oi_micro_families()
     total = len(uc)
     grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {}
@@ -375,12 +420,17 @@ def _characterize_reject_rows(
     for label, members in grouped.items():
         if check_active is not None:
             check_active()
+        if should_yield is not None and should_yield(processed, total):
+            raise IncrementalRefreshDeferred(
+                {"completed": processed, "total": total, "reason": "slice_budget"}
+            )
         run_results = _index_run_results(private_root, label)
         indexed_runs += 1
         if check_active is not None:
             check_active()
         if progress is not None:
             progress("run_artifacts_indexed", indexed_runs, total_run_labels)
+        completed_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for original_index, r in members:
             if check_active is not None:
                 check_active()
@@ -411,7 +461,7 @@ def _characterize_reject_rows(
                 str(r.get("family") or ""),
                 oi_micro,
             )
-            rows[original_index] = {
+            characterization = {
                 "uc_key": str(r.get("uc_key") or ""),
                 "symbol": str(r.get("symbol") or ""),
                 "timeframe": str(r.get("timeframe") or ""),
@@ -439,11 +489,23 @@ def _characterize_reject_rows(
                     )
                 },
             }
+            rows[original_index] = characterization
+            completed_pairs.append((r, characterization))
             processed += 1
             if progress is not None and (
                 processed == total or processed % 25 == 0
             ):
                 progress("rejects_characterized", processed, total)
+            if checkpoint_rows and len(completed_pairs) >= checkpoint_rows:
+                if on_group_complete is not None:
+                    on_group_complete(completed_pairs)
+                completed_pairs = []
+            if should_yield is not None and should_yield(processed, total):
+                if completed_pairs and on_group_complete is not None:
+                    on_group_complete(completed_pairs)
+                raise IncrementalRefreshDeferred(
+                    {"completed": processed, "total": total, "reason": "slice_budget"}
+                )
         # Releasing each run before loading the next prevents an unbounded
         # multi-gigabyte JSON cache and its one large GIL-bound cleanup pause.
         del run_results
@@ -451,6 +513,8 @@ def _characterize_reject_rows(
             check_active()
         if progress is not None:
             progress("run_artifacts_released", indexed_runs, total_run_labels)
+        if completed_pairs and on_group_complete is not None:
+            on_group_complete(completed_pairs)
     complete = [row for row in rows if row is not None]
     if len(complete) != total:
         raise RuntimeError("reject characterization lost source rows")
@@ -486,6 +550,8 @@ def characterize_rejects_incremental(
     bootstrap_snapshot_path: Path | None = None,
     progress: Callable[[str, int, int], None] | None = None,
     check_active: Callable[[], None] | None = None,
+    max_recomputed_rows: int | None = None,
+    deadline_monotonic: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Refresh reject facts without rereading immutable history on every farm cycle.
 
@@ -494,7 +560,10 @@ def characterize_rejects_incremental(
     still match.  A previous complete setup-memory snapshot can bootstrap the
     first cache only for source rows and metrics that predate that snapshot.
     Changed run groups are reread through the ordinary deterministic
-    characterization path.
+    characterization path.  A caller may bound one historical slice by newly
+    recomputed rows and/or a monotonic deadline.  A yielded slice writes only
+    independently verified accelerator entries and never returns a partial
+    memory record list as if it were complete.
     """
 
     private_root = Path(private_root)
@@ -507,7 +576,7 @@ def characterize_rejects_incremental(
         progress("incremental_sources_loaded", total, total)
 
     classifier_context_digest = _classifier_context_digest()
-    existing = _load_reject_cache(
+    existing, cache_input_state, cache_input_complete = _load_reject_cache_with_status(
         cache_path,
         classifier_context_digest=classifier_context_digest,
     )
@@ -575,45 +644,108 @@ def characterize_rejects_incremental(
         if progress is not None and (index == total or index % 500 == 0):
             progress("incremental_sources_classified", index, total)
 
-    recomputed = _characterize_reject_rows(
-        private_root,
-        misses,
-        progress=(
-            None
-            if progress is None
-            else lambda stage, completed, stage_total: progress(
-                f"incremental_miss:{stage}", completed, stage_total
-            )
-        ),
-        check_active=check_active,
-    )
-    source_by_key = {str(row.get("uc_key") or ""): row for row in misses}
-    for row in recomputed:
-        uc_key = str(row.get("uc_key") or "")
-        source = source_by_key[uc_key]
-        label = str(source.get("run_dir_label") or "")
-        rows_by_key[uc_key] = row
-        cache_items[uc_key] = {
-            "artifact_identity": artifact_identities[label],
-            "characterization": row,
-            "source_digest": _source_digest(source),
+    def cache_payload(*, complete: bool) -> dict[str, Any]:
+        return {
+            "schema": REJECT_CACHE_SCHEMA,
+            "classifier_version": REJECT_CLASSIFIER_VERSION,
+            "classifier_context_digest": classifier_context_digest,
+            "bootstrap_snapshot_sha256": snapshot_sha256,
+            "complete": complete,
+            "items": dict(sorted(cache_items.items())),
         }
 
+    def checkpoint_completed_group(
+        completed_pairs: list[tuple[dict[str, Any], dict[str, Any]]],
+    ) -> None:
+        """Persist safe accelerator entries after each completed bounded chunk.
+
+        A crash or stop can leave this cache partial, but never leaves a partial
+        setup-memory snapshot.  Every entry is independently revalidated by
+        source and artifact identity before it can be reused on resume.
+        """
+
+        if not completed_pairs:
+            return
+        for source, row in completed_pairs:
+            uc_key = str(row.get("uc_key") or "")
+            label = str(source.get("run_dir_label") or "")
+            rows_by_key[uc_key] = row
+            cache_items[uc_key] = {
+                "artifact_identity": artifact_identities[label],
+                "characterization": row,
+                "source_digest": _source_digest(source),
+            }
+        if check_active is not None:
+            check_active()
+        _atomic_write_reject_cache(cache_path, cache_payload(complete=False))
+        if progress is not None:
+            progress("incremental_cache_checkpointed", len(cache_items), total)
+        if check_active is not None:
+            check_active()
+
+    def slice_exhausted(completed: int, total_misses: int) -> bool:
+        if completed >= total_misses:
+            return False
+        if max_recomputed_rows is not None and completed >= max_recomputed_rows:
+            return True
+        return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
+
+    try:
+        recomputed = _characterize_reject_rows(
+            private_root,
+            misses,
+            progress=(
+                None
+                if progress is None
+                else lambda stage, completed, stage_total: progress(
+                    f"incremental_miss:{stage}", completed, stage_total
+                )
+            ),
+            check_active=check_active,
+            on_group_complete=checkpoint_completed_group,
+            checkpoint_rows=min(250, max_recomputed_rows or 250),
+            should_yield=slice_exhausted,
+        )
+    except IncrementalRefreshDeferred as exc:
+        # The checkpoint callback writes completed entries incrementally.  Mark
+        # any resumed cache incomplete as well, even if the slice yielded before
+        # the first chunk, so no consumer can mistake it for a complete refresh.
+        _atomic_write_reject_cache(cache_path, cache_payload(complete=False))
+        deferred_stats = {
+            "schema": REJECT_CACHE_SCHEMA,
+            "classifier_version": REJECT_CLASSIFIER_VERSION,
+            "sources": total,
+            "cache_input_state": cache_input_state,
+            "cache_input_complete": cache_input_complete,
+            "cache_complete": False,
+            "cache_hits": cache_hits,
+            "snapshot_bootstrap_hits": snapshot_hits,
+            "recomputed": int(exc.stats.get("completed") or 0),
+            "invalidated": invalidated,
+            "run_artifacts_total": len(artifact_identities),
+            "run_artifacts_reread": len(
+                {
+                    str(row.get("run_dir_label") or "")
+                    for row in misses
+                    if str(row.get("run_dir_label") or "")
+                }
+            ),
+            "run_artifacts_unavailable": sum(
+                identity.get("state") != "available" and bool(label)
+                for label, identity in artifact_identities.items()
+            ),
+            "cache_written": True,
+            "deferred": True,
+            "deferred_reason": str(exc.stats.get("reason") or "slice_budget"),
+        }
+        raise IncrementalRefreshDeferred(deferred_stats) from exc
+
     ordered = [rows_by_key[str(row.get("uc_key") or "")] for row in source_rows]
-    changed = cache_items != existing
+    changed = cache_items != existing or not cache_input_complete
     if changed:
         if check_active is not None:
             check_active()
-        _atomic_write_reject_cache(
-            cache_path,
-            {
-                "schema": REJECT_CACHE_SCHEMA,
-                "classifier_version": REJECT_CLASSIFIER_VERSION,
-                "classifier_context_digest": classifier_context_digest,
-                "bootstrap_snapshot_sha256": snapshot_sha256,
-                "items": dict(sorted(cache_items.items())),
-            },
-        )
+        _atomic_write_reject_cache(cache_path, cache_payload(complete=True))
         if check_active is not None:
             check_active()
     if progress is not None:
@@ -622,6 +754,9 @@ def characterize_rejects_incremental(
         "schema": REJECT_CACHE_SCHEMA,
         "classifier_version": REJECT_CLASSIFIER_VERSION,
         "sources": total,
+        "cache_input_state": cache_input_state,
+        "cache_input_complete": cache_input_complete,
+        "cache_complete": True,
         "cache_hits": cache_hits,
         "snapshot_bootstrap_hits": snapshot_hits,
         "recomputed": len(recomputed),
