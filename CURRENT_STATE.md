@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-20
-- Verified against: `d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b`
+- Verified: 2026-08-21
+- Verified against: `ce592269dc4f4d4c1360f0fca68c35de2eaf55b3`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -53,30 +53,30 @@ Expired materialization adoption is integrated at
 `e03502ddd484234c64ccb1d51b56c8397789b55f`. It remains an exact-task,
 hash-bound operational mechanism and grants no general reconciliation authority.
 
-## Task-Branch Candidate: Cold Setup-Memory Startup Boundary
+## Integrated Cold Setup-Memory Startup Boundary
 
-PR #282 is integrated at `d5ccdbcc4c2f1b2040a09cb85a6a30af60d1476b`. Its
-first exact-main attempt did not reach T+0: a 26,845-source cold/incremental
-setup-outcome-memory refresh remained inside the mandatory product boundary and
-exhausted the unchanged 600-second ceiling. That is a real startup critical-path
-failure, not a Telegram, listener, ownership or storage-capacity finding.
+PR #283 is integrated at `ce592269dc4f4d4c1360f0fca68c35de2eaf55b3`. It
+preserves current generation, complete known-bad authority, analyst, role,
+calibration and quality gates before T+0, while moving only derived historical
+setup-memory refresh to a typed, bounded, resumable backfill after the completed
+product checkpoint. Its partial cache is an accelerator, never complete memory
+authority. Missing, corrupt, incomplete or digest-mismatched known-bad evidence
+still blocks the canonical Paper Evidence v2 lane fail-closed. The integrated
+crash-safe evidence-seal library is not yet an external canary finalizer
+activation. Operational Paper Evidence v2 rebind and a paper-only canary remain
+separate owner gates.
 
-Draft review-only PR #283 carries a non-authoritative candidate that preserves
-current generation, known-bad, analyst, role, calibration and quality gates
-before T+0, but moves only the derived historical setup-memory refresh into a
-typed backfill after the completed product checkpoint. Each historical slice is
-bounded by both monotonic time and recomputed rows; its partial identity-bound
-reject cache is an accelerator, never a published complete memory snapshot.
-For canonical Paper Evidence v2, the complete digest-bound known-bad snapshot
-remains a true current-product authority: a missing, corrupt, incomplete or
-digest-mismatched snapshot fails the paper lane closed rather than becoming an
-empty rejection set. A missing accelerator cache alone does not weaken that
-gate when the complete snapshot is present. Owner/fence/stop, stale-generation
-and snapshot-publication errors remain critical rather than degraded historical
-work. The branch also adds a canonical crash-safe final-evidence seal protocol;
-the existing external canary finalizer is not switched by this code-only PR.
-Promotion requires exact-head review, full repository gates and a separately
-authorized Paper Evidence v2 rebind plus paper-only canary.
+## Task-Branch Candidate: Windows Lease-Supervisor Causal Verification
+
+The local post-merge gate exposed a timing-sensitive synthetic test around the
+spawned process-lease supervisor. The task branch is a non-authoritative
+candidate that first proves one successful renewal, then verifies additional
+renewals while the parent holds the GIL. It does not alter production
+owner/fence/heartbeat code or its 90-second production lease. A persistent
+synthetic SQLite writer block remains required to fail before lease expiry,
+create the canonical stop intent, and publish the bounded renewal-budget
+failure. Promotion requires Windows repeat/stress evidence, lifecycle/fencing
+and full non-live gates, exact-head review, and a separate merge decision.
 
 ## Implemented Public Contracts
 
