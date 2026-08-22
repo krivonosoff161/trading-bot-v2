@@ -1,38 +1,34 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.21"
+version: "2026.08.22"
 status: current
-verified_date: "2026-08-21"
+verified_date: "2026-08-22"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: ce592269dc4f4d4c1360f0fca68c35de2eaf55b3
+  trading-bot-v2: 463dc28e749e0967380a71dbb351b2548d01ae35
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/lease-supervisor-windows-repair
+  branch: codex/stop-marker-provenance-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: ce592269dc4f4d4c1360f0fca68c35de2eaf55b3
+  baseline_revision: 463dc28e749e0967380a71dbb351b2548d01ae35
   scope:
-    - causal_windows_lease_supervisor_gil_blocking_matrix
-    - initial_renewal_proof_before_parent_gil_block
-    - additional_renewals_during_parent_gil_block
-    - synthetic_scheduler_pressure_classification
-    - persistent_sqlite_contention_stays_fail_closed
-    - no_production_supervisor_or_runtime_authority_change
+    - exact_legacy_scanner_public_news_stop_marker_migration
+    - hash_and_size_bound_provenance_disposition
+    - private_forensic_archive_before_source_acknowledgement
+    - crash_safe_archive_and_replay_idempotency
+    - normal_clear_remains_fail_closed_for_unknown_markers
   evidence:
-    - src/research_lab/process_lease_supervisor.py
-    - src/research_lab/ownership.py
-    - tests/test_process_lease_supervisor.py
-    - tests/test_process_lease_heartbeat.py
-    - tests/test_owner_fencing_v2.py
-    - tests/test_task_claim_heartbeat.py
-  promotion_gate: exact-head review, Windows repeat and scheduler-pressure evidence, focused and lifecycle/fencing/integration regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: read-only Paper Evidence v2 and canonical DB preflight after green post-merge gate; a canary still requires separate explicit owner authority
+    - scripts/strategy_lab/clear_rcc_stop_intents.py
+    - tests/test_clear_rcc_stop_intents.py
+    - docs/farm_runbook.md
+  promotion_gate: exact-head review, provenance/archive/replay adversarial tests, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  runtime_gate: after green post-merge gate, require exact-marker forensic archive, quiescence, canonical Paper Evidence v2 rebind, and separate explicit owner canary authority
 authority_values:
   - none
   - advisory

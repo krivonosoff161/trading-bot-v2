@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-21
-- Verified against: `ce592269dc4f4d4c1360f0fca68c35de2eaf55b3`
+- Verified: 2026-08-22
+- Verified against: `463dc28e749e0967380a71dbb351b2548d01ae35`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -66,17 +66,27 @@ crash-safe evidence-seal library is not yet an external canary finalizer
 activation. Operational Paper Evidence v2 rebind and a paper-only canary remain
 separate owner gates.
 
-## Task-Branch Candidate: Windows Lease-Supervisor Causal Verification
+## Integrated Windows Lease-Supervisor Causal Verification
 
-The local post-merge gate exposed a timing-sensitive synthetic test around the
-spawned process-lease supervisor. The task branch is a non-authoritative
-candidate that first proves one successful renewal, then verifies additional
-renewals while the parent holds the GIL. It does not alter production
-owner/fence/heartbeat code or its 90-second production lease. A persistent
-synthetic SQLite writer block remains required to fail before lease expiry,
-create the canonical stop intent, and publish the bounded renewal-budget
-failure. Promotion requires Windows repeat/stress evidence, lifecycle/fencing
-and full non-live gates, exact-head review, and a separate merge decision.
+PR #284 is integrated at `463dc28e749e0967380a71dbb351b2548d01ae35`. It
+corrects a timing-sensitive synthetic test without altering production
+owner/fence/heartbeat code or its 90-second production lease. The test now
+establishes one successful renewal before checking additional renewals while
+the parent blocks the GIL. A persistent synthetic SQLite writer block still
+must fail closed before lease expiry, create the canonical stop request, and
+publish the bounded renewal-budget failure.
+
+## Task-Branch Candidate: Stop-Marker Provenance Migration
+
+Two exact legacy scanner/public-news stop markers were not produced in a
+currently documented payload format. The ordinary hash-bound clear command
+continues to reject them. This task-branch candidate adds a separate migration
+path that accepts only the externally authorized scanner/public-news pair bound
+by exact name, SHA-256 and byte length; it archives the opaque bytes with a
+private manifest before removing a source marker. It does not accept arbitrary
+marker text, encodings, names, roots or hash drift, and it remains
+non-authoritative until exact-head review and merge. Rebind and runtime stay
+separate operational gates.
 
 ## Implemented Public Contracts
 
