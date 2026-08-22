@@ -8,29 +8,30 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 188a0c114979742abf61a81181c8dde97c14370a
+  trading-bot-v2: 3c8499b2142b6884844b65c348d1c3571f74d68e
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/startup-liveness-dag-repair
+  branch: codex/t0-handshake-integrity-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: 188a0c114979742abf61a81181c8dde97c14370a
+  baseline_revision: 3c8499b2142b6884844b65c348d1c3571f74d68e
   scope:
-    - authoritative_startup_dependency_dag
-    - historical_maintenance_separation_after_v2_delivery_checkpoint
-    - successor_generation_wakeup_and_fresh_current_pass
+    - durable_validation_publication_to_current_v2_reentry_handshake
+    - bypass_of_non_current_generic_prefix_before_exact_current_delivery
+    - canonical_post_stop_integrity_target_resolution
     - unchanged_current_generation_known_bad_owner_fence_stop_safety
-    - scenario_matrix_for_debt_generation_and_startup_failure_modes
+    - scenario_matrix_for_wake_generation_and_startup_failure_modes
   evidence:
     - scripts/strategy_lab/farm_loop.py
     - scripts/research_control_center.py
     - tests/test_product_progress.py
     - tests/test_farm_loop_stage_visibility.py
     - tests/test_paper_generation_cutover.py
+    - tests/test_t0_handshake_and_post_stop_integrity.py
     - docs/startup-liveness-contract.md
-  promotion_gate: exact-head review, startup scenario matrix, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  promotion_gate: exact-head review, startup handshake scenario matrix, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
   runtime_gate: after green post-merge gate, require quiescent read-only preflight, canonical Paper Evidence v2 identity proof, and separate explicit owner canary authority
 authority_values:
   - none

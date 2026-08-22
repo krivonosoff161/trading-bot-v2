@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-22
-- Verified against: `188a0c114979742abf61a81181c8dde97c14370a`
+- Verified against: `3c8499b2142b6884844b65c348d1c3571f74d68e`
 - Scope: canonical paper-only startup from RCC launch through authoritative green
   T+0; no process authority is granted by this document.
 - Evidence: `tests/test_product_progress.py`,
@@ -73,19 +73,37 @@ delivery. Letting the old pass continue through historical/research work was
 also unsafe for startup liveness because it could consume the bounded 600-second
 window before the next 180-second farm cadence.
 
-The candidate repair preserves both facts:
+The merged PR #286 candidate preserved both facts for a publication already
+visible to the foreground pass. The current task-branch repair closes the
+remaining sleep/re-entry handoff gap:
 
-1. the worker raises a one-shot wake event only after atomic current-generation
-   publication;
+1. the worker raises a sequence-preserving generation latch only after atomic
+   current-generation publication;
 2. a foreground pass that saw `waiting_validation_generation` returns without
    publishing a farm checkpoint;
-3. the loop consumes that event without its normal cadence and re-runs the
-   full current V2 chain;
+3. waking from cadence records a typed current-generation re-entry request;
+   it does not clear a concurrent second publication;
 4. only its resulting generation-bound delivery can publish the mandatory
    farm checkpoint.
 
 Thus there is no `publication → ready` shortcut and no
-`awaiting checkpoint → unrelated maintenance → startup timeout` cycle.
+`awaiting checkpoint → generic intake/discovery/backlog work → startup timeout`
+cycle. The re-entry runs bounded PFR materialization, exact current-generation
+verification, Paper Evidence V2, preview and guarded delivery; it excludes
+intake, discovery, coordinator, broad live-mover work, journals, storage and
+post-T+0 maintenance.
+
+## Canonical Post-Stop Integrity Targets
+
+Post-stop integrity is a separate read-only gate after quiescence. A monitor
+must resolve targets through
+`src/research_lab/post_stop_integrity_targets.py`, not hard-code a guessed
+SQLite location. The resolver accepts only the canonical private root, the
+validated active Paper Evidence V2 manifest path
+`state/derived/paper_evidence.sqlite3`, and the canonical candle-store path
+`market_data/candles.sqlite3`. It intentionally does not open a database,
+declare integrity, or establish runtime readiness; a missing target remains a
+real later integrity result rather than an `unable_to_open` path bug.
 
 ## Synthetic Scenario Matrix
 

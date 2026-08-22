@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-22
-- Verified against: `188a0c114979742abf61a81181c8dde97c14370a`
+- Verified against: `3c8499b2142b6884844b65c348d1c3571f74d68e`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -86,18 +86,29 @@ and is idempotent under replay. It does not accept arbitrary marker text,
 encodings, names, roots, or hash drift. Runtime rebind and launch remain
 separate operational gates.
 
-## Task-Branch Candidate: Startup-Liveness DAG Boundary
+## Integrated Startup-Liveness DAG Boundary
 
-The candidate branch `codex/startup-liveness-dag-repair` starts from the PR #285
-baseline. It preserves the 600-second ceiling and all current-generation,
-known-bad, Paper Evidence v2, owner/fence/stop, stale-generation, and delivery
-gates. It moves only non-authoritative analytical and legacy research work
-behind the generation-bound V2 delivery checkpoint, and makes an old
-`waiting_validation_generation` pass yield to an atomically published successor
-instead of manufacturing readiness or consuming the normal cadence. The
-[startup-liveness contract](docs/startup-liveness-contract.md) is a public
-dependency map, not runtime evidence. This candidate is non-authoritative until
-exact-head review, merge, post-merge gate, and a separately authorized canary.
+PR #286 is integrated at `3c8499b2142b6884844b65c348d1c3571f74d68e`. It
+preserves the 600-second ceiling and all current-generation, known-bad, Paper
+Evidence V2, owner/fence/stop, stale-generation and delivery gates while moving
+only non-authoritative analytical and legacy research work behind the immutable
+V2 delivery checkpoint. It proved that an already-observed
+`waiting_validation_generation` pass cannot fabricate readiness. Operational
+proof remains a separate canary.
+
+## Task-Branch Candidate: T+0 Handshake And Post-Stop Integrity
+
+The candidate branch `codex/t0-handshake-integrity-repair` is based on PR #286.
+It preserves a validation-publication wake until an exact-current bounded V2
+re-entry acknowledges it, so the next product pass cannot silently fall back to
+intake, discovery, historical backlog or broad research before delivery. The
+re-entry still requires known-bad authority, exact Paper Evidence V2 generation,
+guarded Telegram delivery and owner/fence/stop checks before the only mandatory
+farm checkpoint. A new canonical post-stop target resolver also derives candle
+and Paper Evidence targets from the active manifest/root instead of guessing
+obsolete paths. This is non-authoritative until exact-head review, merge,
+post-merge checks and a separately authorized canary; it makes no profitability
+or live-readiness claim.
 
 ## Implemented Public Contracts
 
