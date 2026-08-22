@@ -130,6 +130,37 @@ def test_priority_worker_wakes_product_only_for_current_generation_publication(
     assert product_wakeup.is_set() is expected_wakeup
 
 
+def test_current_generation_wakeup_reenters_only_a_waiting_v2_pass() -> None:
+    wake = threading.Event()
+    wake.set()
+    args = Namespace(
+        paper_evidence_v2_required=True,
+        product_cycle_wakeup_event=wake,
+    )
+
+    assert farm_loop._yield_waiting_v2_generation_to_current_publication(
+        args,
+        {
+            "paper_generation_v2": {
+                "state": "waiting_validation_generation",
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        },
+    ) is True
+    assert farm_loop._yield_waiting_v2_generation_to_current_publication(
+        args,
+        {"paper_generation_v2": {"state": "ready"}},
+    ) is False
+    assert farm_loop._yield_waiting_v2_generation_to_current_publication(
+        Namespace(
+            paper_evidence_v2_required=False,
+            product_cycle_wakeup_event=wake,
+        ),
+        {"paper_generation_v2": {"state": "waiting_validation_generation"}},
+    ) is False
+
+
 def test_claim_failure_signal_stops_worker_and_interrupts_foreground(tmp_path) -> None:
     stop = threading.Event()
     interrupted = []
@@ -1126,6 +1157,272 @@ class TestPrintWarning:
         farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
 
         assert seen["refresh_calls"] == 1
+
+    def test_canonical_v2_startup_runs_current_chain_before_deferred_research(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A startup optimization must never skip the authoritative V2 chain."""
+
+        seen: list[str] = []
+        monkeypatch.setattr(farm_loop, "_providers", lambda *_a, **_k: ("provider", None, None))
+        monkeypatch.setattr(farm_loop, "_read_intake", lambda *_a, **_k: [])
+        monkeypatch.setattr(farm_loop, "_discovery", lambda *_a, **_k: (None, {"status": "test"}))
+        monkeypatch.setattr(
+            farm_loop,
+            "run_coordinator_cycle",
+            lambda *_a, **_k: {"pivot": "idle", "active_tasks": 0, "counters": {}, "status": {}},
+        )
+        monkeypatch.setattr(farm_loop, "_refresh_live_universe", lambda *_a, **_k: {"status": "test"})
+        monkeypatch.setattr(farm_loop, "_maybe_storage_maintain", lambda *_a, **_k: {"state": "ready"})
+        monkeypatch.setattr(farm_loop, "_stage_status", lambda *_a, **_k: {})
+
+        from src.research_lab.paper_signals import cycle as paper_cycle
+        from src.research_lab import paper_telegram_sender
+
+        monkeypatch.setattr(
+            paper_cycle,
+            "run_cycle",
+            lambda *_a, **_k: seen.append("paper_signals") or {"paper_only": True},
+        )
+        monkeypatch.setattr(
+            farm_loop,
+            "_run_paper_runtime",
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                AssertionError("legacy paper runtime must be deferred until after T+0")
+            ),
+        )
+
+        def current_chain(*_a, out, **_k):
+            seen.append("current_v2")
+            out["paper_generation_v2"] = {"state": "ready", "run_id": "run-current"}
+
+        monkeypatch.setattr(farm_loop, "_run_main_paper_derived_chain", current_chain)
+        monkeypatch.setattr(
+            farm_loop,
+            "_paper_telegram_delivery_config",
+            lambda *_a, **_k: {"apply": False, "configured": False, "ids": [], "send_text": None, "send_photo": None},
+        )
+        monkeypatch.setattr(
+            paper_telegram_sender,
+            "send_paper_telegram_previews",
+            lambda *_a, **_k: seen.append("delivery")
+            or {"paper_generation_run_id": "run-current", "current_generation_compatible": True},
+        )
+
+        def completed_delivery(*_a, out, **_k):
+            seen.append("mandatory_checkpoint")
+            out["mandatory_product_cycle_complete"] = True
+
+        monkeypatch.setattr(farm_loop, "_run_v2_post_delivery_maintenance_chain", completed_delivery)
+        monkeypatch.setattr(
+            farm_loop,
+            "_run_post_t0_research_lanes",
+            lambda *_a, **_k: seen.append("post_t0_research") or False,
+        )
+
+        args = Namespace(
+            max_plan_events=0,
+            max_prepares=0,
+            max_enrich=0,
+            max_sweeps=0,
+            run_worker=False,
+            max_worker_jobs=0,
+            max_validations=0,
+            night_mode=False,
+            allow_public_output=False,
+            run_validation=False,
+            no_followups=True,
+            max_followups=0,
+            sweep_tier="smoke",
+            run_paper=True,
+            max_paper_cards=0,
+            true_forward_max_candidates=0,
+            run_paper_signals=True,
+            paper_evidence_v2_required=True,
+            pfr_db_path="",
+            paper_signals_fetch_timeout=1.0,
+            paper_signals_timeframes="15m",
+            paper_signals_max_new=0,
+            paper_signals_max_pfr_scan=0,
+            paper_signals_max_pfr_fetches=0,
+            paper_signals_pfr_reserved=0,
+            paper_signals_max_observe=0,
+            paper_signals_max_live_fetches=0,
+            paper_signals_max_network_fetches=0,
+            main_paper_runtime_limit=0,
+            provider="synthetic",
+            backend="cpu",
+            data_days=None,
+            enrich_funding=False,
+            enrich_oi=False,
+            run_journal_export=False,
+            discovery_ttl_seconds=3600,
+            no_discovery_refresh=True,
+            loop=False,
+            no_live_universe_refresh=True,
+            live_universe_ttl_seconds=3600,
+            live_universe_top_n=1,
+            paper_telegram_limit=0,
+            paper_telegram_status_digest=False,
+            paper_telegram_status_digest_hours=12,
+            run_calculator_advisor=False,
+            run_agent_role_reviews=False,
+            validation_backlog_slo_seconds=3600.0,
+        )
+
+        farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
+
+        assert seen == [
+            "paper_signals",
+            "current_v2",
+            "delivery",
+            "mandatory_checkpoint",
+            "post_t0_research",
+        ]
+
+    def test_published_successor_yields_waiting_pass_without_false_checkpoint(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Publication is not itself T+0; it must trigger a fresh V2 pass."""
+
+        wake = threading.Event()
+        wake.set()
+        monkeypatch.setattr(farm_loop, "_providers", lambda *_a, **_k: ("provider", None, None))
+        monkeypatch.setattr(farm_loop, "_read_intake", lambda *_a, **_k: [])
+        monkeypatch.setattr(farm_loop, "_discovery", lambda *_a, **_k: (None, {"status": "test"}))
+        monkeypatch.setattr(
+            farm_loop,
+            "run_coordinator_cycle",
+            lambda *_a, **_k: {"pivot": "idle", "active_tasks": 0, "counters": {}, "status": {}},
+        )
+        monkeypatch.setattr(farm_loop, "_refresh_live_universe", lambda *_a, **_k: {"status": "test"})
+
+        from src.research_lab.paper_signals import cycle as paper_cycle
+
+        monkeypatch.setattr(paper_cycle, "run_cycle", lambda *_a, **_k: {"paper_only": True})
+
+        def waiting_current_chain(*_a, out, **_k):
+            out["paper_generation_v2"] = {"state": "waiting_validation_generation"}
+            raise farm_loop._ValidationGenerationWaiting("pending")
+
+        monkeypatch.setattr(farm_loop, "_run_main_paper_derived_chain", waiting_current_chain)
+
+        args = Namespace(
+            max_plan_events=0,
+            max_prepares=0,
+            max_enrich=0,
+            max_sweeps=0,
+            run_worker=False,
+            max_worker_jobs=0,
+            max_validations=0,
+            night_mode=False,
+            allow_public_output=False,
+            run_validation=False,
+            no_followups=True,
+            max_followups=0,
+            sweep_tier="smoke",
+            run_paper=False,
+            max_paper_cards=0,
+            true_forward_max_candidates=0,
+            run_paper_signals=True,
+            paper_evidence_v2_required=True,
+            product_cycle_wakeup_event=wake,
+            pfr_db_path="",
+            paper_signals_fetch_timeout=1.0,
+            paper_signals_timeframes="15m",
+            paper_signals_max_new=0,
+            paper_signals_max_pfr_scan=0,
+            paper_signals_max_pfr_fetches=0,
+            paper_signals_pfr_reserved=0,
+            paper_signals_max_observe=0,
+            paper_signals_max_live_fetches=0,
+            paper_signals_max_network_fetches=0,
+            main_paper_runtime_limit=0,
+            provider="synthetic",
+            backend="cpu",
+            data_days=None,
+            enrich_funding=False,
+            enrich_oi=False,
+            run_journal_export=False,
+            discovery_ttl_seconds=3600,
+            no_discovery_refresh=True,
+            loop=False,
+            no_live_universe_refresh=True,
+            live_universe_ttl_seconds=3600,
+            live_universe_top_n=1,
+            paper_telegram_limit=0,
+            paper_telegram_status_digest=False,
+            paper_telegram_status_digest_hours=12,
+            run_calculator_advisor=False,
+            run_agent_role_reviews=False,
+        )
+
+        out = farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
+
+        assert out["startup_product_reentry"]["state"] == "current_generation_published"
+        assert out["paper_telegram_delivery"]["skipped"] == "validation_generation_waiting"
+        assert not (tmp_path / "state" / "product_progress" / "farm.json").exists()
+
+    def test_post_t0_legacy_research_failure_is_degraded_not_product_revocation(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        class HealthyRuntime:
+            def raise_if_failed(self) -> None:
+                return None
+
+        monkeypatch.setattr(
+            farm_loop,
+            "_run_paper_runtime",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("synthetic legacy failure")),
+        )
+        out: dict[str, object] = {}
+
+        stopped = farm_loop._run_post_t0_research_lanes(
+            Namespace(
+                run_paper=True,
+                true_forward_max_candidates=0,
+                paper_generation_runtime=HealthyRuntime(),
+            ),
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=1.0,
+            out=out,
+            should_stop=lambda: False,
+        )
+
+        assert stopped is False
+        assert out["errors"] == [
+            {"where": "paper_runtime_post_t0", "error": "synthetic legacy failure"}
+        ]
+
+    def test_post_t0_research_never_hides_fence_or_owner_failure(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        class FailedRuntime:
+            def raise_if_failed(self) -> None:
+                raise RuntimeError("synthetic owner/fence loss")
+
+        monkeypatch.setattr(
+            farm_loop,
+            "_run_paper_runtime",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("legacy failure")),
+        )
+
+        with pytest.raises(RuntimeError, match="owner/fence loss"):
+            farm_loop._run_post_t0_research_lanes(
+                Namespace(
+                    run_paper=True,
+                    true_forward_max_candidates=0,
+                    paper_generation_runtime=FailedRuntime(),
+                ),
+                tmp_path,
+                apply=True,
+                loop=True,
+                cycle_started_at=1.0,
+                out={},
+                should_stop=lambda: False,
+            )
 
 
 class TestCycleLogStages:

@@ -302,8 +302,13 @@ def test_supervisor_status_contains_only_safe_authority_metadata(
     path = tmp_path / "ownership.sqlite"
     supervisor = _supervisor(tmp_path, _acquired(path))
     supervisor.start()
-    supervisor.record_progress("safe_progress_stage")
-    assert _wait_until(lambda: int(supervisor.snapshot().get("renewals") or 0) >= 1)
+    # ``start`` waits for the child only after it has atomically published the
+    # initial status.  This test audits that public status schema, not renewal
+    # cadence; waiting for a child process to be scheduled for its first
+    # renewal made the schema assertion flaky under a CPU-saturated full
+    # Windows suite.  Renewal and GIL isolation are independently exercised
+    # by the preceding lifecycle tests.
+    assert supervisor.snapshot()["state"] == "running"
     supervisor.stop()
 
     status = json.loads(

@@ -562,6 +562,35 @@ def _publish_farm_product_checkpoint(private_root: Path, out: dict) -> None:
     )
 
 
+def _yield_waiting_v2_generation_to_current_publication(
+    args: Any, out: dict[str, Any]
+) -> bool:
+    """Yield a superseded foreground pass to an atomically published successor.
+
+    The priority validation worker sets ``product_cycle_wakeup_event`` only
+    after ``current_generation.json`` is complete.  A foreground pass that
+    already observed ``waiting_validation_generation`` has no authority to
+    manufacture a farm-complete checkpoint from that old observation.  It must
+    instead return to the loop, which consumes the event without its ordinary
+    cadence and re-runs the full generation-bound product chain.
+
+    This is deliberately *not* a readiness shortcut: the next pass still has
+    to verify the current manifest, V2 generation, known-bad gate, preview and
+    delivery before publishing the sole mandatory farm checkpoint.
+    """
+
+    if not bool(getattr(args, "paper_evidence_v2_required", False)):
+        return False
+    wake_event = getattr(args, "product_cycle_wakeup_event", None)
+    wake_is_set = getattr(wake_event, "is_set", None)
+    if not callable(wake_is_set) or not wake_is_set():
+        return False
+    generation = out.get("paper_generation_v2")
+    if not isinstance(generation, dict):
+        return False
+    return generation.get("state") == "waiting_validation_generation"
+
+
 def _run_v2_main_paper_derived_chain(
     args,
     private_root: Path,
@@ -810,7 +839,22 @@ def _run_v2_post_delivery_maintenance_chain(
     out: dict,
     should_stop: Callable[[], bool] | None = None,
 ) -> None:
-    """Run bounded analyst maintenance after generation-bound delivery."""
+    """Publish the current product boundary, then run bounded derived work.
+
+    The function is entered only after the exact generation-bound preview has
+    been durably handed to the guarded delivery outbox.  The completed current
+    product is therefore the V2 generation plus its bridge/queue/observation,
+    preview, training/lineage/retest projections and delivery binding.  Analyst
+    routing, role maintenance, calibration, quality reporting and setup-memory
+    history consume that completed product; none of them can change its
+    generation, delivery effect, known-bad authority, or deterministic card.
+
+    Keeping those consumers before the first farm checkpoint made their
+    aggregate wall time an accidental startup prerequisite.  Publish the
+    already-verified current-product checkpoint first.  Each subsequent lane
+    remains generation-bound and checks the same owner/fence/stop authority;
+    a failure is never converted into product authority or a duplicate effect.
+    """
 
     runtime = args.paper_generation_runtime
 
@@ -834,6 +878,14 @@ def _run_v2_post_delivery_maintenance_chain(
         run_id=run_id,
     )
     evidence_database_path = runtime.database_path
+
+    # This is the only T+0 product boundary: it is after exact current
+    # generation, known-bad-gated paper inputs and durable delivery, but before
+    # derived consumers that can neither alter nor authorize that product.
+    # Do not move owner/fence/stop checks below this point.
+    check_active()
+    out["mandatory_product_cycle_complete"] = True
+    _publish_farm_product_checkpoint(private_root, out)
 
     from src.research_lab.paper_product_quality_report import (
         build_paper_product_quality_report,
@@ -975,16 +1027,6 @@ def _run_v2_post_delivery_maintenance_chain(
             "paper_generation_run_id": run_id,
         },
     )
-    # Delivery, deterministic generation consumers, analyst routing, role
-    # reconciliation, calibration and the quality report are the mandatory
-    # paper-product boundary.  Setup-outcome memory is a derived historical
-    # snapshot: its direct consumers are the next research/review cycle, while
-    # current paper truth and known-bad gating are read from generation-bound
-    # production sources.  Do not let a legitimate cold cache rebuild consume
-    # the 600-second T+0 budget, and never publish a partial snapshot as full.
-    out["mandatory_product_cycle_complete"] = True
-    _publish_farm_product_checkpoint(private_root, out)
-
     try:
         out["setup_outcome_memory_backfill"] = _refresh_setup_outcome_memory(
             args,
@@ -2387,6 +2429,126 @@ def _run_paper_runtime(
     )
 
 
+def _run_true_forward_research_lane(
+    args: Any,
+    private_root: Path,
+    *,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+    out: dict[str, Any],
+    stage: str,
+    error_where: str,
+) -> None:
+    """Run the bounded non-authoritative true-forward evidence projection."""
+
+    tf_limit = int(getattr(args, "true_forward_max_candidates", 20))
+    if tf_limit <= 0:
+        out["true_forward"] = {"skipped": "true_forward_max_candidates=0"}
+        return
+    try:
+        _write_loop_status(
+            private_root,
+            stage=stage,
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            details={"max_candidates": tf_limit},
+        )
+        from src.research_lab import true_forward
+
+        true_forward.register(private_root, max_candidates=tf_limit)
+        tf_res = true_forward.collect_once(private_root, max_candidates=tf_limit)
+        out["true_forward"] = tf_res.get("summary", {})
+    except Exception as exc:  # noqa: BLE001 - derived research remains isolated
+        out.setdefault("errors", []).append({"where": error_where, "error": str(exc)})
+
+
+def _run_post_t0_research_lanes(
+    args: Any,
+    private_root: Path,
+    *,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+    out: dict[str, Any],
+    should_stop: Callable[[], bool],
+) -> bool:
+    """Run non-authoritative legacy/research work after the V2 checkpoint.
+
+    ``paper_runtime`` and ``true_forward`` remain useful research projections,
+    but canonical Paper Evidence v2 neither reads them as current product
+    authority nor needs them to produce a generation-bound delivery.  Running
+    them before the first V2 checkpoint made their aggregate local I/O another
+    unbounded startup dependency.  They are deliberately deferred, not
+    discarded, and retain their existing stop checks and crash isolation.
+
+    Returns ``True`` only when a documented stop intent is observed.
+    """
+
+    def raise_if_safety_failed() -> None:
+        runtime = getattr(args, "paper_generation_runtime", None)
+        if runtime is not None:
+            runtime.raise_if_failed()
+        failure_signal = getattr(args, "task_claim_failure_signal", None)
+        if failure_signal is not None:
+            failure_signal.raise_if_failed()
+
+    raise_if_safety_failed()
+    if bool(getattr(args, "run_paper", False)):
+        try:
+            _write_loop_status(
+                private_root,
+                stage="paper_runtime_post_t0",
+                apply=apply,
+                loop=loop,
+                cycle_started_at=cycle_started_at,
+            )
+            paper = _run_paper_runtime(
+                args,
+                private_root,
+                apply=apply,
+                loop=loop,
+                cycle_started_at=cycle_started_at,
+            )
+            out["paper"] = {
+                "counters": paper.get("counters", {}),
+                "readiness": paper.get("readiness", {}),
+                "results": (paper.get("results") or [])[:10],
+                "post_t0": True,
+            }
+        except FarmCycleStopRequested:
+            raise
+        except Exception as exc:  # noqa: BLE001 - legacy research is non-authoritative
+            # A post-T+0 research fault is visible degradation, but never a
+            # reason to revoke an already-delivered current V2 product.  Before
+            # classifying it as such, re-check the safety state so a concurrent
+            # owner/fence failure is never hidden by this isolation boundary.
+            raise_if_safety_failed()
+            out.setdefault("errors", []).append(
+                {"where": "paper_runtime_post_t0", "error": str(exc)}
+            )
+    if should_stop():
+        return True
+    if not apply:
+        return False
+    # True-forward only extends research evidence over already-current local
+    # bars.  It cannot create a paper-ready authority or alter the delivered
+    # generation.
+    _run_true_forward_research_lane(
+        args,
+        private_root,
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        out=out,
+        stage="true_forward_post_t0",
+        error_where="true_forward_post_t0",
+    )
+    raise_if_safety_failed()
+    return should_stop()
+
+
 def _refresh_setup_outcome_memory(
     args,
     private_root: Path,
@@ -2911,7 +3073,12 @@ def _run_once(
     if cycle_stop_requested():
         out["stop_requested"] = True
         return out
-    if args.run_paper:
+    canonical_v2_startup = bool(
+        apply
+        and getattr(args, "paper_evidence_v2_required", False)
+        and getattr(args, "run_paper_signals", False)
+    )
+    if args.run_paper and not canonical_v2_startup:
         _write_loop_status(
             private_root,
             stage="paper_runtime",
@@ -2955,37 +3122,21 @@ def _run_once(
             out["stop_requested"] = True
             return out
     if apply:
-        # True-forward research lane: pin boundaries for the current watchlist (idempotent) and
-        # accumulate forward outcomes on genuinely new local bars. Bounded + crash-isolated so a
-        # research lane can never break the cycle. matured != edge; nothing paper-ready.
-        tf_limit = int(getattr(args, "true_forward_max_candidates", 20))
-        if tf_limit > 0:
-            try:
-                _write_loop_status(
-                    private_root,
-                    stage="true_forward",
-                    apply=apply,
-                    loop=loop,
-                    cycle_started_at=cycle_started_at,
-                    details={"max_candidates": tf_limit},
-                )
-                from src.research_lab import true_forward
-
-                true_forward.register(private_root, max_candidates=tf_limit)
-                tf_res = true_forward.collect_once(
-                    private_root, max_candidates=tf_limit
-                )
-                out["true_forward"] = tf_res.get("summary", {})
-            except Exception as exc:  # noqa: BLE001 - research lane must never break the cycle
-                out.setdefault("errors", []).append(
-                    {"where": "true_forward", "error": str(exc)}
-                )
-        else:
-            out["true_forward"] = {"skipped": "true_forward_max_candidates=0"}
-        priority_checkpoint("true_forward")
-        if cycle_stop_requested():
-            out["stop_requested"] = True
-            return out
+        if not canonical_v2_startup:
+            _run_true_forward_research_lane(
+                args,
+                private_root,
+                apply=apply,
+                loop=loop,
+                cycle_started_at=cycle_started_at,
+                out=out,
+                stage="true_forward",
+                error_where="true_forward",
+            )
+            priority_checkpoint("true_forward")
+            if cycle_stop_requested():
+                out["stop_requested"] = True
+                return out
         if getattr(args, "run_paper_signals", False):
             # Operational paper-watch lane: one bounded cycle (observe armed -> close -> remember ->
             # generate new). Crash-isolated; paper/research-only, never an order.
@@ -3361,6 +3512,29 @@ def _run_once(
                 out.setdefault("errors", []).append(
                     {"where": "paper_signals", "error": str(exc)}
                 )
+    if canonical_v2_startup and out.get("mandatory_product_cycle_complete") is True:
+        if _run_post_t0_research_lanes(
+            args,
+            private_root,
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            out=out,
+            should_stop=cycle_stop_requested,
+        ):
+            out["stop_requested"] = True
+            return out
+    if _yield_waiting_v2_generation_to_current_publication(args, out):
+        # No farm checkpoint is emitted for the old waiting observation.  The
+        # main loop consumes the already-set event and begins an exact-current
+        # pass immediately rather than allowing maintenance/journaling/storage
+        # work from a superseded pass to consume the startup budget.
+        out["startup_product_reentry"] = {
+            "state": "current_generation_published",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+        return out
     stages = _stage_status(args, apply)
     out["stages"] = stages
     if apply:

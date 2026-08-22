@@ -1160,6 +1160,115 @@ def test_optional_advisory_work_does_not_block_mandatory_t0(
     assert report["hard_fail_reasons"] == []
 
 
+@pytest.mark.parametrize(
+    ("name", "farm_metrics_payload", "expect_ready", "expected_hard", "expected_degraded"),
+    [
+        (
+            "no_historical_debt",
+            {
+                "generation_consistent": True,
+                "mandatory_product_cycle_complete": True,
+                "validation_oldest_age_seconds": 0.0,
+                "validation_backlog_slo_seconds": 3600.0,
+            },
+            True,
+            (),
+            (),
+        ),
+        (
+            "historical_debt_with_current_product",
+            {
+                "generation_consistent": True,
+                "mandatory_product_cycle_complete": True,
+                "validation_oldest_age_seconds": 86_400.0,
+                "validation_backlog_slo_seconds": 3600.0,
+                "validation_eligible": 6_000,
+                "validation_service_rate_per_hour": 0.0,
+                "validation_net_drain_rate_per_hour": 0.0,
+            },
+            True,
+            (),
+            ("validation_historical_backlog_slo_exceeded",),
+        ),
+        (
+            "current_publication_awaits_real_farm_checkpoint",
+            {
+                "generation_consistent": False,
+                "mandatory_product_cycle_complete": True,
+                "paper_generation_waiting": True,
+                "validation_generation_status": "pending",
+                "validation_generation_started_at": 101.0,
+            },
+            False,
+            (),
+            (),
+        ),
+        (
+            "historical_debt_and_current_publication_await",
+            {
+                "generation_consistent": False,
+                "mandatory_product_cycle_complete": True,
+                "paper_generation_waiting": True,
+                "validation_generation_status": "pending",
+                "validation_generation_started_at": 101.0,
+                "validation_oldest_age_seconds": 86_400.0,
+                "validation_backlog_slo_seconds": 3600.0,
+            },
+            False,
+            (),
+            ("validation_historical_backlog_slo_exceeded",),
+        ),
+    ],
+)
+def test_startup_scenario_matrix_separates_current_generation_from_historical_debt(
+    tmp_path: Path,
+    name: str,
+    farm_metrics_payload: dict[str, object],
+    expect_ready: bool,
+    expected_hard: tuple[str, ...],
+    expected_degraded: tuple[str, ...],
+) -> None:
+    """Historical debt is observable, never a substitute for current truth."""
+
+    publish_checkpoint(
+        tmp_path,
+        component="scanner",
+        sequence=1,
+        status="idle",
+        metrics=scanner_metrics(
+            inputs=0,
+            fresh=0,
+            cards=0,
+            dropped=0,
+            llm_failures=0,
+            provider_failures=0,
+        ),
+        completed_at=101.0,
+    )
+    publish_checkpoint(
+        tmp_path,
+        component="farm",
+        sequence=1,
+        status=(
+            "waiting"
+            if farm_metrics_payload.get("paper_generation_waiting") is True
+            else "completed"
+        ),
+        metrics=farm_metrics_payload,
+        completed_at=102.0,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        wall_clock=lambda: 103.0,
+    ).sample()
+
+    assert report["ready"] is expect_ready, name
+    assert set(report["hard_fail_reasons"]) == set(expected_hard), name
+    assert set(expected_degraded).issubset(report["degraded_reasons"]), name
+
+
 def test_product_monitor_fails_on_current_delivery_ambiguity_not_carried_debt(
     tmp_path: Path,
 ) -> None:

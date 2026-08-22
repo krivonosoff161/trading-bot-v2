@@ -29,6 +29,7 @@ instruction. When documents conflict, use the authority order in
 | Windows launch ownership | [entrypoints.md](entrypoints.md) |
 | Paper operator path | [farm_runbook.md](farm_runbook.md) |
 | Farm lifecycle | [farm_loop_lifecycle.md](farm_loop_lifecycle.md) |
+| Canonical RCC-to-T+0 startup dependency and gate classification | [startup-liveness-contract.md](startup-liveness-contract.md) |
 | Public artifact and secret boundary | [public-artifact-policy.md](public-artifact-policy.md) |
 | Storage, destructive-maintenance, and segmented-log adoption boundary | [storage_boundaries.md](storage_boundaries.md) |
 | Cross-repository validation contract | [validation-bridge-contract.md](validation-bridge-contract.md) |

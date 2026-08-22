@@ -81,6 +81,9 @@ safety guards remain mandatory.
 - [Farm ownership map](farm_ownership_map.md): active, diagnostic, and legacy
   launch-path ownership.
 - [Farm loop lifecycle](farm_loop_lifecycle.md): current calculation lifecycle.
+- [Startup liveness contract](startup-liveness-contract.md): canonical RCC-to-T+0
+  dependency graph, mandatory safety gates, and the non-authoritative candidate
+  boundary for historical and research lanes.
 - [Farm runbook](farm_runbook.md): supported paper/research operation.
 - [Paper runtime design](paper_runtime_design.md): validated setup observation
   and outcome recording.

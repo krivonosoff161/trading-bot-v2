@@ -8,27 +8,30 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 463dc28e749e0967380a71dbb351b2548d01ae35
+  trading-bot-v2: 188a0c114979742abf61a81181c8dde97c14370a
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/stop-marker-provenance-repair
+  branch: codex/startup-liveness-dag-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: 463dc28e749e0967380a71dbb351b2548d01ae35
+  baseline_revision: 188a0c114979742abf61a81181c8dde97c14370a
   scope:
-    - exact_legacy_scanner_public_news_stop_marker_migration
-    - hash_and_size_bound_provenance_disposition
-    - private_forensic_archive_before_source_acknowledgement
-    - crash_safe_archive_and_replay_idempotency
-    - normal_clear_remains_fail_closed_for_unknown_markers
+    - authoritative_startup_dependency_dag
+    - historical_maintenance_separation_after_v2_delivery_checkpoint
+    - successor_generation_wakeup_and_fresh_current_pass
+    - unchanged_current_generation_known_bad_owner_fence_stop_safety
+    - scenario_matrix_for_debt_generation_and_startup_failure_modes
   evidence:
-    - scripts/strategy_lab/clear_rcc_stop_intents.py
-    - tests/test_clear_rcc_stop_intents.py
-    - docs/farm_runbook.md
-  promotion_gate: exact-head review, provenance/archive/replay adversarial tests, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: after green post-merge gate, require exact-marker forensic archive, quiescence, canonical Paper Evidence v2 rebind, and separate explicit owner canary authority
+    - scripts/strategy_lab/farm_loop.py
+    - scripts/research_control_center.py
+    - tests/test_product_progress.py
+    - tests/test_farm_loop_stage_visibility.py
+    - tests/test_paper_generation_cutover.py
+    - docs/startup-liveness-contract.md
+  promotion_gate: exact-head review, startup scenario matrix, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  runtime_gate: after green post-merge gate, require quiescent read-only preflight, canonical Paper Evidence v2 identity proof, and separate explicit owner canary authority
 authority_values:
   - none
   - advisory
@@ -89,6 +92,11 @@ current_documents:
     evidence: tests/test_farm_lifecycle_core.py
     residual_risk: operational continuity still requires runtime evidence
     next_gate: preserve lifecycle invariants during the long canary
+  - path: docs/startup-liveness-contract.md
+    scope: authoritative RCC-to-T+0 dependency classification and startup-cycle boundary
+    evidence: tests/test_product_progress.py and tests/test_farm_loop_stage_visibility.py
+    residual_risk: the task-branch contract remains non-authoritative until merge and operational proof
+    next_gate: require exact-head review, post-merge gate, and a separately authorized canary
   - path: docs/farm_notification_layer.md
     scope: visibility, preview, delivery, and acknowledgement boundaries
     evidence: tests/test_paper_telegram_sender.py
