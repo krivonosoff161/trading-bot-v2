@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-22
-- Verified against: `463dc28e749e0967380a71dbb351b2548d01ae35`
+- Verified against: `188a0c114979742abf61a81181c8dde97c14370a`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -28,13 +28,19 @@ before the parent GIL block and preserves persistent SQLite-contention
 fail-closed coverage. Production lease timings and supervisor code are
 unchanged.
 
-The current task branch addresses a stop-marker provenance blocker: normal
-clearance remains fail-closed, while a separately typed migration can archive
-and acknowledge only an externally authorized exact scanner/public-news marker
-pair. Exit gate: adversarial provenance/archive/replay tests, lifecycle and
-full non-live checks, exact-head review, synchronized documentation and a
-separate merge decision. Runtime and Paper v2 rebind remain later operational
-gates.
+PR #285 integrated the stop-marker provenance migration at
+`188a0c114979742abf61a81181c8dde97c14370a`. It leaves ordinary clearance
+fail-closed and accepts only an externally authorized exact marker pair through
+the typed archive/replay protocol.
+
+The current task branch is a startup-liveness DAG repair. It must prove that
+historical validation debt is degraded maintenance rather than current product
+readiness; an atomically published successor must still receive a fresh full
+V2 pass before it can establish T+0. The candidate defers only analytical and
+legacy research lanes until after the immutable current V2 delivery checkpoint.
+Exit gate: adversarial scenario matrix, lifecycle/fencing regressions, full
+non-live checks, exact-head review, synchronized documentation, and a separate
+merge decision. Runtime and Paper v2 rebind remain later operational gates.
 
 ## Completed
 
@@ -156,8 +162,11 @@ gates.
   remain in startup after the ordinary 300-second completion SLO, but the cold
   start still fails closed at 600 seconds. Missing stage/milestone identity,
   stale progress, or heartbeat-only activity never extends the budget.
-- T+0 binds to the mandatory generation, delivery, analyst, setup-memory and
-  quality boundary. Optional calculator and broad role-review LLM maintenance
+- On the current merged baseline, T+0 waits for the final generation/delivery
+  product boundary. The startup-liveness candidate further separates analyst,
+  setup-memory, calibration, quality, legacy paper runtime and true-forward
+  research from that first checkpoint while preserving their generation binding.
+  Optional calculator and broad role-review LLM maintenance
   continues under the steady-state SLO and cannot block initial readiness.
   RCC and external canary adapters consume the same classifier: only an explicit
   current-run validation wait without hard-fail reasons is transitional, while

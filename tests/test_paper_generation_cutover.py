@@ -602,11 +602,15 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
             or {"training_evidence": bound()}
         ),
     )
-    monkeypatch.setattr(
-        system_analyst_cycle,
-        "run_system_analyst_cycle",
-        lambda *_a, **_k: calls.append(("analyst", None)) or bound(),
-    )
+    def analyst(*_args, **_kwargs):
+        checkpoint = tmp_path / "state" / "product_progress" / "farm.json"
+        assert checkpoint.exists(), "current product checkpoint must precede analyst maintenance"
+        payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+        assert payload["metrics"]["mandatory_product_cycle_complete"] is True
+        calls.append(("analyst", None))
+        return bound()
+
+    monkeypatch.setattr(system_analyst_cycle, "run_system_analyst_cycle", analyst)
     monkeypatch.setattr(
         role_environment_dispatch,
         "dispatch_role_environments",
@@ -700,9 +704,9 @@ def test_farm_v2_chain_routes_every_generation_aware_consumer_to_authority(
     assert checkpoint["metrics"]["mandatory_product_cycle_complete"] is True
     assert checkpoint["metrics"]["product_cycle_complete"] is False
     assert args.paper_generation_run_id == "run-current"
-    # The post-delivery chain now checks liveness around the two formerly
-    # unbounded analyst/role-maintenance stages as well as the generation chain.
-    assert runtime.failures_checked == 6
+    # The immutable current-product checkpoint performs one extra authority
+    # check before analytical/role maintenance starts.
+    assert runtime.failures_checked == 7
 
 
 def test_v2_historical_memory_failure_is_distinct_after_t0_and_does_not_replay_delivery(

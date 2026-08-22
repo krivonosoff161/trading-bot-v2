@@ -75,6 +75,26 @@ def _wait_until(predicate, timeout=1.0) -> bool:
     return bool(predicate())
 
 
+def _acquire_test_writer_lock(blocker: sqlite3.Connection, timeout: float = 0.25) -> None:
+    """Acquire the injected writer lock after an in-flight renewal finishes.
+
+    The contention tests exercise behaviour *after* a competing writer has a
+    lock.  A zero-timeout BEGIN raced the heartbeat's deliberately short
+    transaction and made that test depend on Windows thread scheduling rather
+    than renewal semantics.  Keep acquisition bounded; an unavailable writer
+    still fails the test rather than masking a persistent lock.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            blocker.execute("BEGIN IMMEDIATE")
+            return
+        except sqlite3.OperationalError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.005)
+
+
 def test_progress_heartbeat_keeps_claim_live_beyond_original_lease(tmp_path) -> None:
     clock = Clock()
     owner_store, process_lease, probe = _process_lease(
@@ -370,7 +390,7 @@ def test_transient_sqlite_writer_contention_retries_then_renews(tmp_path) -> Non
         assert _wait_until(
             lambda: heartbeat.snapshot()["renewal_connection_ready"]
         )
-        blocker.execute("BEGIN IMMEDIATE")
+        _acquire_test_writer_lock(blocker)
         # The implicit claim-acquired milestone may already have renewed before
         # this writer lock was acquired.  Use a post-lock baseline so the test
         # waits for the renewal caused by the explicit progress below.
@@ -432,7 +452,7 @@ def test_persistent_sqlite_writer_contention_fails_before_claim_expiry(tmp_path)
             )
             > original_expiry
         )
-        blocker.execute("BEGIN IMMEDIATE")
+        _acquire_test_writer_lock(blocker)
         # Bind the no-renew assertion to the exact claim generation observed
         # after a proven renewal and under the persistent writer lock.
         contention_expiry = float(
@@ -488,7 +508,7 @@ def test_graceful_stop_during_sqlite_contention_leaves_no_renewal_thread(
         assert _wait_until(
             lambda: heartbeat.snapshot()["renewal_connection_ready"]
         )
-        blocker.execute("BEGIN IMMEDIATE")
+        _acquire_test_writer_lock(blocker)
         heartbeat.progress("canonical_candles_loaded")
         assert _wait_until(
             lambda: heartbeat.snapshot()["renewal_contention_events"] > 0
@@ -528,7 +548,7 @@ def test_owner_loss_during_sqlite_contention_cannot_retry_renewal(tmp_path) -> N
         assert _wait_until(
             lambda: heartbeat.snapshot()["renewal_connection_ready"]
         )
-        blocker.execute("BEGIN IMMEDIATE")
+        _acquire_test_writer_lock(blocker)
         heartbeat.progress("canonical_candles_loaded")
         assert _wait_until(
             lambda: heartbeat.snapshot()["renewal_contention_events"] > 0
