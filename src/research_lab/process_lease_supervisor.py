@@ -132,6 +132,8 @@ def _status(
     progress_sequence: int,
     progress_age_seconds: float,
     failure_type: str | None = None,
+    failure_detected_at: float | None = None,
+    stop_intent_committed_at: float | None = None,
     transient_events: int = 0,
     last_transient_type: str | None = None,
 ) -> dict[str, object]:
@@ -151,6 +153,8 @@ def _status(
         "transient_events": transient_events,
         "last_transient_type": last_transient_type,
         "failure_type": failure_type,
+        "failure_detected_at": failure_detected_at,
+        "stop_intent_committed_at": stop_intent_committed_at,
         "paper_only": True,
         "execution_allowed": False,
     }
@@ -291,6 +295,7 @@ def _supervisor_main(
             progress_sequence,
         )
         failure = type(exc).__name__
+        failure_detected_at = time.time()
         payload = _status(
             state="failed",
             lease=lease,
@@ -298,6 +303,7 @@ def _supervisor_main(
             progress_sequence=sequence,
             progress_age_seconds=progress_age,
             failure_type=failure,
+            failure_detected_at=failure_detected_at,
             transient_events=transient_events,
             last_transient_type=last_transient_type,
         )
@@ -305,25 +311,34 @@ def _supervisor_main(
             stop_intent_created = _request_stop_once(stop_path)
         except OSError:
             stop_intent_created = False
+        else:
+            # _request_stop_once returns only after the exclusive marker write
+            # is flushed.  This timestamp is the causal fail-closed boundary,
+            # unlike a later parent bridge callback that Windows may schedule
+            # after the lease has naturally expired.
+            if stop_intent_created:
+                payload["stop_intent_committed_at"] = time.time()
         try:
-            try:
-                _atomic_json(status_path, payload)
-            except OSError:
-                # The canonical stop intent is the fail-closed control path.
-                # Status publication remains best effort once that durable
-                # request has been attempted.
-                pass
-            alert = dict(payload)
-            alert["schema"] = "ProcessLeaseSupervisorAlert.v1"
-            alert["alert_id"] = f"process_lease_supervisor:{time.time_ns()}"
-            alert["stop_intent_created"] = stop_intent_created
-            try:
-                _append_jsonl(alert_path, alert)
-            except OSError:
-                pass
+            _atomic_json(status_path, payload)
+        except OSError:
+            # The canonical stop intent is the fail-closed control path.
+            # Status publication remains best effort once that durable request
+            # has been attempted.
+            pass
         finally:
+            # The foreground must receive the failure after the durable stop
+            # intent and failure status, but it must not wait for optional
+            # append-only alert evidence.
             failure_event.set()
             ready_event.set()
+        alert = dict(payload)
+        alert["schema"] = "ProcessLeaseSupervisorAlert.v1"
+        alert["alert_id"] = f"process_lease_supervisor:{time.time_ns()}"
+        alert["stop_intent_created"] = stop_intent_created
+        try:
+            _append_jsonl(alert_path, alert)
+        except OSError:
+            pass
     finally:
         if store is not None:
             store.close()

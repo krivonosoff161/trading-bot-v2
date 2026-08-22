@@ -96,19 +96,30 @@ V2 delivery checkpoint. It proved that an already-observed
 `waiting_validation_generation` pass cannot fabricate readiness. Operational
 proof remains a separate canary.
 
-## Task-Branch Candidate: T+0 Handshake And Post-Stop Integrity
+## Integrated T+0 Handshake And Post-Stop Integrity
 
-The candidate branch `codex/t0-handshake-integrity-repair` is based on PR #286.
-It preserves a validation-publication wake until an exact-current bounded V2
+PR #287 is integrated at `0b4263ffa7e3c910399406f8502dfad38c4b6661`. It
+preserves a validation-publication wake until an exact-current bounded V2
 re-entry acknowledges it, so the next product pass cannot silently fall back to
 intake, discovery, historical backlog or broad research before delivery. The
 re-entry still requires known-bad authority, exact Paper Evidence V2 generation,
 guarded Telegram delivery and owner/fence/stop checks before the only mandatory
-farm checkpoint. A new canonical post-stop target resolver also derives candle
-and Paper Evidence targets from the active manifest/root instead of guessing
-obsolete paths. This is non-authoritative until exact-head review, merge,
-post-merge checks and a separately authorized canary; it makes no profitability
-or live-readiness claim.
+farm checkpoint. The canonical post-stop target resolver derives candle and
+Paper Evidence targets from the active manifest/root instead of guessing
+obsolete paths. A fresh post-merge and operational canary proof remains
+required; this makes no profitability or live-readiness claim.
+
+## Task-Branch Candidate: Lease-Supervisor Failure Publication
+
+The candidate branch `codex/lease-supervisor-publication-repair` is based on
+the merged PR #287 baseline. It records the child-side failure-detection and
+durable stop-intent commit times, publishes the supervisor failure event after
+the durable stop/status boundary but before best-effort alert append I/O, and
+tests that causal boundary without using parent bridge scheduling as a lease
+deadline. Owner identity, fencing, renewal failure budgets, canonical stop
+intent and execution denial are unchanged. The candidate is non-authoritative
+until exact-head review, merge, post-merge checks and the separately authorized
+paper-only canary.
 
 ## Implemented Public Contracts
 
