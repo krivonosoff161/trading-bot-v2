@@ -186,11 +186,17 @@ def test_no_progress_fails_before_expiry_and_requests_canonical_stop(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "ownership.sqlite"
-    lease = _acquired(path)
+    # A short synthetic lease must test the child-side durable safety boundary,
+    # not parent bridge scheduling on a loaded Windows host.  The production
+    # lease is 90 seconds; three seconds retains a bounded test while allowing
+    # the spawned child and parent bridge to be scheduled independently.
+    lease_seconds = 3.0
+    lease = _acquired(path, lease_seconds=lease_seconds)
     foreground_failures: list[dict[str, object]] = []
     supervisor = _supervisor(
         tmp_path,
         lease,
+        lease_seconds=lease_seconds,
         max_no_progress_seconds=0.25,
         on_failure=lambda _failure, snapshot: foreground_failures.append(snapshot),
     )
@@ -198,14 +204,18 @@ def test_no_progress_fails_before_expiry_and_requests_canonical_stop(
 
     assert supervisor.failure_event.wait(2.0)
     assert _wait_until(lambda: len(foreground_failures) == 1)
-    observed_at = time.time()
     snapshot = supervisor.snapshot()
 
-    assert observed_at < _lease_expiry(path)
     assert snapshot["state"] == "failed"
     assert snapshot["failure_type"] == "ProcessLeaseProgressStalled"
+    failure_detected_at = float(snapshot["failure_detected_at"])
+    stop_intent_committed_at = float(snapshot["stop_intent_committed_at"])
+    assert failure_detected_at <= stop_intent_committed_at
+    assert stop_intent_committed_at < _lease_expiry(path)
     assert (tmp_path / "STOP_FARM_FULL_CYCLE.txt").is_file()
-    alert_text = (tmp_path / "farm_process_lease_alerts.jsonl").read_text(
+    alert_path = tmp_path / "farm_process_lease_alerts.jsonl"
+    assert _wait_until(lambda: alert_path.is_file() and alert_path.stat().st_size > 0)
+    alert_text = alert_path.read_text(
         encoding="utf-8"
     )
     assert "synthetic-owner" not in alert_text

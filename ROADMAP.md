@@ -38,15 +38,20 @@ proved historical validation debt is maintenance rather than current-product
 readiness and moved only downstream analytical/research lanes after the
 immutable V2 delivery checkpoint.
 
-The current task branch is a bounded T+0 handshake and post-stop integrity
-repair. It must prove that a validation publication which wakes the sleeping
-foreground loop carries a durable re-entry request through the next exact
-current V2 product pass, without re-running generic intake/discovery/backlog
-work first. It also replaces stale guessed post-stop SQLite paths with a
-canonical manifest/root resolver. Exit gate: adversarial wake/re-entry and
-fail-closed scenarios, lifecycle/fencing regressions, full non-live checks,
-exact-head review, synchronized documentation, and a separate merge decision.
-Runtime and Paper V2 rebind remain later operational gates.
+PR #287 integrated the bounded T+0 handshake and post-stop integrity repair at
+`0b4263ffa7e3c910399406f8502dfad38c4b6661`. A validation publication that
+wakes the sleeping foreground loop carries a durable re-entry request through
+the next exact-current V2 product pass without re-running generic
+intake/discovery/backlog work first. Post-stop SQLite targets are resolved from
+the active manifest rather than guessed. A fresh post-merge and operational
+paper-only proof remains required.
+
+The current task branch is a narrow lease-supervisor failure-publication repair.
+It must distinguish the child-side durable stop boundary from Windows parent
+bridge scheduling, publish supervisor failure before optional alert append I/O,
+and retain owner/fence/renewal fail-closed behavior. It remains
+non-authoritative until review, merge, post-merge tests and the same separately
+authorized canary.
 
 ## Completed
 
