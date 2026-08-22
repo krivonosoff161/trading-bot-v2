@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-21
-- Verified against: `ce592269dc4f4d4c1360f0fca68c35de2eaf55b3`
+- Verified: 2026-08-22
+- Verified against: `463dc28e749e0967380a71dbb351b2548d01ae35`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -22,19 +22,19 @@ current-product authority mandatory, while its historical cache backfill runs
 only after the product checkpoint. Paper Evidence v2 rebind and runtime remain
 separate operational gates.
 
-The current task branch addresses a different post-merge blocker: its Windows
-GIL-blocking supervisor test had an artificial 0.8-second lease and began the
-block before a first renewal. Under synthetic CPU pressure, the spawned child
-could correctly detect the already expired lease and fail closed. The candidate
-therefore establishes an initial renewal, then demands further renewal during
-the parent GIL block. It adds an independent persistent SQLite-writer case that
-must still fail closed before expiry with the canonical stop request. Production
-lease timings and production supervisor code are unchanged.
+PR #284 integrated the Windows GIL-blocking supervisor test correction at
+`463dc28e749e0967380a71dbb351b2548d01ae35`. It establishes an initial renewal
+before the parent GIL block and preserves persistent SQLite-contention
+fail-closed coverage. Production lease timings and supervisor code are
+unchanged.
 
-Exit gate: independent Windows repeats and scheduler-pressure matrix, focused
-and lifecycle/fencing/integration regressions, full non-live tests, repository
-guards, clean exact-head review, synchronized documentation, and a separate
-merge decision. Runtime and Paper v2 rebind remain later operational gates.
+The current task branch addresses a stop-marker provenance blocker: normal
+clearance remains fail-closed, while a separately typed migration can archive
+and acknowledge only an externally authorized exact scanner/public-news marker
+pair. Exit gate: adversarial provenance/archive/replay tests, lifecycle and
+full non-live checks, exact-head review, synchronized documentation and a
+separate merge decision. Runtime and Paper v2 rebind remain later operational
+gates.
 
 ## Completed
 

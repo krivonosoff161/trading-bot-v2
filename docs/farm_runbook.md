@@ -234,6 +234,20 @@ markers. A missing hash, changed marker, foreign payload, active process,
 owner, or port is a blocked operational preflight; do not substitute `del`,
 `Remove-Item`, or raw SQL.
 
+### Owner-authorized legacy marker disposition
+
+An unrecognised marker remains fail-closed: the normal command above must not
+be used to reinterpret it.  The only exception is a separately authorized,
+hash-and-byte-bound migration for the two scanner/public-news marker names.
+Before it can run, independently prove zero project processes, owners and
+owned ports, preserve the exact bytes in the approved private evidence root,
+and require both names, SHA-256 values, byte counts and an authority ID.  The
+command is dry-run first; its apply mode archives both exact bytes and a sealed
+private manifest before it removes either source.  It rejects every other name,
+encoding, root, link/reparse escape, hash drift and archive collision.  A
+replay may only verify the same archive and change zero markers.  This is a
+typed incident disposition, never a general-purpose marker deletion mechanism.
+
 ## Schema Rollout And Rollback
 
 The v2 task/queue changes are additive, but this public code does not authorize
