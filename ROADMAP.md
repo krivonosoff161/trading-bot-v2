@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-22
-- Verified against: `188a0c114979742abf61a81181c8dde97c14370a`
+- Verified against: `3c8499b2142b6884844b65c348d1c3571f74d68e`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -33,14 +33,20 @@ PR #285 integrated the stop-marker provenance migration at
 fail-closed and accepts only an externally authorized exact marker pair through
 the typed archive/replay protocol.
 
-The current task branch is a startup-liveness DAG repair. It must prove that
-historical validation debt is degraded maintenance rather than current product
-readiness; an atomically published successor must still receive a fresh full
-V2 pass before it can establish T+0. The candidate defers only analytical and
-legacy research lanes until after the immutable current V2 delivery checkpoint.
-Exit gate: adversarial scenario matrix, lifecycle/fencing regressions, full
-non-live checks, exact-head review, synchronized documentation, and a separate
-merge decision. Runtime and Paper v2 rebind remain later operational gates.
+PR #286 is integrated at `3c8499b2142b6884844b65c348d1c3571f74d68e`. It
+proved historical validation debt is maintenance rather than current-product
+readiness and moved only downstream analytical/research lanes after the
+immutable V2 delivery checkpoint.
+
+The current task branch is a bounded T+0 handshake and post-stop integrity
+repair. It must prove that a validation publication which wakes the sleeping
+foreground loop carries a durable re-entry request through the next exact
+current V2 product pass, without re-running generic intake/discovery/backlog
+work first. It also replaces stale guessed post-stop SQLite paths with a
+canonical manifest/root resolver. Exit gate: adversarial wake/re-entry and
+fail-closed scenarios, lifecycle/fencing regressions, full non-live checks,
+exact-head review, synchronized documentation, and a separate merge decision.
+Runtime and Paper V2 rebind remain later operational gates.
 
 ## Completed
 
