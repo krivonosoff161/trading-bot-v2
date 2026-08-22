@@ -81,6 +81,48 @@ class _ValidationGenerationWaiting(RuntimeError):
     """A fresh validation generation is still being produced for this revision."""
 
 
+class _CurrentGenerationWakeup:
+    """Sequence-preserving handoff from validation publication to product re-entry.
+
+    ``threading.Event`` only says that *some* publication occurred.  Clearing it
+    after waking the foreground loop can lose a second publication that races
+    with a slow re-entry.  The canonical priority worker may therefore publish
+    multiple complete current generations while the foreground product lane is
+    catching up.  This small latch keeps each publication observable until one
+    exact-current re-entry has acknowledged it.  It grants no readiness: the
+    re-entry still verifies the current manifest, Paper Evidence V2 and delivery.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._published = 0
+        self._acknowledged = 0
+
+    def set(self) -> None:
+        with self._condition:
+            self._published += 1
+            self._condition.notify_all()
+
+    def is_set(self) -> bool:
+        with self._condition:
+            return self._published > self._acknowledged
+
+    def wait(self, timeout: float | None = None) -> bool:
+        with self._condition:
+            if self._published <= self._acknowledged:
+                self._condition.wait(timeout)
+            return self._published > self._acknowledged
+
+    def acknowledge(self) -> bool:
+        """Acknowledge exactly one publication after its bounded re-entry."""
+
+        with self._condition:
+            if self._published <= self._acknowledged:
+                return False
+            self._acknowledged += 1
+            return True
+
+
 def _env_flag(name: str) -> bool:
     return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -1883,8 +1925,18 @@ def _sleep_until_next_cycle(
     seconds: int,
     stop_file: str = "",
     *,
-    wake_event: threading.Event | None = None,
+    wake_event: threading.Event | _CurrentGenerationWakeup | None = None,
+    wake_receipt: list[str] | None = None,
 ) -> bool:
+    """Sleep until cadence/stop, retaining a published product-generation wake.
+
+    A generic ``threading.Event`` retains the historical clear-on-wake contract.
+    The canonical generation latch is deliberately *not* acknowledged here: the
+    foreground loop must first complete one exact-current V2 re-entry.  A second
+    publication during that re-entry consequently remains pending for the next
+    pass instead of being silently coalesced away.
+    """
+
     deadline = time.monotonic() + max(1, seconds)
     while time.monotonic() < deadline:
         if stop_file and Path(stop_file).exists():
@@ -1894,7 +1946,13 @@ def _sleep_until_next_cycle(
             time.sleep(wait_seconds)
             continue
         if wake_event.wait(wait_seconds):
-            wake_event.clear()
+            if isinstance(wake_event, _CurrentGenerationWakeup):
+                if wake_receipt is not None:
+                    wake_receipt.append("current_generation_published")
+            else:
+                wake_event.clear()
+                if wake_receipt is not None:
+                    wake_receipt.append("current_generation_published")
             if stop_file and Path(stop_file).exists():
                 return False
             return True
@@ -2936,9 +2994,245 @@ def _run_validation_maintenance(
     return result
 
 
+def _run_current_generation_product_reentry(
+    args,
+    tasks: FarmTasksDB,
+    private_root: Path,
+    *,
+    apply: bool,
+) -> dict[str, Any]:
+    """Run only the exact-current V2 product path after a published generation.
+
+    The priority worker has already completed validation publication.  Repeating
+    intake, discovery, coordinator work, historical maintenance or broad live
+    discovery before consuming that publication is not a current-product safety
+    requirement and can consume the whole startup budget.  This path deliberately
+    keeps the complete current authority chain: PFR materialization, current
+    generation reload, Paper Evidence V2, preview, guarded delivery, owner/fence
+    checks and the sole farm product checkpoint.  It never manufactures T+0.
+    """
+
+    if not (
+        apply
+        and bool(getattr(args, "paper_evidence_v2_required", False))
+        and bool(getattr(args, "run_paper_signals", False))
+    ):
+        raise RuntimeError("current-generation re-entry is unavailable outside canonical V2")
+    runtime = getattr(args, "paper_generation_runtime", None)
+    if runtime is None:
+        raise RuntimeError("current-generation re-entry requires Paper Evidence V2 runtime")
+    runtime.raise_if_failed()
+    failure_signal = getattr(args, "task_claim_failure_signal", None)
+    if failure_signal is not None:
+        failure_signal.raise_if_failed()
+
+    cycle_started_at = time.time()
+    loop = bool(getattr(args, "loop", False))
+    stop_file = str(getattr(args, "stop_file", "") or "")
+
+    def cycle_stop_requested() -> bool:
+        return bool(stop_file and Path(stop_file).exists())
+
+    out: dict[str, Any] = {
+        "pivot": "current_generation_reentry",
+        "active_tasks": int(getattr(tasks, "eligible_count", lambda: 0)()),
+        "counters": {"current_generation_reentry": 1},
+        "status": getattr(tasks, "status_counts", lambda: {})(),
+        "errors": [],
+        "startup_product_reentry": {
+            "state": "started",
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    }
+    _write_loop_status(
+        private_root,
+        stage="current_generation_reentry",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={"reason": "current_generation_published"},
+    )
+    if cycle_stop_requested():
+        out["stop_requested"] = True
+        return out
+
+    from src.research_lab.paper_signals import cycle as paper_cycle
+    from src.research_lab.providers.okx_public import (
+        OkxPublicMarketDataProvider,
+        _httpx_get_direct,
+    )
+
+    raw_pfr_db = Path(getattr(args, "pfr_db_path", "") or "")
+    pfr_db: Path | None = (
+        raw_pfr_db if raw_pfr_db.as_posix() not in ("", ".") else None
+    )
+    paper_provider: Any = OkxPublicMarketDataProvider(
+        timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0)),
+        http_get=_httpx_get_direct,
+    )
+    try:
+        from src.research_lab.providers.local_first import LocalFirstMarketDataProvider
+
+        paper_provider = LocalFirstMarketDataProvider(private_root, paper_provider)
+    except Exception as exc:  # noqa: BLE001 - preserve bounded public fallback
+        out["errors"].append(
+            {"where": "local_first_market_data_provider", "error": str(exc)}
+        )
+
+    paper_timeframes = _parse_csv(
+        getattr(args, "paper_signals_timeframes", ""),
+        default=("15m", "1h", "4h"),
+    )
+    max_new = max(0, int(getattr(args, "paper_signals_max_new", 5)))
+    _write_loop_status(
+        private_root,
+        stage="paper_signals",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "reentry": "current_generation_only",
+            "timeframes": list(paper_timeframes),
+            "max_pfr_scan": int(getattr(args, "paper_signals_max_pfr_scan", 30)),
+            "max_pfr_fetches": int(
+                getattr(args, "paper_signals_max_pfr_fetches", 12)
+            ),
+        },
+    )
+    out["paper_signals"] = paper_cycle.run_cycle(
+        private_root,
+        mode="live",
+        timeframes=paper_timeframes,
+        # Reserve every bounded new slot for validation-bound PFR.  The broad
+        # live-mover lane is research-only and must not delay this handshake.
+        max_new=max_new,
+        apply=True,
+        pfr_db_path=pfr_db,
+        provider=paper_provider,
+        max_pfr_scan=int(getattr(args, "paper_signals_max_pfr_scan", 30)),
+        max_pfr_fetches=int(getattr(args, "paper_signals_max_pfr_fetches", 12)),
+        pfr_reserved_new=max_new,
+        max_observe=0,
+        max_live_fetches=0,
+        max_network_fetches=int(
+            getattr(args, "paper_signals_max_network_fetches", 16)
+        ),
+        max_wall_seconds=float(getattr(args, "paper_signals_max_seconds", 45.0)),
+        should_stop=cycle_stop_requested,
+        require_known_bad_authority=True,
+    )
+    if cycle_stop_requested():
+        out["stop_requested"] = True
+        return out
+
+    try:
+        _run_main_paper_derived_chain(
+            args,
+            private_root,
+            tasks=tasks,
+            apply=True,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            out=out,
+            provider=paper_provider,
+        )
+    except _ValidationGenerationWaiting as exc:
+        out["paper_telegram_delivery"] = {
+            "skipped": "validation_generation_waiting",
+            "validation_generation_status": str(exc),
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+        out["startup_product_reentry"] = {
+            "state": "current_generation_not_ready",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+        return out
+
+    _write_loop_status(
+        private_root,
+        stage="paper_telegram_delivery",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+    )
+    from src.research_lab.paper_telegram_sender import send_paper_telegram_previews
+
+    delivery_config = _paper_telegram_delivery_config(args, apply=True)
+    out["paper_telegram_delivery"] = send_paper_telegram_previews(
+        private_root,
+        limit=int(getattr(args, "paper_telegram_limit", 20)),
+        apply=bool(delivery_config["apply"]),
+        paper_chat_configured=bool(delivery_config["configured"]),
+        paper_chat_ids_count=len(delivery_config["ids"]),
+        recipient_ids=delivery_config["ids"],
+        send_text=delivery_config["send_text"],
+        send_photo=delivery_config["send_photo"],
+        status_digest=bool(getattr(args, "paper_telegram_status_digest", False)),
+        status_digest_interval_hours=int(
+            getattr(args, "paper_telegram_status_digest_hours", 12)
+        ),
+        expected_generation_run_id=str(
+            getattr(args, "paper_generation_run_id", "") or ""
+        ),
+    )
+    if out["paper_telegram_delivery"].get("generation_block_reason"):
+        raise RuntimeError("paper Telegram delivery source is not bound to current v2 generation")
+    if delivery_config.get("config_error"):
+        out["paper_telegram_delivery"]["config_error"] = delivery_config[
+            "config_error"
+        ]
+    run_id = str((out.get("paper_generation_v2") or {}).get("run_id") or "")
+    _require_current_paper_generation(
+        "paper Telegram delivery", out["paper_telegram_delivery"], run_id=run_id
+    )
+    _write_loop_status(
+        private_root,
+        stage="paper_generation_v2",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "milestone": "generation_delivery_completed",
+            "paper_generation_run_id": run_id,
+            "reentry": "current_generation_only",
+        },
+    )
+    _run_v2_post_delivery_maintenance_chain(
+        args,
+        private_root,
+        tasks=tasks,
+        apply=True,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        out=out,
+        should_stop=cycle_stop_requested,
+    )
+    out["startup_product_reentry"] = {
+        "state": "completed",
+        "paper_generation_run_id": run_id,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    return out
+
+
 def _run_once(
-    args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool
+    args,
+    tasks: FarmTasksDB,
+    profiles,
+    policy,
+    private_root: Path,
+    apply: bool,
+    *,
+    current_generation_reentry: bool = False,
 ) -> dict:
+    if current_generation_reentry:
+        return _run_current_generation_product_reentry(
+            args, tasks, private_root, apply=apply
+        )
     cycle_started_at = time.time()
     loop = bool(getattr(args, "loop", False))
 
@@ -4427,7 +4721,7 @@ def main() -> None:
     lease_heartbeat = None
     paper_generation_runtime = None
     priority_stop = threading.Event()
-    product_cycle_wakeup = threading.Event()
+    product_cycle_wakeup = _CurrentGenerationWakeup()
     priority_thread = None
     claim_failure_signal = None
     if apply:
@@ -4549,6 +4843,7 @@ def main() -> None:
             _print_cycle(out)  # a single explicit cycle is always shown
             return
         prev_sig = None
+        current_generation_reentry = False
         args.priority_worker_active = bool(apply)
         if apply:
             priority_thread = threading.Thread(
@@ -4578,7 +4873,15 @@ def main() -> None:
             ):
                 break
             try:
-                out = _run_once(args, tasks, profiles, policy, private_root, apply)
+                out = _run_once(
+                    args,
+                    tasks,
+                    profiles,
+                    policy,
+                    private_root,
+                    apply,
+                    current_generation_reentry=current_generation_reentry,
+                )
             except FarmCycleStopRequested:
                 if (
                     args.stop_file
@@ -4592,6 +4895,11 @@ def main() -> None:
                 break
             if claim_failure_signal is not None:
                 claim_failure_signal.raise_if_failed()
+            if current_generation_reentry:
+                # Acknowledge only after the bounded exact-current path returns.
+                # A concurrent second publication remains pending in the latch.
+                product_cycle_wakeup.acknowledge()
+                current_generation_reentry = False
             if apply and _leave_for_status_publication_outage(
                 private_root,
                 max_outage_seconds=args.status_publish_max_outage_seconds,
@@ -4622,10 +4930,12 @@ def main() -> None:
                         "idle_poll_seconds": args.idle_poll_seconds,
                     },
                 )
+            wake_receipt: list[str] = []
             if not _sleep_until_next_cycle(
                 args.sleep_seconds,
                 args.stop_file,
                 wake_event=product_cycle_wakeup,
+                wake_receipt=wake_receipt,
             ):
                 if (
                     args.stop_file
@@ -4637,6 +4947,7 @@ def main() -> None:
                     )
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
                 break
+            current_generation_reentry = bool(wake_receipt)
     except KeyboardInterrupt:
         if claim_failure_signal is not None:
             claim_failure_signal.raise_if_failed()
