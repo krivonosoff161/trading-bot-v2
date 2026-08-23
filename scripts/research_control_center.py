@@ -820,6 +820,7 @@ class ControlCenter(tk.Tk):
             "started_at": None,
         }
         self._requested_profile_keys: set[str] = set()
+        self._hard_fail_stop_lock = threading.Lock()
         self._runtime_monitor: CanaryMonitoringService | None = None
         self._runtime_owner_monitor: CanonicalOwnerSafetyMonitor | None = None
         self._runtime_monitor_started_at: float | None = None
@@ -1245,9 +1246,19 @@ class ControlCenter(tk.Tk):
     def _initiate_hard_fail_stop(self, reason: str) -> bool:
         """Stop the exact owned canonical profile once, without a UI prompt."""
 
-        if self._hard_fail_stop_started:
-            return False
-        self._hard_fail_stop_started = True
+        # This path can be entered by the Tk event loop and by the independent
+        # monitor-failure dispatcher.  The dispatcher must not rely on Tk
+        # making progress: a blocked UI status snapshot must never postpone a
+        # documented graceful stop.  A lazy lock keeps the narrow ``__new__``
+        # test fixtures compatible while preserving one exact stop sequence.
+        lock = self.__dict__.get("_hard_fail_stop_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self._hard_fail_stop_lock = lock
+        with lock:
+            if self.__dict__.get("_hard_fail_stop_started", False):
+                return False
+            self._hard_fail_stop_started = True
         self._set_shutdown_state("stopping", reason_code="runtime_hard_fail")
         self._closing = True
         self._stop_runtime_monitor()
@@ -1802,10 +1813,32 @@ class ControlCenter(tk.Tk):
         monitor = self._product_progress_monitor
         if monitor is None:
             raise RuntimeError("product progress monitor was not initialized")
-        report = monitor.sample()
-        reasons = report.get("hard_fail_reasons")
-        if isinstance(reasons, list) and reasons:
-            raise CanaryMonitorHardFailure(str(reasons[0])[:160])
+        probe_started_at = time.monotonic()
+        self._record_runtime_lane_stage(
+            "product_progress",
+            "initial_sample",
+            "started",
+            started_at=probe_started_at,
+        )
+        try:
+            report = monitor.sample()
+            reasons = report.get("hard_fail_reasons")
+            if isinstance(reasons, list) and reasons:
+                raise CanaryMonitorHardFailure(str(reasons[0])[:160])
+        except Exception:
+            self._record_runtime_lane_stage(
+                "product_progress",
+                "initial_sample",
+                "failed",
+                started_at=probe_started_at,
+            )
+            raise
+        self._record_runtime_lane_stage(
+            "product_progress",
+            "complete",
+            "completed",
+            started_at=probe_started_at,
+        )
         return report
 
     def _on_runtime_monitor_sample(self, sample: CanaryLaneSample) -> None:
@@ -1844,7 +1877,18 @@ class ControlCenter(tk.Tk):
         assessment: CanaryWatchdogAssessment,
     ) -> None:
         reason = assessment.failure_reason or "monitor_lane_failed"
-        self.events.put(("__app__", "runtime_hard_fail", f"{lane}:{reason}"))
+        qualified_reason = f"{lane}:{reason}"
+        self.events.put(("__app__", "runtime_hard_fail", qualified_reason))
+
+        # The Tk queue is an observation/UI bridge, not the hard-fail authority.
+        # A UI snapshot can be delayed by bounded status I/O while a monitor lane
+        # has already exhausted its independent deadline.  Dispatch outside the
+        # monitor worker (which would otherwise join itself) so the exact owned
+        # profile begins its documented graceful stop even before Tk polls again.
+        threading.Thread(
+            target=lambda: self._initiate_hard_fail_stop(qualified_reason),
+            daemon=True,
+        ).start()
 
     def _maybe_start_runtime_monitor(self) -> None:
         if self.__dict__.get("_runtime_monitor") is not None:
@@ -2189,8 +2233,21 @@ class ControlCenter(tk.Tk):
         process_lease = self._read_cached_json(
             PRIVATE_ROOT / "state" / "farm_process_lease_status.json"
         )
-        farm_item = self.contours.get("farm")
-        farm_running = bool(farm_item and farm_item.running)
+        # ``paper_cards`` is the canonical paper profile's farm process.  The
+        # separate ``farm`` control is intentionally not started alongside it
+        # because both share the canonical_farm owner group.  Reporting the
+        # paper-card process as ``farm_not_running`` is therefore a false UI and
+        # evidence signal, not a real compute-pipeline state.
+        farm_item = next(
+            (
+                self.contours.get(key)
+                for key in ("farm", "paper_cards")
+                if self.contours.get(key) is not None
+                and self.contours[key].running
+            ),
+            None,
+        )
+        farm_running = farm_item is not None
         owned_started_at = getattr(farm_item, "started_at", None)
         farm_started_at = (
             float(owned_started_at)

@@ -1,34 +1,36 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.22"
+version: "2026.08.23"
 status: current
-verified_date: "2026-08-22"
+verified_date: "2026-08-23"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 0b4263ffa7e3c910399406f8502dfad38c4b6661
+  trading-bot-v2: 217a2657e4c5b484975e302b94cc1a15750703a4
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/lease-supervisor-publication-repair
+  branch: codex/product-progress-initial-sample-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: 0b4263ffa7e3c910399406f8502dfad38c4b6661
+  baseline_revision: 217a2657e4c5b484975e302b94cc1a15750703a4
   scope:
-    - child_side_failure_detection_and_durable_stop_intent_timestamps
-    - failure_event_before_best_effort_alert_append
-    - Windows_bridge_scheduling_independent_lease_deadline_assertion
-    - unchanged_owner_fence_renewal_and_execution_denial_safety
+    - product_progress_initial_sample_lifecycle_publication
+    - independent_watchdog_hard_fail_to_graceful_stop_dispatch
+    - canonical_paper_cards_farm_owner_health_mapping
+    - unchanged_t0_ceiling_owner_fence_stop_generation_and_execution_denial_safety
   evidence:
-    - src/research_lab/process_lease_supervisor.py
-    - tests/test_process_lease_supervisor.py
+    - scripts/research_control_center.py
+    - src/research_lab/canary_checkpoint_policy.py
+    - tests/test_canary_checkpoint_policy.py
+    - tests/test_research_control_center.py
+    - tests/test_compute_pipeline_health.py
     - tests/test_owner_fencing_v2.py
-    - tests/test_farm_lifecycle_core.py
-  promotion_gate: exact-head review, Windows repeat/stress matrix, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: after green post-merge gate, require quiescent read-only preflight, canonical Paper Evidence v2 identity proof, and separate explicit owner canary authority
+  promotion_gate: exact-head review, startup/blocked-probe/watchdog regressions, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  runtime_gate: after green post-merge gate, prepare a separate paper-only canary manifest; runtime still requires a new explicit owner authority
 authority_values:
   - none
   - advisory

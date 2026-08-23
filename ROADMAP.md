@@ -14,7 +14,7 @@ Status: **CURRENT**
 The project is a paper/research workbench. This sequence is ordered by evidence
 dependency, not by a route to live trading.
 
-## In Review On The Task Branch
+## Current Baseline And Task-Branch Candidate
 
 PR #283 integrated the cold setup-memory startup boundary at
 `ce592269dc4f4d4c1360f0fca68c35de2eaf55b3`. It keeps complete known-bad and
@@ -46,12 +46,19 @@ intake/discovery/backlog work first. Post-stop SQLite targets are resolved from
 the active manifest rather than guessed. A fresh post-merge and operational
 paper-only proof remains required.
 
-The current task branch is a narrow lease-supervisor failure-publication repair.
-It must distinguish the child-side durable stop boundary from Windows parent
-bridge scheduling, publish supervisor failure before optional alert append I/O,
-and retain owner/fence/renewal fail-closed behavior. It remains
-non-authoritative until review, merge, post-merge tests and the same separately
-authorized canary.
+PR #288 integrated lease-supervisor failure publication at
+`217a2657e4c5b484975e302b94cc1a15750703a4`. It distinguishes the child-side
+durable stop boundary from Windows parent-bridge scheduling, publishes
+supervisor failure before optional alert append I/O, and retains owner/fence/
+renewal fail-closed behavior.
+
+The current task branch repairs the product-progress initial sample and its
+watchdog escalation. It must make initial sampling observable, make a monitor
+hard-fail initiate documented graceful shutdown even when the Tk event loop is
+blocked, and map the canonical `paper_cards` farm owner correctly. It does not
+claim T+0, continuous reliability, profitability, or live readiness. It remains
+non-authoritative until exact-head review, merge, post-merge checks, and a
+separately authorized canary.
 
 ## Completed
 
