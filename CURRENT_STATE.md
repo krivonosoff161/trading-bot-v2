@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-22
-- Verified against: `3c8499b2142b6884844b65c348d1c3571f74d68e`
+- Verified: 2026-08-23
+- Verified against: `217a2657e4c5b484975e302b94cc1a15750703a4`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -109,17 +109,30 @@ Paper Evidence targets from the active manifest/root instead of guessing
 obsolete paths. A fresh post-merge and operational canary proof remains
 required; this makes no profitability or live-readiness claim.
 
-## Task-Branch Candidate: Lease-Supervisor Failure Publication
+## Integrated Lease-Supervisor Failure Publication
 
-The candidate branch `codex/lease-supervisor-publication-repair` is based on
-the merged PR #287 baseline. It records the child-side failure-detection and
+PR #288 is integrated at `217a2657e4c5b484975e302b94cc1a15750703a4`. It records the child-side failure-detection and
 durable stop-intent commit times, publishes the supervisor failure event after
 the durable stop/status boundary but before best-effort alert append I/O, and
 tests that causal boundary without using parent bridge scheduling as a lease
 deadline. Owner identity, fencing, renewal failure budgets, canonical stop
-intent and execution denial are unchanged. The candidate is non-authoritative
-until exact-head review, merge, post-merge checks and the separately authorized
-paper-only canary.
+intent and execution denial are unchanged.
+
+## Task-Branch Candidate: Product-Progress Initial Sample And Watchdog
+
+The candidate branch `codex/product-progress-initial-sample-repair` is based on
+the current public baseline `217a2657e4c5b484975e302b94cc1a15750703a4`. The
+previous canary reported a hard failure before authoritative T+0, but its
+runtime evidence could not distinguish a stalled product-progress sample from
+an unreported completed sample; a monitor failure also depended on the Tk event
+queue to begin graceful shutdown. This candidate publishes the initial-sample
+lifecycle, routes a monitor hard-fail through an independent graceful-stop
+dispatcher, and maps the canonical `paper_cards` farm owner into the
+compute-health status. It does not mark a non-ready product as ready, relax the
+600-second ceiling, or change Paper Evidence V2, known-bad, owner/fence, stop,
+stale-generation, delivery, or execution-denial contracts. It remains
+non-authoritative until exact-head review, merge, post-merge checks, and a
+separately authorized paper-only canary.
 
 ## Implemented Public Contracts
 
@@ -167,13 +180,14 @@ row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-road
 
 ## Open Evidence Gates
 
-1. **Startup-memory critical path:** merge and independently verify the
-   non-authoritative cold-cache repair, then prove a cold accelerator-cache
-   backfill cannot delay T+0 while its later progress remains observable. A
-   complete known-bad snapshot is still mandatory current-product authority;
-   missing or corrupt authority must block rather than be inferred empty.
-   Earlier Package06 storage-capacity blockage is not the current launch
-   blocker; ordinary retention proof remains a separate operational concern.
+1. **Startup product-progress and hard-fail path:** independently verify the
+   non-authoritative initial-sample/watchdog candidate, then prove an actual
+   cold or incremental setup-memory backfill cannot be misreported as current
+   product readiness or hide a hard failure. A complete known-bad snapshot is
+   still mandatory current-product authority; missing or corrupt authority must
+   block rather than be inferred empty. Earlier Package06 storage-capacity
+   blockage is not the current launch blocker; ordinary retention proof remains
+   a separate operational concern.
 2. **Operational reliability:** complete the bounded paper-only canary without
    a real hard fail. Its preflight must first prove the reviewed backup/free-space
    budget. A clean unit-test suite is not runtime proof.

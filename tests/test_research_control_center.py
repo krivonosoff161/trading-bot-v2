@@ -920,6 +920,101 @@ def test_hard_fail_stop_is_dependency_ordered_idempotent_and_prompt_free(
     assert alerts[0]["automatic_restart"] is False
 
 
+def test_runtime_monitor_failure_dispatches_stop_without_waiting_for_tk_poll(
+    monkeypatch,
+) -> None:
+    events: list[tuple[str, str, str]] = []
+    dispatched: list[str] = []
+
+    class Events:
+        def put(self, event: tuple[str, str, str]) -> None:
+            events.append(event)
+
+    class InlineThread:
+        def __init__(self, *, target, daemon) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.events = Events()
+    center._initiate_hard_fail_stop = lambda reason: dispatched.append(reason) or True
+    monkeypatch.setattr(MODULE.threading, "Thread", InlineThread)
+
+    MODULE.ControlCenter._on_runtime_monitor_failure(
+        center,
+        "product_progress",
+        SimpleNamespace(failure_reason="monitor_fast_sample_initial_deadline_exhausted"),
+    )
+
+    assert dispatched == [
+        "product_progress:monitor_fast_sample_initial_deadline_exhausted"
+    ]
+    assert events == [
+        (
+            "__app__",
+            "runtime_hard_fail",
+            "product_progress:monitor_fast_sample_initial_deadline_exhausted",
+        )
+    ]
+
+
+def test_product_probe_publishes_initial_sample_lifecycle() -> None:
+    stages: list[tuple[str, str, str]] = []
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center._product_progress_monitor = SimpleNamespace(
+        sample=lambda: {"ready": False, "hard_fail_reasons": []}
+    )
+    center._record_runtime_lane_stage = (
+        lambda lane, stage, state, **_kwargs: stages.append((lane, stage, state))
+    )
+
+    report = MODULE.ControlCenter._product_runtime_progress_probe(center)
+
+    assert report["ready"] is False
+    assert stages == [
+        ("product_progress", "initial_sample", "started"),
+        ("product_progress", "complete", "completed"),
+    ]
+
+
+def test_product_probe_publishes_failed_initial_sample_lifecycle() -> None:
+    stages: list[tuple[str, str, str]] = []
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+
+    def raise_failure() -> dict[str, object]:
+        raise OSError("synthetic")
+
+    center._product_progress_monitor = SimpleNamespace(sample=raise_failure)
+    center._record_runtime_lane_stage = (
+        lambda lane, stage, state, **_kwargs: stages.append((lane, stage, state))
+    )
+
+    with pytest.raises(OSError):
+        MODULE.ControlCenter._product_runtime_progress_probe(center)
+
+    assert stages == [
+        ("product_progress", "initial_sample", "started"),
+        ("product_progress", "initial_sample", "failed"),
+    ]
+
+
+def test_paper_cards_is_the_canonical_compute_pipeline_owner() -> None:
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {
+        "farm": SimpleNamespace(running=False, started_at=None),
+        "paper_cards": SimpleNamespace(running=True, started_at=100.0),
+    }
+    center._read_cached_json = lambda _path: {}
+    center._external_descriptor = lambda _key: None
+
+    health = MODULE.ControlCenter._compute_pipeline_health(center)
+
+    assert health["farm_running"] is True
+    assert health["reason"] != "farm_not_running"
+
+
 def test_hard_fail_stop_failure_keeps_rcc_open_and_reports_residual(
     monkeypatch,
     tmp_path: Path,
