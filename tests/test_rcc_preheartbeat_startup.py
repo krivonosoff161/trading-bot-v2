@@ -10,10 +10,12 @@ from scripts import research_control_center as rcc
 from scripts.strategy_lab import rcc_startup_status
 from src.research_lab import rcc_startup_evidence
 from src.research_lab.rcc_startup_evidence import (
+    RccRunIdentity,
     RccStartupEvidenceError,
     RccStartupEvidenceWriter,
     assess_rcc_preheartbeat_liveness,
     load_rcc_startup_evidence,
+    rcc_run_identity_from_environment,
 )
 
 
@@ -40,6 +42,19 @@ def test_revision_bound_startup_evidence_is_digest_verified(tmp_path: Path) -> N
     assert loaded["revision"] == REVISION
     assert loaded["paper_only"] is True
     assert loaded["execution_allowed"] is False
+
+
+def test_startup_identity_round_trips_only_as_a_complete_child_envelope(
+    tmp_path: Path,
+) -> None:
+    run = RccRunIdentity.from_startup_writer(writer(tmp_path / "startup.json"))
+
+    assert rcc_run_identity_from_environment(run.to_child_environment()) == run
+    assert rcc_run_identity_from_environment({}) is None
+    with pytest.raises(ValueError, match="incomplete"):
+        rcc_run_identity_from_environment(
+            {"TRADING_BOT_RCC_ATTEMPT_ID": run.attempt_id}
+        )
 
 
 def test_failure_evidence_never_persists_exception_message(tmp_path: Path) -> None:
@@ -327,7 +342,14 @@ def test_main_persists_preheartbeat_failure_and_closes_lock(
     secret_like = "synthetic-private-error-value"
 
     class FailingControlCenter:
-        def __init__(self, _instance: object, _autostart: tuple[str, ...]) -> None:
+        def __init__(
+            self,
+            _instance: object,
+            _autostart: tuple[str, ...],
+            *,
+            rcc_run: RccRunIdentity,
+        ) -> None:
+            del rcc_run
             raise RuntimeError(secret_like)
 
     monkeypatch.setattr(rcc, "ControlCenter", FailingControlCenter)
@@ -351,7 +373,14 @@ def test_evidence_write_failure_still_closes_lock_without_leaking_message(
     private_detail = "synthetic evidence write detail"
 
     class FailingControlCenter:
-        def __init__(self, _instance: object, _autostart: tuple[str, ...]) -> None:
+        def __init__(
+            self,
+            _instance: object,
+            _autostart: tuple[str, ...],
+            *,
+            rcc_run: RccRunIdentity,
+        ) -> None:
+            del rcc_run
             raise RuntimeError("synthetic constructor detail")
 
     def fail_evidence(*_args: object, **_kwargs: object) -> dict[str, object]:
@@ -376,7 +405,14 @@ def test_main_normal_stop_leaves_no_heartbeat_publisher(
     class FakeControlCenter:
         stopped = 0
 
-        def __init__(self, _instance: object, _autostart: tuple[str, ...]) -> None:
+        def __init__(
+            self,
+            _instance: object,
+            _autostart: tuple[str, ...],
+            *,
+            rcc_run: RccRunIdentity,
+        ) -> None:
+            del rcc_run
             pass
 
         def mainloop(self) -> None:
@@ -404,7 +440,14 @@ def test_mainloop_exception_stops_publisher_once_and_closes_lock(
     class FailingMainloopControlCenter:
         stopped = 0
 
-        def __init__(self, _instance: object, _autostart: tuple[str, ...]) -> None:
+        def __init__(
+            self,
+            _instance: object,
+            _autostart: tuple[str, ...],
+            *,
+            rcc_run: RccRunIdentity,
+        ) -> None:
+            del rcc_run
             pass
 
         def mainloop(self) -> None:

@@ -88,6 +88,8 @@ def test_telegram_main_publishes_real_poll_liveness_without_network(
 
     monkeypatch.setattr(telegram_bot, "BOT_TOKEN", "synthetic-token")
     monkeypatch.setattr(telegram_bot, "_strategy_lab_private_root", lambda: tmp_path)
+    monkeypatch.setattr(telegram_bot, "TEMP_DIR", tmp_path / "tg_temp")
+    monkeypatch.setattr(telegram_bot, "USERS_ROOT", tmp_path / "users")
     monkeypatch.setattr(telegram_bot, "_check_and_send_reminders", no_reminders)
     monkeypatch.setattr(telegram_bot, "list_users", lambda: [])
     monkeypatch.setattr(telegram_bot, "_tg", fake_tg)
@@ -143,6 +145,8 @@ def test_telegram_main_closes_session_when_stopped_health_write_fails(
     monkeypatch.setattr(telegram_bot, "BOT_TOKEN", "synthetic-token")
     monkeypatch.setattr(telegram_bot, "_SESSION", session)
     monkeypatch.setattr(telegram_bot, "_strategy_lab_private_root", lambda: tmp_path)
+    monkeypatch.setattr(telegram_bot, "TEMP_DIR", tmp_path / "tg_temp")
+    monkeypatch.setattr(telegram_bot, "USERS_ROOT", tmp_path / "users")
     monkeypatch.setattr(telegram_bot, "_check_and_send_reminders", no_reminders)
     monkeypatch.setattr(telegram_bot, "list_users", lambda: [])
     monkeypatch.setattr(telegram_bot, "_tg", fake_tg)

@@ -12,6 +12,7 @@ from src.research_lab.rcc_runtime_safety import (
     parse_rcc_heartbeat_process_identity,
     verify_rcc_heartbeat_process_identity,
 )
+from src.research_lab.rcc_startup_evidence import RccRunIdentity
 
 
 IDENTITY = ProcessIdentity(
@@ -20,6 +21,12 @@ IDENTITY = ProcessIdentity(
     executable="python.exe",
     command_digest="sha256:farm",
 )
+RCC_RUN = RccRunIdentity(
+    attempt_id="rccstartup_" + "a" * 32,
+    revision="a" * 40,
+    pid=IDENTITY.pid,
+    process_started_at=IDENTITY.started_at,
+)
 
 
 def _rcc_heartbeat(
@@ -27,11 +34,15 @@ def _rcc_heartbeat(
     pid: int = IDENTITY.pid,
     started_at: float = IDENTITY.started_at,
     shutdown_state: str = "running",
+    rcc_run: RccRunIdentity = RCC_RUN,
+    updated_at: float = 1_700_000_001.0,
 ) -> Mapping[str, object]:
     return {
-        "schema": "ResearchControlCenterHeartbeat.v3",
+        "schema": "ResearchControlCenterHeartbeat.v4",
         "pid": pid,
         "started_at": started_at,
+        "updated_at": updated_at,
+        "rcc_run": rcc_run.to_payload(),
         "paper_only": True,
         "execution_allowed": False,
         "shutdown": {
@@ -74,20 +85,24 @@ def test_rcc_heartbeat_identity_requires_exact_pid_and_process_start() -> None:
         ),
         (
             {
-                "schema": "ResearchControlCenterHeartbeat.v3",
+                "schema": "ResearchControlCenterHeartbeat.v4",
                 "pid": IDENTITY.pid,
                 "paper_only": True,
                 "execution_allowed": False,
+                "rcc_run": RCC_RUN.to_payload(),
+                "updated_at": 1_700_000_001.0,
             },
             "start_missing",
         ),
         (
             {
-                "schema": "ResearchControlCenterHeartbeat.v3",
+                "schema": "ResearchControlCenterHeartbeat.v4",
                 "pid": IDENTITY.pid,
                 "started_at": IDENTITY.started_at,
                 "paper_only": True,
                 "execution_allowed": True,
+                "rcc_run": RCC_RUN.to_payload(),
+                "updated_at": 1_700_000_001.0,
             },
             "execution_boundary_missing",
         ),
@@ -121,6 +136,33 @@ def test_rcc_heartbeat_identity_rejects_process_disappearance() -> None:
         verify_rcc_heartbeat_process_identity(
             _rcc_heartbeat(),
             identity_probe=lambda _pid: None,
+        )
+
+
+def test_rcc_heartbeat_identity_rejects_another_startup_attempt() -> None:
+    other = RccRunIdentity(
+        attempt_id="rccstartup_" + "b" * 32,
+        revision=RCC_RUN.revision,
+        pid=IDENTITY.pid,
+        process_started_at=IDENTITY.started_at,
+    )
+
+    with pytest.raises(CanaryMonitorHardFailure, match="attempt_mismatch"):
+        verify_rcc_heartbeat_process_identity(
+            _rcc_heartbeat(rcc_run=other),
+            identity_probe=lambda _pid: IDENTITY,
+            expected_run=RCC_RUN,
+        )
+
+
+def test_rcc_heartbeat_identity_rejects_stale_current_attempt() -> None:
+    with pytest.raises(CanaryMonitorHardFailure, match="rcc_heartbeat_identity:stale"):
+        verify_rcc_heartbeat_process_identity(
+            _rcc_heartbeat(updated_at=1_700_000_001.0),
+            identity_probe=lambda _pid: IDENTITY,
+            expected_run=RCC_RUN,
+            now=1_700_000_100.0,
+            max_age_seconds=5.0,
         )
 
 

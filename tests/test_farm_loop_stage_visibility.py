@@ -1430,6 +1430,10 @@ class TestCycleLogStages:
         self, tmp_path, monkeypatch
     ) -> None:
         monkeypatch.setattr(farm_loop.time, "time", lambda: 123.0)
+        monkeypatch.setenv("TRADING_BOT_RCC_ATTEMPT_ID", "rccstartup_" + "b" * 32)
+        monkeypatch.setenv("TRADING_BOT_RCC_REVISION", "b" * 40)
+        monkeypatch.setenv("TRADING_BOT_RCC_PID", "4100")
+        monkeypatch.setenv("TRADING_BOT_RCC_PROCESS_STARTED_AT", "100.0")
         bound = {
             "paper_generation_run_id": "run-current",
             "current_generation_compatible": True,
@@ -1460,6 +1464,7 @@ class TestCycleLogStages:
         assert checkpoint["status"] == "completed"
         assert checkpoint["metrics"]["generation_consistent"] is True
         assert checkpoint["metrics"]["paper_generation_run_id"] == "run-current"
+        assert checkpoint["rcc_run"]["attempt_id"] == "rccstartup_" + "b" * 32
         assert "setup_outcome_memory_refresh" not in out
         assert "system_analyst_feedback" not in out
 

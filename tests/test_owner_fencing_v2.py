@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -322,9 +323,26 @@ def test_v2_compute_triggers_reject_legacy_update(tmp_path) -> None:
 
 def test_recovered_heartbeat_and_port_processes_are_display_only(tmp_path, monkeypatch) -> None:
     heartbeat = tmp_path / "heartbeat.json"
-    heartbeat.write_text(json.dumps({
-        "contours": {"farm": {"pid": 101, "started_at": 10.0}},
-    }), encoding="utf-8")
+    heartbeat.write_text(
+        json.dumps(
+            {
+                "schema": "ResearchControlCenterHeartbeat.v4",
+                "updated_at": time.time(),
+                "pid": 101,
+                "started_at": 10.0,
+                "rcc_run": {
+                    "attempt_id": "rccstartup_" + "a" * 32,
+                    "revision": "a" * 40,
+                    "pid": 101,
+                    "process_started_at": 10.0,
+                },
+                "paper_only": True,
+                "execution_allowed": False,
+                "contours": {"farm": {"pid": 101, "started_at": 10.0}},
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(control_center, "_process_started_at", lambda pid: 10.0)
     rows = control_center._load_external_contours(heartbeat)
     assert rows["farm"]["stoppable"] is False

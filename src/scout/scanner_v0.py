@@ -80,6 +80,9 @@ from src.scout.price_provider import get_price as _get_price     # noqa: E402
 from src.utils import llm_budget_guard as LBG                    # noqa: E402
 from src.research_lab.product_progress import publish_checkpoint, scanner_metrics  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.rcc_startup_evidence import (  # noqa: E402
+    rcc_run_identity_from_environment,
+)
 from src.utils.telegram import chat_ids, send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
@@ -185,6 +188,7 @@ def _publish_scanner_progress(
             **metrics,
         },
         completed_at=completed_at,
+        rcc_run=rcc_run_identity_from_environment(),
     )
 
 
@@ -1757,6 +1761,7 @@ async def run(
                 pass_elapsed_seconds=pass_elapsed_seconds,
             ),
             completed_at=completed_at,
+            rcc_run=rcc_run_identity_from_environment(),
         )
     print(f"\n=== готово: {made} карточек · seen={len(seen)}"
           f"{' (dry — не сохранён)' if dry else ''} · токенов={total_tokens} (~{cost} RUB) · журнал={J.JOURNAL} ===")
