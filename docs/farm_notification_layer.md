@@ -159,6 +159,18 @@ publishes separate `current_attempts` and `carried` ambiguity counts: a new ambi
 fails closed, while historical operator-recovery debt remains visible and blocked
 from automatic replay.
 
+An operator may permanently suppress exact historical `external_ack_ambiguous`
+and crash-left `pending` records only through the hash-bound
+`paper_telegram_outbox_disposition` plan/apply workflow. The plan binds the exact
+private root, whole outbox bytes, sent-key index, and every target record. Apply
+requires an explicit permanent-no-replay confirmation, acquires the canonical
+delivery claim, and writes an immutable pre-change backup before the atomic
+outbox update. Suppressed rows retain their prior status, problem, message ids,
+and plan digest under `operator_disposition`; they are not marked completed and
+never enter the sent-key index. The sender reports them as
+`skipped_operator_suppressed` and never calls Telegram for those content keys.
+Any file, row, or sent-index drift fails closed before mutation.
+
 Each preview also carries explicit analysis provenance. A validation-bound card may
 reference only a separately persisted, schema-valid, accepted calculator advisory.
 If that evidence is unavailable, the card says it uses a deterministic fallback.

@@ -328,8 +328,10 @@ modules:
     dependencies: [paper_observation]
     implemented_evidence:
       - src/research_lab/paper_telegram_sender.py
+      - src/research_lab/paper_telegram_outbox_disposition.py
       - src/research_lab/paper_telegram_preview.py
       - tests/test_paper_telegram_sender.py
+      - tests/test_paper_telegram_outbox_disposition.py
       - tests/test_telegram_utils.py
       - tests/test_product_progress.py
       - tests/test_paper_generation_cutover.py
