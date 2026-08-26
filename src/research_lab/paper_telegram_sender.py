@@ -32,6 +32,7 @@ _OUTBOX_STATUSES = {
     "completed",
     "error",
     "external_ack_ambiguous",
+    "operator_suppressed_no_replay",
     "pending",
     "skipped_no_token",
 }
@@ -438,6 +439,38 @@ async def _send_items(
             )
             delivery_key = delivery_keys[0]
             recipient_hash = _recipient_hash(recipient_id)
+            suppressed_record = next(
+                (
+                    outbox.get(key)
+                    for key in delivery_keys
+                    if outbox.get(key, {}).get("status")
+                    == "operator_suppressed_no_replay"
+                ),
+                None,
+            )
+            if suppressed_record is not None:
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="skipped_operator_suppressed",
+                        message_id=_int_or_none(suppressed_record.get("message_id")),
+                        problem="operator_suppressed_no_replay",
+                        recipient_id=recipient_id,
+                        delivery_key=str(
+                            suppressed_record.get("delivery_key") or delivery_key
+                        ),
+                        transport_kind=str(
+                            suppressed_record.get("transport_kind") or transport_kind
+                        ),
+                        chart_available=bool(chart_path),
+                        chart_sent=_int_or_none(
+                            suppressed_record.get("photo_message_id")
+                        )
+                        is not None,
+                        chart_problem=chart_problem,
+                    )
+                )
+                continue
             blocking_record = next(
                 (
                     outbox.get(key)
@@ -1334,6 +1367,11 @@ def send_paper_telegram_previews(
     duplicate_messages = sum(
         1 for delivery in deliveries if delivery.status == "skipped_duplicate"
     )
+    operator_suppressed_messages = sum(
+        1
+        for delivery in deliveries
+        if delivery.status == "skipped_operator_suppressed"
+    )
     skipped_messages = sum(
         1 for delivery in deliveries if delivery.status.startswith("skipped")
     )
@@ -1407,6 +1445,11 @@ def send_paper_telegram_previews(
         "duplicates": duplicate_messages,
         "duplicate_messages": duplicate_messages,
         "duplicate_cards": _unique_preview_count(deliveries, "skipped_duplicate"),
+        "operator_suppressed_no_replay": operator_suppressed_messages,
+        "operator_suppressed_no_replay_messages": operator_suppressed_messages,
+        "operator_suppressed_no_replay_cards": _unique_preview_count(
+            deliveries, "skipped_operator_suppressed"
+        ),
         "skipped": skipped_messages,
         "skipped_messages": skipped_messages,
         "errors": error_messages,

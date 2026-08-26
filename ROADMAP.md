@@ -166,8 +166,11 @@ separately authorized canary.
   automatic replay. Chart cards use one photo-caption request, so a subscriber
   cannot receive a confirmed photo followed by a missing analysis text. A
   connection-establishment failure is classified as not attempted and may be
-  retried by a later cycle; post-connect unknown outcomes remain ambiguous. Card
-  analysis provenance distinguishes accepted bounded LLM
+  retried by a later cycle; post-connect unknown outcomes remain ambiguous.
+  Exact historical ambiguity or crash-left pending debt has a separate
+  hash-bound operator disposition: permanent no-replay suppression preserves
+  original ACK evidence, never claims completion, and cannot mutate after
+  outbox or sent-index drift. Card analysis provenance distinguishes accepted bounded LLM
   advisory evidence from deterministic fallback and authority-none research
   templates without granting the model price or lifecycle authority.
 - Scanner passes and completed farm cycles publish atomic, secret-free product
