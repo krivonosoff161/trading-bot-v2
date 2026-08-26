@@ -21,6 +21,7 @@ from src.research_lab.ownership import (
     ProcessIdentity,
     assess_canonical_farm_authority,
 )
+from src.research_lab.rcc_startup_evidence import RccRunIdentity
 
 
 AuthorityRowsReader = Callable[[], Sequence[Mapping[str, Any]]]
@@ -42,6 +43,7 @@ class CanonicalRccProcessIdentity:
 
     pid: int
     started_at: float
+    run_identity: RccRunIdentity
 
 
 @dataclass(frozen=True)
@@ -57,9 +59,9 @@ class CanonicalRccFinalizerDecision:
 def parse_rcc_heartbeat_process_identity(
     heartbeat: Mapping[str, Any],
 ) -> CanonicalRccProcessIdentity:
-    """Parse the fail-closed PID/start tuple from an RCC v3 heartbeat."""
+    """Parse the fail-closed run/process tuple from an RCC v4 heartbeat."""
 
-    if heartbeat.get("schema") != "ResearchControlCenterHeartbeat.v3":
+    if heartbeat.get("schema") != "ResearchControlCenterHeartbeat.v4":
         raise CanaryMonitorHardFailure("rcc_heartbeat_identity:schema_mismatch")
     if heartbeat.get("paper_only") is not True:
         raise CanaryMonitorHardFailure("rcc_heartbeat_identity:paper_boundary_missing")
@@ -82,17 +84,57 @@ def parse_rcc_heartbeat_process_identity(
     started_at = float(started_at_value)
     if not math.isfinite(started_at) or started_at <= 0:
         raise CanaryMonitorHardFailure("rcc_heartbeat_identity:start_invalid")
-    return CanonicalRccProcessIdentity(pid=pid_value, started_at=started_at)
+    raw_run = heartbeat.get("rcc_run")
+    if not isinstance(raw_run, Mapping):
+        raise CanaryMonitorHardFailure(
+            "rcc_heartbeat_identity:run_binding_missing_or_invalid"
+        )
+    try:
+        run_identity = RccRunIdentity.from_payload(raw_run)
+    except ValueError as exc:
+        raise CanaryMonitorHardFailure(
+            "rcc_heartbeat_identity:run_binding_missing_or_invalid"
+        ) from exc
+    if run_identity.pid != pid_value or run_identity.process_started_at != started_at:
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:run_process_mismatch")
+    updated_at_value = heartbeat.get("updated_at")
+    if isinstance(updated_at_value, bool) or not isinstance(
+        updated_at_value, (int, float)
+    ):
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:updated_at_missing")
+    updated_at = float(updated_at_value)
+    if not math.isfinite(updated_at) or updated_at < started_at:
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:updated_at_invalid")
+    return CanonicalRccProcessIdentity(
+        pid=pid_value,
+        started_at=started_at,
+        run_identity=run_identity,
+    )
 
 
 def verify_rcc_heartbeat_process_identity(
     heartbeat: Mapping[str, Any],
     *,
     identity_probe: IdentityProbe,
+    expected_run: RccRunIdentity | None = None,
+    now: float | None = None,
+    max_age_seconds: float | None = None,
 ) -> ProcessIdentity:
-    """Bind an RCC heartbeat to the same currently live process generation."""
+    """Bind an RCC heartbeat to one live and, when requested, fresh run.
+
+    ``expected_run`` is supplied by a monitor that owns an already verified
+    startup evidence record.  It is never inferred from the heartbeat itself.
+    """
 
     expected = parse_rcc_heartbeat_process_identity(heartbeat)
+    if expected_run is not None and expected.run_identity != expected_run:
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:attempt_mismatch")
+    if max_age_seconds is not None:
+        if now is None or not math.isfinite(float(now)) or max_age_seconds <= 0:
+            raise CanaryMonitorHardFailure("rcc_heartbeat_identity:freshness_policy_invalid")
+        updated_at = float(heartbeat["updated_at"])
+        if float(now) < updated_at or float(now) - updated_at > max_age_seconds:
+            raise CanaryMonitorHardFailure("rcc_heartbeat_identity:stale")
     actual = identity_probe(expected.pid)
     if actual is None:
         raise CanaryMonitorHardFailure("rcc_heartbeat_identity:process_not_live")

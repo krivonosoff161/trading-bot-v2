@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-26
-- Verified against: `169e61a83b73c0f62f5a45c7331239b48ea72823`
+- Verified against: `81f544965b6f6a6f7266b85503ecbb85a602af69`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -52,15 +52,23 @@ durable stop boundary from Windows parent-bridge scheduling, publishes
 supervisor failure before optional alert append I/O, and retains owner/fence/
 renewal fail-closed behavior.
 
-The current task branch repairs the known-bad snapshot digest and private-root
-contract. It verifies the full writer row sequence before deriving the exact
-deduplicated censorship set, so duplicate integrity rows cannot cause a false
-digest mismatch and malformed or incomplete snapshots still fail closed. It
-also rejects public/invalid configured roots before RCC state writes or child
-starts and makes scanner mutable state follow the validated private root. It
-does not claim T+0, continuous reliability, profitability, or live readiness.
-It remains non-authoritative until exact-head review, merge, post-merge checks,
-and a separately authorized canary.
+PR #290 integrated the known-bad snapshot digest and private-root contract at
+`81f544965b6f6a6f7266b85503ecbb85a602af69`. Duplicate integrity rows no longer
+cause a false digest mismatch, while malformed or incomplete snapshots still
+fail closed. RCC and scanner reject public/invalid configured roots before
+mutable state side effects.
+
+The current task branch is the causal run-bound lifecycle repair. It propagates
+one public startup identity — exact revision, attempt ID, RCC PID/start — from
+digest-verified startup evidence through heartbeat v4 and canonical child
+checkpoint publication. The product monitor accepts scanner/farm evidence only
+when that exact run envelope, current generation and existing safety gates all
+match. A timestamp-fresh record from a prior run cannot fabricate T+0. The
+repair retains the 600-second ceiling, known-bad censorship, Paper Evidence v2,
+one-writer, owner/fence/stop and delivery-idempotency contracts. It does not
+claim continuous reliability, profitability, or live readiness and remains
+non-authoritative until exact-head review, merge, post-merge checks, and a
+separately authorized canary.
 
 ## Completed
 

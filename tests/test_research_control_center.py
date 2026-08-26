@@ -145,10 +145,23 @@ def test_only_known_local_ports_are_probed():
 def test_previous_heartbeat_recovers_only_same_live_process(tmp_path):
     started_at = MODULE._process_started_at(os.getpid())
     assert started_at is not None
+    rcc_run = MODULE.RccRunIdentity(
+        attempt_id="rccstartup_" + "a" * 32,
+        revision="a" * 40,
+        pid=os.getpid(),
+        process_started_at=started_at,
+    )
     heartbeat = tmp_path / "heartbeat.json"
     heartbeat.write_text(
         json.dumps(
             {
+                "schema": "ResearchControlCenterHeartbeat.v4",
+                "updated_at": time.time(),
+                "pid": os.getpid(),
+                "started_at": started_at,
+                "rcc_run": rcc_run.to_payload(),
+                "paper_only": True,
+                "execution_allowed": False,
                 "contours": {
                     "telegram_bot": {"pid": os.getpid(), "started_at": started_at},
                     "public_news": {"pid": os.getpid(), "started_at": started_at - 60},
@@ -168,6 +181,26 @@ def test_previous_heartbeat_recovers_only_same_live_process(tmp_path):
         # process liveness is available, but creation-time identity is not, so
         # heartbeat recovery must fail closed instead of trusting a reused PID.
         assert recovered == {}
+
+
+def test_unbound_legacy_heartbeat_cannot_recover_external_contours(tmp_path):
+    heartbeat = tmp_path / "heartbeat.json"
+    heartbeat.write_text(
+        json.dumps(
+            {
+                "schema": "ResearchControlCenterHeartbeat.v3",
+                "contours": {
+                    "telegram_bot": {
+                        "pid": os.getpid(),
+                        "started_at": time.time(),
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert MODULE._load_external_contours(heartbeat) == {}
 
 
 def test_port_owned_external_service_exposes_pid(monkeypatch):
@@ -580,14 +613,22 @@ def test_owned_contour_start_preserves_ctrl_break_process_group(
         next(spec for spec in MODULE.contour_specs() if spec.key == "telegram_bot"),
         MODULE.queue.Queue(),
     )
+    rcc_run = MODULE.RccRunIdentity(
+        attempt_id="rccstartup_" + "b" * 32,
+        revision="b" * 40,
+        pid=123,
+        process_started_at=100.0,
+    )
 
-    item.start()
+    item.start(rcc_run=rcc_run)
 
     assert captured["creationflags"] == MODULE._CREATE_NEW_PROCESS_GROUP
     assert not (int(captured["creationflags"]) & int(MODULE._CREATE_NO_WINDOW))
     assert captured["env"]["AUTO_TRADE"] == "0"
     assert captured["env"]["TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"] == "0"
     assert captured["env"]["TRADING_BOT_RESEARCH_ROOT"] == str(MODULE.PRIVATE_ROOT)
+    assert captured["env"]["TRADING_BOT_RCC_ATTEMPT_ID"] == rcc_run.attempt_id
+    assert captured["env"]["TRADING_BOT_RCC_REVISION"] == rcc_run.revision
     assert item.started_at == 100.25
 
 
@@ -1209,6 +1250,12 @@ def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
         executable="python.exe",
         command_digest="sha256:rcc",
     )
+    center._rcc_run = MODULE.RccRunIdentity(
+        attempt_id="rccstartup_" + "f" * 32,
+        revision="f" * 40,
+        pid=os.getpid(),
+        process_started_at=1_700_000_000.0,
+    )
     center.contours = {"paper_cards": Item()}
     center._ui_snapshot_lock = threading.Lock()
     center._ui_snapshot_state = {
@@ -1272,11 +1319,12 @@ def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
     payload = json.loads(target.read_text(encoding="utf-8"))
 
     assert publish_count >= 3
-    assert payload["schema"] == "ResearchControlCenterHeartbeat.v3"
+    assert payload["schema"] == "ResearchControlCenterHeartbeat.v4"
     assert payload["pid"] == os.getpid()
     assert payload["started_at"] == 1_700_000_000.0
     assert payload["paper_only"] is True
     assert payload["execution_allowed"] is False
+    assert payload["rcc_run"] == center._rcc_run.to_payload()
     assert payload["shutdown"] == {
         "state": "running",
         "reason_code": None,

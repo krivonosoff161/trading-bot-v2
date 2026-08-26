@@ -56,6 +56,9 @@ from src.research_lab.process_lease_supervisor import (  # noqa: E402
     ProcessLeaseSupervisor,
 )
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.rcc_startup_evidence import (  # noqa: E402
+    rcc_run_identity_from_environment,
+)
 from src.research_lab.storage_capability import is_link_or_reparse  # noqa: E402
 from src.research_lab.task_claim_heartbeat import TaskClaimHeartbeat  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
@@ -601,6 +604,7 @@ def _publish_farm_product_checkpoint(private_root: Path, out: dict) -> None:
         ),
         metrics=metrics,
         completed_at=completed_at,
+        rcc_run=rcc_run_identity_from_environment(),
     )
 
 
@@ -2434,6 +2438,7 @@ def _write_loop_status(
                 status="progress",
                 metrics=metrics,
                 completed_at=now,
+                rcc_run=rcc_run_identity_from_environment(),
             )
     return published
 
@@ -2956,6 +2961,7 @@ def _run_validation_maintenance(
                     ),
                 },
                 completed_at=completed_at,
+                rcc_run=rcc_run_identity_from_environment(),
             )
         check_active()
 

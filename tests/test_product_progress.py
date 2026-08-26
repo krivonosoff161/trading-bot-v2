@@ -14,6 +14,7 @@ from src.research_lab.product_progress import (
     scanner_metrics,
 )
 from src.research_lab import product_progress
+from src.research_lab.rcc_startup_evidence import RccRunIdentity
 from src.research_lab.validation_generation import (
     validation_producer_code_digest,
     write_current_generation,
@@ -22,7 +23,7 @@ from src.research_lab.validation_generation import (
 
 def _steady_report(*, waiting: bool) -> dict[str, object]:
     return {
-        "schema": "ProductProgressReport.v1",
+        "schema": "ProductProgressReport.v2",
         "state": "starting" if waiting else "ready",
         "ready": not waiting,
         "hard_fail_reasons": [],
@@ -177,7 +178,12 @@ def test_post_t0_policy_fails_closed(mutation: dict[str, object], reason: str) -
     assert assessment.hard_failure == reason
 
 
-def _publish_green(root: Path, *, completed_at: float = 101.0) -> None:
+def _publish_green(
+    root: Path,
+    *,
+    completed_at: float = 101.0,
+    rcc_run: RccRunIdentity | None = None,
+) -> None:
     publish_checkpoint(
         root,
         component="scanner",
@@ -192,6 +198,7 @@ def _publish_green(root: Path, *, completed_at: float = 101.0) -> None:
             provider_failures=0,
         ),
         completed_at=completed_at,
+        rcc_run=rcc_run,
     )
     publish_checkpoint(
         root,
@@ -205,6 +212,7 @@ def _publish_green(root: Path, *, completed_at: float = 101.0) -> None:
             "operational_rows_retained": 0,
         },
         completed_at=completed_at,
+        rcc_run=rcc_run,
     )
 
 
@@ -221,6 +229,63 @@ def test_zero_signal_completed_cycles_are_real_progress(tmp_path: Path) -> None:
     assert report["state"] == "ready"
     assert report["components"]["scanner"]["status"] == "idle"
     assert report["run_started_at"] == 100.0
+
+
+def test_rcc_monitor_does_not_accept_timestamp_fresh_checkpoint_from_another_run(
+    tmp_path: Path,
+) -> None:
+    current_run = RccRunIdentity(
+        attempt_id="rccstartup_" + "c" * 32,
+        revision="c" * 40,
+        pid=1234,
+        process_started_at=100.0,
+    )
+    stale_run = RccRunIdentity(
+        attempt_id="rccstartup_" + "d" * 32,
+        revision="d" * 40,
+        pid=4321,
+        process_started_at=100.0,
+    )
+    _publish_green(tmp_path, completed_at=101.0, rcc_run=stale_run)
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        expected_rcc_run=current_run,
+        wall_clock=lambda: 1001.0,
+    ).sample()
+
+    assert report["ready"] is False
+    assert report["components"]["scanner"]["run_binding"] == "mismatch"
+    assert report["components"]["farm"]["run_binding"] == "mismatch"
+    assert "scanner_product_progress_run_binding_mismatch" in report[
+        "hard_fail_reasons"
+    ]
+    assert "farm_product_progress_run_binding_mismatch" in report[
+        "hard_fail_reasons"
+    ]
+
+
+def test_rcc_monitor_accepts_no_candidate_cycle_only_when_run_is_exact(
+    tmp_path: Path,
+) -> None:
+    run = RccRunIdentity(
+        attempt_id="rccstartup_" + "e" * 32,
+        revision="e" * 40,
+        pid=1234,
+        process_started_at=100.0,
+    )
+    _publish_green(tmp_path, rcc_run=run)
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        expected_rcc_run=run,
+        wall_clock=lambda: 102.0,
+    ).sample()
+
+    assert report["ready"] is True
+    assert report["rcc_run"] == run.to_payload()
 
 
 def test_green_t0_transition_preserves_launch_boundary(tmp_path: Path) -> None:

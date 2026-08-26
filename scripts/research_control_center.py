@@ -42,8 +42,14 @@ from src.research_lab.product_progress import (
     ProductProgressMonitor,
     assess_post_t0_product_progress,
 )
-from src.research_lab.rcc_startup_evidence import RccStartupEvidenceWriter
-from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
+from src.research_lab.rcc_startup_evidence import (
+    RccRunIdentity,
+    RccStartupEvidenceWriter,
+)
+from src.research_lab.rcc_runtime_safety import (
+    CanonicalOwnerSafetyMonitor,
+    parse_rcc_heartbeat_process_identity,
+)
 from src.research_lab.telegram_bot_health import assess_health, status_path
 from src.research_lab.windows_listener_probe import (
     ListenerProbeStageEvent,
@@ -397,7 +403,7 @@ class ManagedContour:
     def running(self) -> bool:
         return bool(self.process and self.process.poll() is None)
 
-    def start(self) -> None:
+    def start(self, *, rcc_run: RccRunIdentity | None = None) -> None:
         if self.running:
             return
         _validated_private_root()
@@ -408,6 +414,8 @@ class ManagedContour:
         for name in GPU_MASK_ENV_NAMES:
             env.pop(name, None)
         env.update(self.spec.env)
+        if rcc_run is not None:
+            env.update(rcc_run.to_child_environment())
         # Inherited host state must never upgrade the paper RCC into an
         # execution-capable child process.
         env["AUTO_TRADE"] = "0"
@@ -781,6 +789,20 @@ def _load_external_contours(path: Path) -> dict[str, dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return {}
+    try:
+        rcc_identity = parse_rcc_heartbeat_process_identity(payload)
+    except CanaryMonitorHardFailure:
+        return {}
+    if not _same_live_process(rcc_identity.pid, rcc_identity.started_at):
+        return {}
+    updated_at = float(payload.get("updated_at") or 0.0)
+    heartbeat_age = time.time() - updated_at
+    if (
+        updated_at <= 0.0
+        or heartbeat_age < 0.0
+        or heartbeat_age > HEARTBEAT_INTERVAL_SECONDS * 3
+    ):
+        return {}
     rows = payload.get("contours") if isinstance(payload, dict) else None
     if not isinstance(rows, dict):
         return {}
@@ -801,7 +823,11 @@ def _load_external_contours(path: Path) -> dict[str, dict[str, Any]]:
 
 class ControlCenter(tk.Tk):
     def __init__(
-        self, instance: SingleInstance, autostart: tuple[str, ...] = ()
+        self,
+        instance: SingleInstance,
+        autostart: tuple[str, ...] = (),
+        *,
+        rcc_run: RccRunIdentity,
     ) -> None:
         super().__init__()
         self.title("Исследовательский центр trading-bot-v2")
@@ -812,6 +838,12 @@ class ControlCenter(tk.Tk):
         self.events: queue.Queue[tuple[str, str, str]] = queue.Queue()
         self.instance = instance
         self._process_identity = current_process_identity()
+        if (
+            self._process_identity.pid != rcc_run.pid
+            or self._process_identity.started_at != rcc_run.process_started_at
+        ):
+            raise RuntimeError("RCC startup and UI process identities differ")
+        self._rcc_run = rcc_run
         self.external_contours = _load_external_contours(STATE_DIR / "heartbeat.json")
         self.contours = {
             spec.key: ManagedContour(spec, self.events) for spec in contour_specs()
@@ -1106,6 +1138,7 @@ class ControlCenter(tk.Tk):
             env = os.environ.copy()
             env["PYTHONUTF8"] = "1"
             env["TRADING_BOT_RESEARCH_ROOT"] = str(PRIVATE_ROOT)
+            env.update(self._rcc_run.to_child_environment())
             completed = subprocess.run(
                 command,
                 cwd=ROOT,
@@ -1167,7 +1200,7 @@ class ControlCenter(tk.Tk):
         ):
             return
         try:
-            item.start()
+            item.start(rcc_run=self._rcc_run)
         except OSError as exc:
             self.status_vars[key].set(f"ошибка запуска: {exc}")
 
@@ -1194,7 +1227,7 @@ class ControlCenter(tk.Tk):
             item = self.contours[key]
             if not item.running and not self._external_running(key):
                 try:
-                    item.start()
+                    item.start(rcc_run=self._rcc_run)
                 except OSError as exc:
                     self.status_vars[key].set(f"ошибка запуска: {exc}")
 
@@ -1208,7 +1241,7 @@ class ControlCenter(tk.Tk):
         ):
             return
         if not self.contours["ollama"].running and not self._external_running("ollama"):
-            self.contours["ollama"].start()
+            self.contours["ollama"].start(rcc_run=self._rcc_run)
         self._requested_profile_keys.add("ollama")
         self.after(
             2000,
@@ -1921,6 +1954,7 @@ class ControlCenter(tk.Tk):
         self._product_progress_monitor = ProductProgressMonitor(
             PRIVATE_ROOT,
             run_started_at=self._runtime_monitor_wall_started_at,
+            expected_rcc_run=self._rcc_run,
         )
         self._runtime_owner_monitor = CanonicalOwnerSafetyMonitor(
             rows_reader=self._read_active_authority_rows,
@@ -2719,10 +2753,11 @@ class ControlCenter(tk.Tk):
             else None
         )
         return {
-            "schema": "ResearchControlCenterHeartbeat.v3",
+            "schema": "ResearchControlCenterHeartbeat.v4",
             "updated_at": time.time(),
-            "pid": self._process_identity.pid,
-            "started_at": self._process_identity.started_at,
+            "pid": self._rcc_run.pid,
+            "started_at": self._rcc_run.process_started_at,
+            "rcc_run": self._rcc_run.to_payload(),
             "paper_only": True,
             "execution_allowed": False,
             "shutdown": shutdown,
@@ -2905,6 +2940,7 @@ def main() -> int:
             process_started_at=identity.started_at,
         )
         startup.transition("revision_verified")
+        rcc_run = RccRunIdentity.from_startup_writer(startup)
     except Exception as exc:
         print(
             "RCC startup failed at revision_verified: " + type(exc).__name__,
@@ -2922,7 +2958,7 @@ def main() -> int:
         startup.transition(stage)
         stage = "ui_initializing"
         startup.transition(stage)
-        app = ControlCenter(instance, tuple(args.start))
+        app = ControlCenter(instance, tuple(args.start), rcc_run=rcc_run)
         stage = "heartbeat_started"
         startup.transition(stage)
         stage = "mainloop_running"

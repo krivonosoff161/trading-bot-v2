@@ -15,9 +15,10 @@ from pathlib import Path
 import time
 from typing import Any, Mapping
 
+from src.research_lab.rcc_startup_evidence import RccRunIdentity
 
-SCHEMA = "ProductProgressCheckpoint.v1"
-REPORT_SCHEMA = "ProductProgressReport.v1"
+SCHEMA = "ProductProgressCheckpoint.v2"
+REPORT_SCHEMA = "ProductProgressReport.v2"
 SAFE_COMPONENTS = frozenset(
     {"scanner", "scanner_progress", "farm_progress", "validation_progress", "farm"}
 )
@@ -150,8 +151,14 @@ def publish_checkpoint(
     status: str,
     metrics: Mapping[str, int | float | bool | str],
     completed_at: float | None = None,
+    rcc_run: RccRunIdentity | None = None,
 ) -> dict[str, Any]:
-    """Atomically publish one completed, secret-free product milestone."""
+    """Atomically publish one completed, secret-free product milestone.
+
+    A direct bounded tool may publish without an RCC run identity.  The
+    canonical RCC monitor is configured with one and will fail closed rather
+    than accepting such a checkpoint as proof for its own run.
+    """
     if component not in SAFE_COMPONENTS or int(sequence) < 1:
         raise ValueError("valid component and positive sequence required")
     safe_metrics: dict[str, int | float | bool | str] = {}
@@ -175,6 +182,7 @@ def publish_checkpoint(
         "paper_only": True,
         "execution_allowed": False,
         "metrics": safe_metrics,
+        "rcc_run": rcc_run.to_payload() if rcc_run is not None else None,
     }
     _atomic_json(checkpoint_path(private_root, component), payload)
     return payload
@@ -461,6 +469,7 @@ class ProductProgressMonitor:
         run_started_at: float,
         slo: ProductProgressSlo = ProductProgressSlo(),
         wall_clock: Any = time.time,
+        expected_rcc_run: RccRunIdentity | None = None,
     ) -> None:
         self.private_root = Path(private_root)
         self.run_started_at = float(run_started_at)
@@ -468,6 +477,7 @@ class ProductProgressMonitor:
             raise ValueError("run_started_at must be a finite positive timestamp")
         self.slo = slo
         self.wall_clock = wall_clock
+        self.expected_rcc_run = expected_rcc_run
 
     @classmethod
     def from_green_t0_report(
@@ -478,6 +488,7 @@ class ProductProgressMonitor:
         t0_observed_at: float,
         slo: ProductProgressSlo = ProductProgressSlo(),
         wall_clock: Any = time.time,
+        expected_rcc_run: RccRunIdentity | None = None,
     ) -> "ProductProgressMonitor":
         """Continue one run across T+0 without rebasing its time boundary.
 
@@ -511,6 +522,24 @@ class ProductProgressMonitor:
                 "green T+0 report has an invalid run boundary"
             )
         components = _mapping(t0_report.get("components"))
+        report_run_value = t0_report.get("rcc_run")
+        if report_run_value is None:
+            report_run = None
+        else:
+            try:
+                report_run = RccRunIdentity.from_payload(
+                    report_run_value
+                    if isinstance(report_run_value, Mapping)
+                    else {}
+                )
+            except ValueError as exc:
+                raise ProductProgressTransitionError(
+                    "green T+0 report has an invalid RCC run identity"
+                ) from exc
+        if expected_rcc_run is not None and report_run != expected_rcc_run:
+            raise ProductProgressTransitionError(
+                "green T+0 report belongs to another RCC run"
+            )
         if (
             t0_report.get("schema") != REPORT_SCHEMA
             or t0_report.get("ready") is not True
@@ -529,6 +558,7 @@ class ProductProgressMonitor:
             run_started_at=run_started_at,
             slo=slo,
             wall_clock=lambda: observed_at,
+            expected_rcc_run=report_run,
         )
         current = verifier.sample()
         current_components = _mapping(current.get("components"))
@@ -553,6 +583,7 @@ class ProductProgressMonitor:
             run_started_at=run_started_at,
             slo=slo,
             wall_clock=wall_clock,
+            expected_rcc_run=report_run,
         )
 
     @staticmethod
@@ -562,6 +593,28 @@ class ProductProgressMonitor:
         except (OSError, json.JSONDecodeError):
             return {}
         return value if isinstance(value, dict) else {}
+
+    def _checkpoint_run_binding(self, row: Mapping[str, Any]) -> str:
+        """Classify a checkpoint against this monitor's immutable RCC run."""
+
+        if row.get("schema") != SCHEMA:
+            return "schema_mismatch"
+        if self.expected_rcc_run is None:
+            return "not_required"
+        value = row.get("rcc_run")
+        if value is None:
+            return "missing"
+        try:
+            candidate = RccRunIdentity.from_payload(
+                value if isinstance(value, Mapping) else {}
+            )
+        except ValueError:
+            return "invalid"
+        return "match" if candidate == self.expected_rcc_run else "mismatch"
+
+    @staticmethod
+    def _binding_is_current(binding: str) -> bool:
+        return binding in {"match", "not_required"}
 
     def sample(self) -> dict[str, Any]:
         now = float(self.wall_clock())
@@ -573,9 +626,11 @@ class ProductProgressMonitor:
             checkpoint_path(self.private_root, "farm_progress")
         )
         progress_at = float(progress_row.get("completed_at") or 0.0)
+        progress_binding = self._checkpoint_run_binding(progress_row)
         progress_current = bool(
             progress_row.get("schema") == SCHEMA
             and progress_at >= self.run_started_at
+            and self._binding_is_current(progress_binding)
         )
         progress_age = max(0.0, now - progress_at) if progress_at else None
         progress_metrics = _mapping(progress_row.get("metrics"))
@@ -593,9 +648,13 @@ class ProductProgressMonitor:
         validation_progress_at = float(
             validation_progress_row.get("completed_at") or 0.0
         )
+        validation_progress_binding = self._checkpoint_run_binding(
+            validation_progress_row
+        )
         validation_progress_current = bool(
             validation_progress_row.get("schema") == SCHEMA
             and validation_progress_at >= self.run_started_at
+            and self._binding_is_current(validation_progress_binding)
         )
         validation_progress_age = (
             max(0.0, now - validation_progress_at)
@@ -687,8 +746,11 @@ class ProductProgressMonitor:
         ):
             row = self._read(checkpoint_path(self.private_root, component))
             completed_at = float(row.get("completed_at") or 0.0)
+            binding = self._checkpoint_run_binding(row)
             current = (
-                row.get("schema") == SCHEMA and completed_at >= self.run_started_at
+                row.get("schema") == SCHEMA
+                and completed_at >= self.run_started_at
+                and self._binding_is_current(binding)
             )
             age = max(0.0, now - completed_at) if completed_at else None
             if not current:
@@ -702,6 +764,13 @@ class ProductProgressMonitor:
                 )
                 if startup_age > limit and not bounded_farm_progress:
                     hard_fail.append(f"{component}_product_progress_startup_timeout")
+                    if (
+                        self.expected_rcc_run is not None
+                        and binding not in {"match", "not_required"}
+                    ):
+                        hard_fail.append(
+                            f"{component}_product_progress_run_binding_{binding}"
+                        )
             effective_age = age
             if component == "farm" and progress_current:
                 effective_age = max(0.0, now - max(completed_at, progress_at))
@@ -913,6 +982,7 @@ class ProductProgressMonitor:
                 "age_seconds": age,
                 "effective_progress_age_seconds": effective_age,
                 "status": str(row.get("status") or "missing"),
+                "run_binding": binding,
                 "metrics": metrics,
             }
         components["farm_progress"] = {
@@ -920,6 +990,7 @@ class ProductProgressMonitor:
             "sequence": int(progress_row.get("sequence") or 0),
             "age_seconds": progress_age,
             "status": str(progress_row.get("status") or "missing"),
+            "run_binding": progress_binding,
             "startup_liveness_eligible": farm_startup_progress_fresh,
             "startup_max_seconds": self.slo.farm_startup_max_seconds,
             "metrics": progress_metrics,
@@ -929,12 +1000,18 @@ class ProductProgressMonitor:
             "sequence": int(validation_progress_row.get("sequence") or 0),
             "age_seconds": validation_progress_age,
             "status": str(validation_progress_row.get("status") or "missing"),
+            "run_binding": validation_progress_binding,
             "build_liveness_eligible": validation_build_progress_fresh,
             "metrics": validation_progress_metrics,
         }
         return {
             "schema": REPORT_SCHEMA,
             "run_started_at": self.run_started_at,
+            "rcc_run": (
+                self.expected_rcc_run.to_payload()
+                if self.expected_rcc_run is not None
+                else None
+            ),
             "state": "failed"
             if hard_fail
             else "degraded"

@@ -2,15 +2,15 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-22
-- Verified against: `3c8499b2142b6884844b65c348d1c3571f74d68e`
+- Verified: 2026-08-26
+- Verified against: `81f544965b6f6a6f7266b85503ecbb85a602af69`
 - Scope: canonical paper-only startup from RCC launch through authoritative green
   T+0; no process authority is granted by this document.
 - Evidence: `tests/test_product_progress.py`,
   `tests/test_farm_loop_stage_visibility.py`,
   `tests/test_paper_generation_cutover.py`, and the synthetic lifecycle suites.
-- Residual risks: the implementation described as the task-branch candidate
-  below has not been merged or operationally proven.
+- Residual risks: the run-bound lifecycle implementation described below is a
+  task-branch candidate. It has not been merged or operationally proven.
 - Next gate: exact-head review, full non-live checks, merge, post-merge
   gate, then a separately owner-authorized runtime preflight and canary.
 
@@ -25,9 +25,13 @@ sample, historical debt, or a validation-publication event as T+0.
 
 ```mermaid
 flowchart LR
-  RCC[RCC canonical profile] --> I[exact process/owner/fence/stop identity]
-  RCC --> S[scanner completed checkpoint]
+  RCC[RCC canonical launcher] --> R[validated private root]
+  R --> E[revision-bound startup evidence and attempt ID]
+  E --> H[run-bound RCC heartbeat]
+  H --> I[exact process/owner/fence/stop identity]
+  H --> S[run-bound scanner completed checkpoint]
   RCC --> F[farm product-progress monitor]
+  H --> F
   F --> V[current validation snapshot]
   V --> K[complete known-bad authority]
   K --> P[Paper Evidence V2 generation]
@@ -43,15 +47,35 @@ flowchart LR
 ```
 
 `G` is the only authority that declares T+0. The farm checkpoint contains the
-exact current V2 generation and successful delivery binding; it cannot be
-manufactured from a live PID, an intermediate preview, or an externally
+exact current V2 generation and successful delivery binding, and the monitor
+accepts it only when its `attempt_id`, revision, RCC PID/start identity, and
+freshness match the startup evidence for this launch. It cannot be manufactured
+from a live PID, an intermediate preview, an older checkpoint, or an externally
 sampled boolean.
+
+## Canonical Lifecycle Transition Sources
+
+| Transition | Canonical source of truth | Required binding | Consumer behavior on absence, staleness, or mismatch |
+|---|---|---|---|
+| Launcher → private root | `resolve_private_root` called by RCC before state creation | canonical root only | Refuse before state write or child start. |
+| Private root → startup evidence | `RccStartupEvidenceWriter` | exact revision, PID/start, deterministic `attempt_id`, digest | Pre-heartbeat monitor fails closed. |
+| Startup evidence → heartbeat | `ControlCenter._heartbeat_payload` | `RccRunIdentity` copied from startup writer | RCC heartbeat v4 is rejected unless its run/process tuple is internally consistent and fresh. |
+| RCC → child contour | `ManagedContour.start` | immutable child environment envelope | A child may publish an unbound direct-tool checkpoint, but a canonical RCC monitor never accepts it as its own run. |
+| Stop intent | canonical typed marker/provenance reader | exact canonical name, root, provenance and documented disposition | Unknown, foreign, mixed, or stale-provenance marker is never cleared or reinterpreted as a new run signal. |
+| Farm claim/owner | `OwnershipStore` and `FarmTasksDB` lifecycle APIs | exact owner process identity, lease and fence | Expired/foreign/reused rows cannot become current authority or be reconciled by a monitor. |
+| Scanner/farm → product progress | `publish_checkpoint` v2 | exact RCC run envelope plus completed timestamp; farm also carries generation-bound aggregates | Timestamps alone never establish current-run work. |
+| Paper queue/outbox/delivery | generation-bound Paper Evidence v2 and delivery outbox contracts | exact current generation, content identity and idempotency key | Historical or ambiguous effect state cannot be replayed into a new generation; new ambiguity is a hard failure. |
+| Product progress → T+0 | `ProductProgressMonitor` inside RCC | exact run envelope, current scanner/farm sequence, current generation and mandatory side-effect facts | Missing or mismatched records remain `starting` only inside the existing bounded SLO, then fail closed. |
+| T+0 → steady monitor | `ProductProgressMonitor.from_green_t0_report` | immutable launch boundary and same RCC envelope | Cannot rebase time or switch runs during handoff. |
+| Product → analyst memory | current generation's training/outcome export | generation/family/timeframe/parameter identity and technical-outcome censorship | Post-T+0 only; it cannot rewrite a delivered card or grant authority. |
+| Hard failure/normal stop | RCC shutdown state plus exact live heartbeat identity | same run/process identity | Finalizer waits during internal stop and does not issue a second competing stop. |
 
 ## Gate Classification
 
 | Gate | Class | T+0 behavior |
 |---|---|---|
 | RCC process identity, single owner, fence, canonical stop intent | safety | Missing, stale, conflicting, or stopped is fail-closed. |
+| RCC run envelope | safety | A heartbeat/checkpoint must match the exact startup attempt, revision, RCC process generation, and freshness window. A prior run cannot establish readiness by timestamp alone. |
 | Scanner completed checkpoint | mandatory current product | Required by RCC; public provider degradation remains classified, never fabricated as completion. |
 | Current validation snapshot and exact generation | mandatory current product | `pending`, stale, corrupt, or mismatched authority cannot produce a farm checkpoint. |
 | Complete known-bad authority | mandatory current product | Missing, corrupt, incomplete, or digest-mismatched evidence blocks V2 input. A cache is not a substitute. |
@@ -116,6 +140,10 @@ real later integrity result rather than an `unable_to_open` path bug.
 | Stale/corrupt generation | Fail closed; bounded exact-current successor grace is the only allowed transition. |
 | Stop intent, owner loss, or fence loss | Fail closed before publication/effect; no checkpoint is emitted. |
 | Cold start or resume | Cache/backfill may be absent or partial only after the product boundary. Current authority still must be complete and exact-run bound. |
+| Timestamp-fresh record from another RCC attempt | It remains non-current and reaches the named run-binding failure only after the bounded startup grace. |
+| Missing LLM analysis | The deterministic fallback is explicit degraded advisory output; it cannot block a completed no-candidate paper cycle or alter authority. |
+| Delivery ACK ambiguity | Fail closed for the current product generation; it cannot be hidden by a prior delivery. |
+| Restart/stop race | An older heartbeat cannot bind a new monitor; a heartbeat already reporting internal stop makes the external finalizer wait. |
 
 The matrix is covered by the focused product-progress, generation, ownership,
 stop-intent, memory-resume, and farm-loop tests. It is synthetic proof only;

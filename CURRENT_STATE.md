@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-26
-- Verified against: `169e61a83b73c0f62f5a45c7331239b48ea72823`
+- Verified against: `81f544965b6f6a6f7266b85503ecbb85a602af69`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -118,25 +118,37 @@ tests that causal boundary without using parent bridge scheduling as a lease
 deadline. Owner identity, fencing, renewal failure budgets, canonical stop
 intent and execution denial are unchanged.
 
-## Task-Branch Candidate: Known-Bad Digest And Private-Root Contract
+## Integrated Known-Bad Digest And Private-Root Contract
 
-The candidate branch `codex/known-bad-root-contract-repair` is based on public
-baseline `169e61a83b73c0f62f5a45c7331239b48ea72823`. It repairs a producer and
-reader disagreement in `setup_outcome_memory.v2`: the writer seals the complete
-ordered known-bad row sequence, including duplicate integrity rows, while the
-reader previously deduplicated before checking that digest. The candidate first
-verifies the complete snapshot sequence and only then constructs the exact
-deduplicated effective censorship set. Tampered, incomplete, corrupt, or
-wrong-digest snapshots remain unavailable fail-closed.
+PR #290 is integrated at `81f544965b6f6a6f7266b85503ecbb85a602af69`. It verifies
+the complete writer row sequence before deriving the exact deduplicated
+known-bad censorship set. Tampered, incomplete, corrupt, or wrong-digest
+snapshots remain unavailable fail-closed. The same baseline rejects a public or
+otherwise invalid configured research root before RCC state writes or child
+starts, and binds canonical RCC children and scanner mutable paths to the
+validated private root.
 
-The candidate also rejects a public or otherwise invalid configured research
-root before the RCC writes state or starts a child, binds all canonical RCC
-children to the validated private root, and prevents direct scanner invocation
-from falling back to mutable paths in the public repository. It changes neither
-the 600-second ceiling nor Paper Evidence V2, owner/fence, stop,
-stale-generation, delivery, execution-denial, or paper-only contracts. It
-remains non-authoritative until exact-head review, merge, post-merge checks,
-and a separately authorized paper-only canary.
+## Task-Branch Candidate: Run-Bound Product Lifecycle
+
+The candidate branch `codex/e2e-lifecycle-repair` is based on public baseline
+`81f544965b6f6a6f7266b85503ecbb85a602af69`. It closes one proven gap between
+startup evidence and product readiness: a startup `attempt_id` previously did
+not bind the RCC heartbeat or scanner/farm completed checkpoints. A
+timestamp-fresh file from an earlier run could therefore be considered current
+by a new monitor. The candidate introduces a public, non-secret `RccRunIdentity`
+containing only exact revision, startup attempt ID, RCC PID/start identity; it
+is not an authority token.
+
+RCC heartbeat v4, every canonical child environment, scanner/farm progress and
+completed product checkpoints carry that identity. The RCC product monitor
+requires an exact envelope match in addition to its existing generation,
+freshness, known-bad, Paper Evidence v2, owner/fence/stop, one-writer and
+delivery checks. Missing or mismatched records cannot establish T+0; they stay
+within the unchanged bounded startup window and then produce a named hard
+failure. Synthetic E2E/chaos tests cover cold start, stale state/heartbeat,
+missing LLM fallback, no-candidate cycle, delivery ambiguity, fence loss, and
+stop races. The candidate remains non-authoritative until exact-head review,
+merge, post-merge checks, and a separately authorized paper-only canary.
 
 ## Implemented Public Contracts
 

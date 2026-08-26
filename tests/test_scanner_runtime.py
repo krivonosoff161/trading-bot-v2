@@ -5,6 +5,7 @@ test_scanner_runtime.py - runtime guards for scanner_v0 filters.
 Checks small pure helpers that keep noisy lagging content away from expensive LLM calls.
 """
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -74,6 +75,26 @@ def test_scanner_runtime_configuration_propagates_private_root(tmp_path):
         assert S.NB.DB_PATH == tmp_path / "data" / "scout" / "news_buffer.sqlite"
     finally:
         S._configure_runtime_paths(S.DEFAULT_PRIVATE_ROOT)
+
+
+def test_scanner_progress_inherits_complete_rcc_run_envelope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("TRADING_BOT_RCC_ATTEMPT_ID", "rccstartup_" + "a" * 32)
+    monkeypatch.setenv("TRADING_BOT_RCC_REVISION", "a" * 40)
+    monkeypatch.setenv("TRADING_BOT_RCC_PID", "4100")
+    monkeypatch.setenv("TRADING_BOT_RCC_PROCESS_STARTED_AT", "100.0")
+
+    S._publish_scanner_progress(stage="scan_started", completed_chunks=1)
+
+    payload = json.loads(
+        (tmp_path / "state" / "product_progress" / "scanner_progress.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["rcc_run"]["attempt_id"] == "rccstartup_" + "a" * 32
+    assert payload["rcc_run"]["revision"] == "a" * 40
 
 
 def test_parse_source_ts_rss_pubdate():

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, Mapping
 
 
 STARTUP_EVIDENCE_SCHEMA = "RccStartupEvidence.v1"
@@ -76,6 +76,121 @@ def _attempt_id(
         f"{revision}:{pid}:{process_started_at:.9f}:{started_at:.9f}"
     ).encode("ascii")
     return "rccstartup_" + hashlib.sha256(identity).hexdigest()[:32]
+
+
+@dataclass(frozen=True)
+class RccRunIdentity:
+    """Public identity shared by one RCC and every child it supervises.
+
+    This is deliberately not an authority token.  It only makes a checkpoint
+    or heartbeat attributable to one exact RCC process generation and checkout
+    revision, so a record from an earlier run cannot establish readiness for a
+    newly launched canonical paper profile.
+    """
+
+    attempt_id: str
+    revision: str
+    pid: int
+    process_started_at: float
+
+    def __post_init__(self) -> None:
+        revision = self.revision.strip().lower()
+        attempt_id = self.attempt_id.strip()
+        started_at = float(self.process_started_at)
+        if (
+            not _ATTEMPT_ID.fullmatch(attempt_id)
+            or not _REVISION.fullmatch(revision)
+            or isinstance(self.pid, bool)
+            or int(self.pid) <= 0
+            or not math.isfinite(started_at)
+            or started_at <= 0.0
+        ):
+            raise ValueError("RCC run identity is invalid")
+        object.__setattr__(self, "attempt_id", attempt_id)
+        object.__setattr__(self, "revision", revision)
+        object.__setattr__(self, "pid", int(self.pid))
+        object.__setattr__(self, "process_started_at", started_at)
+
+    @classmethod
+    def from_startup_writer(cls, writer: "RccStartupEvidenceWriter") -> "RccRunIdentity":
+        return cls(
+            attempt_id=writer.attempt_id,
+            revision=writer.revision,
+            pid=writer.pid,
+            process_started_at=writer.process_started_at,
+        )
+
+    @classmethod
+    def from_payload(cls, value: Mapping[str, Any]) -> "RccRunIdentity":
+        if not isinstance(value, Mapping):
+            raise ValueError("RCC run identity payload is invalid")
+        raw_pid = value.get("pid")
+        raw_started_at = value.get("process_started_at")
+        if (
+            isinstance(raw_pid, bool)
+            or not isinstance(raw_pid, int)
+            or isinstance(raw_started_at, bool)
+            or not isinstance(raw_started_at, (int, float))
+        ):
+            raise ValueError("RCC run identity payload is invalid")
+        return cls(
+            attempt_id=str(value.get("attempt_id") or ""),
+            revision=str(value.get("revision") or ""),
+            pid=raw_pid,
+            process_started_at=float(raw_started_at),
+        )
+
+    def to_payload(self) -> dict[str, str | int | float]:
+        return {
+            "attempt_id": self.attempt_id,
+            "revision": self.revision,
+            "pid": self.pid,
+            "process_started_at": self.process_started_at,
+        }
+
+    def to_child_environment(self) -> dict[str, str]:
+        """Return the fixed public lineage values inherited by RCC children."""
+
+        return {
+            "TRADING_BOT_RCC_ATTEMPT_ID": self.attempt_id,
+            "TRADING_BOT_RCC_REVISION": self.revision,
+            "TRADING_BOT_RCC_PID": str(self.pid),
+            "TRADING_BOT_RCC_PROCESS_STARTED_AT": repr(self.process_started_at),
+        }
+
+
+def rcc_run_identity_from_environment(
+    environment: Mapping[str, str] | None = None,
+) -> RccRunIdentity | None:
+    """Read a complete RCC child lineage envelope or fail closed.
+
+    Direct bounded tools intentionally have no envelope.  A partially supplied
+    or malformed envelope is never silently discarded: a purported canonical
+    child must not publish an unattributable checkpoint.
+    """
+
+    values = os.environ if environment is None else environment
+    raw = {
+        "attempt_id": str(values.get("TRADING_BOT_RCC_ATTEMPT_ID", "")).strip(),
+        "revision": str(values.get("TRADING_BOT_RCC_REVISION", "")).strip(),
+        "pid": str(values.get("TRADING_BOT_RCC_PID", "")).strip(),
+        "process_started_at": str(
+            values.get("TRADING_BOT_RCC_PROCESS_STARTED_AT", "")
+        ).strip(),
+    }
+    if not any(raw.values()):
+        return None
+    if not all(raw.values()):
+        raise ValueError("RCC child lineage envelope is incomplete")
+    try:
+        return RccRunIdentity(
+            attempt_id=raw["attempt_id"],
+            revision=raw["revision"],
+            pid=int(raw["pid"]),
+            process_started_at=float(raw["process_started_at"]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("RCC child lineage envelope is invalid") from exc
 
 
 class RccStartupEvidenceWriter:
