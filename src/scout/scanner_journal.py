@@ -22,17 +22,32 @@ from pathlib import Path
 # module never activates it, falls back to it, imports history, or dual-writes logs.
 
 from src.scout import pending_store as PS
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root
 
-_ROOT = Path(__file__).resolve().parents[2]
-OUT_DIR = _ROOT / "logs" / "scout"
-JOURNAL = OUT_DIR / "scanner_journal.jsonl"
-PENDING = OUT_DIR / "pending_events.jsonl"      # skeleton «будет» (анти-survivorship)
-DROPS = OUT_DIR / "drops.jsonl"                 # отброшенное фильтром (анти-survivorship)
-BUDGET = OUT_DIR / "llm_budget.jsonl"           # наблюдаемость стоимости LLM
-INGEST = OUT_DIR / "ingest_log.jsonl"           # КАЖДОЕ входящее событие до фильтров (полный аудит)
-EVENT_AUDIT = OUT_DIR / "event_audit.jsonl"     # deterministic event audit before LLM
+OUT_DIR: Path
+JOURNAL: Path
+PENDING: Path
+DROPS: Path
+BUDGET: Path
+INGEST: Path
+EVENT_AUDIT: Path
+ROUTING_AUDIT: Path
 
-ROUTING_AUDIT = OUT_DIR / "routing_audit.jsonl"
+
+def configure_private_root(root: Path) -> None:
+    """Bind mutable scanner journals to a validated private research root."""
+    global OUT_DIR, JOURNAL, PENDING, DROPS, BUDGET, INGEST, EVENT_AUDIT, ROUTING_AUDIT
+    OUT_DIR = resolve_private_root(root) / "logs" / "scout"
+    JOURNAL = OUT_DIR / "scanner_journal.jsonl"
+    PENDING = OUT_DIR / "pending_events.jsonl"
+    DROPS = OUT_DIR / "drops.jsonl"
+    BUDGET = OUT_DIR / "llm_budget.jsonl"
+    INGEST = OUT_DIR / "ingest_log.jsonl"
+    EVENT_AUDIT = OUT_DIR / "event_audit.jsonl"
+    ROUTING_AUDIT = OUT_DIR / "routing_audit.jsonl"
+
+
+configure_private_root(DEFAULT_PRIVATE_ROOT)
 
 SCHEMA_VERSION = 4   # v4: +OKX instrument resolution + data-readiness/farm fields
 

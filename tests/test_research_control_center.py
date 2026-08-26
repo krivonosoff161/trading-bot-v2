@@ -121,6 +121,20 @@ def test_canonical_code_root_and_private_runtime_state_are_separate():
     assert MODULE.STATE_DIR.is_relative_to(MODULE.PRIVATE_ROOT)
 
 
+def test_rcc_public_root_is_rejected_before_state_write(monkeypatch, tmp_path, capsys):
+    target = tmp_path / "would-be-public-state" / "startup.json"
+    monkeypatch.setattr(MODULE, "PRIVATE_ROOT", ROOT)
+    monkeypatch.setattr(MODULE, "STATE_DIR", target.parent)
+    monkeypatch.setattr(MODULE, "STARTUP_STATUS_PATH", target)
+    monkeypatch.setattr(MODULE.sys, "argv", ["research_control_center.py"])
+
+    assert MODULE.main() == 2
+    captured = capsys.readouterr()
+    assert not target.parent.exists()
+    assert "private_root_validated: ValueError" in captured.err
+    assert str(ROOT) not in captured.err
+
+
 def test_only_known_local_ports_are_probed():
     center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
     center.external_contours = {}
@@ -573,7 +587,26 @@ def test_owned_contour_start_preserves_ctrl_break_process_group(
     assert not (int(captured["creationflags"]) & int(MODULE._CREATE_NO_WINDOW))
     assert captured["env"]["AUTO_TRADE"] == "0"
     assert captured["env"]["TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"] == "0"
+    assert captured["env"]["TRADING_BOT_RESEARCH_ROOT"] == str(MODULE.PRIVATE_ROOT)
     assert item.started_at == 100.25
+
+
+def test_owned_contour_rejects_public_root_before_popen(monkeypatch):
+    monkeypatch.setattr(MODULE, "PRIVATE_ROOT", ROOT)
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("public root must fail before child process creation")
+        ),
+    )
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "scanner"),
+        MODULE.queue.Queue(),
+    )
+
+    with pytest.raises(ValueError, match="private Strategy Lab output root"):
+        item.start()
 
 
 def test_owned_contour_start_rolls_back_when_identity_is_unavailable(

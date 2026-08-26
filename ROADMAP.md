@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-22
-- Verified against: `3c8499b2142b6884844b65c348d1c3571f74d68e`
+- Verified: 2026-08-26
+- Verified against: `169e61a83b73c0f62f5a45c7331239b48ea72823`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -52,13 +52,15 @@ durable stop boundary from Windows parent-bridge scheduling, publishes
 supervisor failure before optional alert append I/O, and retains owner/fence/
 renewal fail-closed behavior.
 
-The current task branch repairs the product-progress initial sample and its
-watchdog escalation. It must make initial sampling observable, make a monitor
-hard-fail initiate documented graceful shutdown even when the Tk event loop is
-blocked, and map the canonical `paper_cards` farm owner correctly. It does not
-claim T+0, continuous reliability, profitability, or live readiness. It remains
-non-authoritative until exact-head review, merge, post-merge checks, and a
-separately authorized canary.
+The current task branch repairs the known-bad snapshot digest and private-root
+contract. It verifies the full writer row sequence before deriving the exact
+deduplicated censorship set, so duplicate integrity rows cannot cause a false
+digest mismatch and malformed or incomplete snapshots still fail closed. It
+also rejects public/invalid configured roots before RCC state writes or child
+starts and makes scanner mutable state follow the validated private root. It
+does not claim T+0, continuous reliability, profitability, or live readiness.
+It remains non-authoritative until exact-head review, merge, post-merge checks,
+and a separately authorized canary.
 
 ## Completed
 

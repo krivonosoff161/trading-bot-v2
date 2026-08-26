@@ -1118,6 +1118,65 @@ class TestKnownBadGate:
             ("BAD_USDT_SWAP", "15m", "reversal_fade", "params-a")
         }
 
+    def test_writer_reader_contract_preserves_duplicate_integrity_rows(self, tmp_path):
+        from src.research_lab.setup_outcome_memory import write_memory_snapshot
+
+        record = {
+            "symbol": "BAD_USDT_SWAP",
+            "timeframe": "15m",
+            "family": "reversal_fade",
+            "params_hash": "params-a",
+            "outcome_class": "CONFIRMED_BAD",
+            "paper_forward_ready": False,
+            "hard_status": "",
+        }
+
+        path = write_memory_snapshot(
+            tmp_path,
+            records=[record, dict(record)],
+            product_paper_memory={},
+        )
+        authority = lane.load_known_bad_authority(tmp_path)
+
+        assert len(json.loads(path.read_text(encoding="utf-8"))["records"]) == 2
+        assert authority.setups == {
+            ("BAD_USDT_SWAP", "15m", "reversal_fade", "params-a")
+        }
+        assert authority.state == "valid_snapshot_accelerator_missing"
+
+    def test_complete_snapshot_tamper_or_incomplete_state_fails_closed(self, tmp_path):
+        d = tmp_path / "state" / "derived"
+        d.mkdir(parents=True)
+        records = [
+            {
+                "symbol": "BAD_USDT_SWAP",
+                "timeframe": "15m",
+                "family": "reversal_fade",
+                "params_hash": "params-a",
+                "outcome_class": "CONFIRMED_BAD",
+            }
+        ]
+        payload = {
+            "schema": "setup_outcome_memory.v2",
+            "complete": True,
+            "known_bad_set_sha256": lane._known_bad_digest(
+                {("BAD_USDT_SWAP", "15m", "reversal_fade", "params-a")}
+            ),
+            "records": records,
+        }
+        path = d / "setup_outcome_memory.json"
+        payload["known_bad_set_sha256"] = "0" * 64
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with pytest.raises(lane.KnownBadAuthorityUnavailable, match="digest mismatch"):
+            lane.load_known_bad_authority(tmp_path)
+
+        payload["complete"] = False
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with pytest.raises(lane.KnownBadAuthorityUnavailable, match="incomplete"):
+            lane.load_known_bad_authority(tmp_path)
+
 
 class TestRicherDiagnosis:
     def _sig(self, risk_pct=2.0):

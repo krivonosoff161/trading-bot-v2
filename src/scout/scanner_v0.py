@@ -79,6 +79,7 @@ from src.scout import watch_queue as WQ                          # noqa: E402
 from src.scout.price_provider import get_price as _get_price     # noqa: E402
 from src.utils import llm_budget_guard as LBG                    # noqa: E402
 from src.research_lab.product_progress import publish_checkpoint, scanner_metrics  # noqa: E402
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.utils.telegram import chat_ids, send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
@@ -96,9 +97,41 @@ MAX_RESOLVE_SECONDS = 240.0
 LAYER = 1                                           # V0 = крипта-история (хардкод)
 TRIGGER = "rss_headline"
 
-SEEN_PATH = _ROOT / "logs" / "scout" / "scanner_seen.json"
-BUNDLE_PATH = _ROOT / "logs" / "scout" / "bundle_latest.json"
-TELEGRAM_DELIVERY_LOG = _ROOT / "logs" / "scout" / "telegram_delivery.jsonl"
+def _scanner_runtime_paths(root: Path) -> dict[str, Path]:
+    """Return the scanner's mutable paths below one validated private root."""
+    state_root = resolve_private_root(root) / "logs" / "scout"
+    return {
+        "seen": state_root / "scanner_seen.json",
+        "bundle": state_root / "bundle_latest.json",
+        "delivery": state_root / "telegram_delivery.jsonl",
+        "chief_retry": state_root / "chief_retry_state.json",
+        "charts": state_root / "charts",
+    }
+
+
+def _configure_runtime_paths(root: Path) -> None:
+    """Bind mutable scanner paths only after the private root is validated."""
+    global SEEN_PATH, BUNDLE_PATH, TELEGRAM_DELIVERY_LOG, CHIEF_RETRY_PATH, CHARTS_DIR
+    private_root = resolve_private_root(root)
+    paths = _scanner_runtime_paths(private_root)
+    SEEN_PATH = paths["seen"]
+    BUNDLE_PATH = paths["bundle"]
+    TELEGRAM_DELIVERY_LOG = paths["delivery"]
+    CHIEF_RETRY_PATH = paths["chief_retry"]
+    CHARTS_DIR = paths["charts"]
+    J.configure_private_root(private_root)
+    R.configure_private_root(private_root)
+    PS.configure_private_root(private_root)
+    WQ.configure_private_root(private_root)
+    NB.configure_private_root(private_root)
+
+
+# Direct helper use remains private by default. Canonical `run` and `main`
+# rebind these paths to the validated configured root before any side effect.
+_DEFAULT_SCANNER_PATHS = _scanner_runtime_paths(DEFAULT_PRIVATE_ROOT)
+SEEN_PATH = _DEFAULT_SCANNER_PATHS["seen"]
+BUNDLE_PATH = _DEFAULT_SCANNER_PATHS["bundle"]
+TELEGRAM_DELIVERY_LOG = _DEFAULT_SCANNER_PATHS["delivery"]
 SCANNER_CHAT_ID = os.getenv("SCANNER_CHAT_ID", "").strip("'\"")
 
 
@@ -130,7 +163,7 @@ def _env_seconds(name: str, default: float, ceiling: float) -> float:
 
 def _product_root() -> Path:
     configured = os.environ.get("TRADING_BOT_RESEARCH_ROOT", "").strip()
-    return Path(configured) if configured else _ROOT
+    return resolve_private_root(Path(configured) if configured else DEFAULT_PRIVATE_ROOT)
 
 
 def _scanner_stop_requested() -> bool:
@@ -202,7 +235,7 @@ def write_telegram_delivery(event: dict) -> None:
 
 
 # ── chief-error retry (P0 аудита 11.06: кандидат не умирает тихим NO_GO) ────
-CHIEF_RETRY_PATH = _ROOT / "logs" / "scout" / "chief_retry_state.json"
+CHIEF_RETRY_PATH = _DEFAULT_SCANNER_PATHS["chief_retry"]
 CHIEF_RETRY_MAX = 2     # ретраев ПОСЛЕ первой попытки (итого до 3 заходов к chief)
 
 
@@ -368,7 +401,7 @@ def enrich_trigger(item: dict, asset: str | None, inst: str | None,
     return TE.package_to_journal_fields(pkg)
 
 
-CHARTS_DIR = _ROOT / "logs" / "scout" / "charts"
+CHARTS_DIR = _DEFAULT_SCANNER_PATHS["charts"]
 
 
 def fetch_candles(inst_id: str, bar: str = "15m", limit: int = 120) -> list | None:
@@ -1397,6 +1430,9 @@ async def run(
     monotonic=time.monotonic,
     should_stop=None,
 ) -> None:
+    # `run` is also a callable integration surface; do not rely on `main` to
+    # reject an unsafe root before journals, queues, or scanner state are used.
+    _configure_runtime_paths(_product_root())
     pass_started = monotonic()
     bounded_pass_seconds = max_pass_seconds
     if bounded_pass_seconds is not None:
@@ -1726,7 +1762,7 @@ async def run(
           f"{' (dry — не сохранён)' if dry else ''} · токенов={total_tokens} (~{cost} RUB) · журнал={J.JOURNAL} ===")
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="плумбинг без LLM/Telegram")
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="макс карточек за проход")
@@ -1748,6 +1784,14 @@ def main():
         help="bounded wall budget for article resolution inside one pass",
     )
     args = ap.parse_args()
+    try:
+        _configure_runtime_paths(_product_root())
+    except ValueError as exc:
+        print(
+            "scanner startup refused at private_root_validated: " + type(exc).__name__,
+            file=sys.stderr,
+        )
+        return 2
     asyncio.run(
         run(
             limit=args.limit,
@@ -1757,7 +1801,8 @@ def main():
             resolve_max_seconds=args.resolve_max_seconds,
         )
     )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

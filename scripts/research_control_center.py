@@ -37,6 +37,7 @@ from src.research_lab.canary_checkpoint_policy import (
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
 from src.research_lab.ownership import current_process_identity, probe_process_identity
 from src.research_lab.paper_generation_cutover import current_checkout_revision
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root
 from src.research_lab.product_progress import (
     ProductProgressMonitor,
     assess_post_t0_product_progress,
@@ -77,7 +78,7 @@ _configured_private_root = os.environ.get("TRADING_BOT_RESEARCH_ROOT", "").strip
 PRIVATE_ROOT = (
     Path(_configured_private_root)
     if _configured_private_root
-    else Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
+    else DEFAULT_PRIVATE_ROOT
 )
 STATE_DIR = PRIVATE_ROOT / "state" / "control-center"
 STARTUP_STATUS_PATH = STATE_DIR / "startup.json"
@@ -230,15 +231,16 @@ class _HeartbeatPublisher:
 
 
 def _request_farm_stop() -> None:
-    STOP_FARM.parent.mkdir(parents=True, exist_ok=True)
-    STOP_FARM.write_text(
+    target = _validated_private_root() / "state" / "STOP_FARM_FULL_CYCLE.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
         f"control center stop requested at {time.time()}\n", encoding="utf-8"
     )
 
 
 def _request_named_stop(filename: str) -> Callable[[], None]:
     def request() -> None:
-        target = PRIVATE_ROOT / "state" / filename
+        target = _validated_private_root() / "state" / filename
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
             f"control center stop requested at {time.time()}\n", encoding="utf-8"
@@ -249,6 +251,11 @@ def _request_named_stop(filename: str) -> Callable[[], None]:
 
 REQUEST_SCANNER_STOP = _request_named_stop("STOP_NEWS_SCANNER.txt")
 REQUEST_PUBLIC_NEWS_STOP = _request_named_stop("STOP_PUBLIC_NEWS.txt")
+
+
+def _validated_private_root() -> Path:
+    """Reject public or malformed inherited roots before any RCC side effect."""
+    return resolve_private_root(PRIVATE_ROOT)
 
 
 def contour_specs() -> tuple[ContourSpec, ...]:
@@ -393,6 +400,7 @@ class ManagedContour:
     def start(self) -> None:
         if self.running:
             return
+        _validated_private_root()
         self.stopping = False
         self.expected_running = False
         self.unexpected_exit_reported = False
@@ -2878,6 +2886,14 @@ def main() -> int:
         help="explicitly start one allowlisted contour after opening the UI",
     )
     args = parser.parse_args()
+    try:
+        _validated_private_root()
+    except ValueError as exc:
+        print(
+            "RCC startup failed at private_root_validated: " + type(exc).__name__,
+            file=sys.stderr,
+        )
+        return 2
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         revision = current_checkout_revision(ROOT)
