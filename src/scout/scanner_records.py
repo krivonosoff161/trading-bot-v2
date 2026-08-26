@@ -16,12 +16,26 @@ import math
 from pathlib import Path
 from typing import Any
 
-_ROOT = Path(__file__).resolve().parents[2]
-OUT_DIR = _ROOT / "logs" / "scout"
-EVENTS = OUT_DIR / "scanner_events.jsonl"
-REASONING = OUT_DIR / "scanner_reasoning.jsonl"
-TRAINING = OUT_DIR / "scanner_training.jsonl"
-MEMORY = OUT_DIR / "scanner_memory.jsonl"
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root
+
+OUT_DIR: Path
+EVENTS: Path
+REASONING: Path
+TRAINING: Path
+MEMORY: Path
+
+
+def configure_private_root(root: Path) -> None:
+    """Bind mutable scanner learning records to a validated private root."""
+    global OUT_DIR, EVENTS, REASONING, TRAINING, MEMORY
+    OUT_DIR = resolve_private_root(root) / "logs" / "scout"
+    EVENTS = OUT_DIR / "scanner_events.jsonl"
+    REASONING = OUT_DIR / "scanner_reasoning.jsonl"
+    TRAINING = OUT_DIR / "scanner_training.jsonl"
+    MEMORY = OUT_DIR / "scanner_memory.jsonl"
+
+
+configure_private_root(DEFAULT_PRIVATE_ROOT)
 
 
 def now_iso() -> str:

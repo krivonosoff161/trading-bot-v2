@@ -35,8 +35,18 @@ from src.scout.dedup import event_key as make_event_key  # noqa: E402
 from src.scout.sources import sec_edgar as SEC  # noqa: E402
 from src.scout.router import baseline_for_layer, route_asset, route_temporal, score_materiality, source_meta  # noqa: E402
 from src.scout.trigger_policy import get_policy  # noqa: E402
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
-DB_PATH = _ROOT / "data" / "scout" / "news_buffer.sqlite"
+DB_PATH: Path
+
+
+def configure_private_root(root: Path) -> None:
+    """Bind the scanner intake database to a validated private research root."""
+    global DB_PATH
+    DB_PATH = resolve_private_root(root) / "data" / "scout" / "news_buffer.sqlite"
+
+
+configure_private_root(DEFAULT_PRIVATE_ROOT)
 
 STATUS_NEW = "NEW"
 STATUS_EXTRACTED = "EXTRACTED"
@@ -68,7 +78,8 @@ def _content_hash(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
 
 
-def connect(path: Path = DB_PATH) -> sqlite3.Connection:
+def connect(path: Path | None = None) -> sqlite3.Connection:
+    path = path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -77,7 +88,8 @@ def connect(path: Path = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def init_db(path: Path = DB_PATH) -> None:
+def init_db(path: Path | None = None) -> None:
+    path = path or DB_PATH
     with connect(path) as conn:
         conn.executescript(
             """
@@ -156,8 +168,9 @@ def _json(data: dict) -> str:
     return json.dumps(data or {}, ensure_ascii=False, sort_keys=True)
 
 
-def ingest_items(items: list[dict], path: Path = DB_PATH) -> dict:
+def ingest_items(items: list[dict], path: Path | None = None) -> dict:
     """Upsert source items into raw_items. Returns counters."""
+    path = path or DB_PATH
     init_db(path)
     inserted = updated = 0
     ts = now_iso()
@@ -285,7 +298,7 @@ def _fallback_newspaper(url: str) -> dict | None:
 
 def resolve_pending(
     limit: int = 50,
-    path: Path = DB_PATH,
+    path: Path | None = None,
     dry: bool = False,
     *,
     max_wall_seconds: float | None = None,
@@ -294,6 +307,7 @@ def resolve_pending(
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict:
     """Turn raw_items into machine_docs. Does not call LLM."""
+    path = path or DB_PATH
     init_db(path)
     GN.reset_pass_counter()     # сброс cap перед каждым resolve-проходом
     resolved = failed = skipped = 0
@@ -500,8 +514,9 @@ def resolve_pending(
             "gn_metrics": GN.metrics()}   # seen/resolved/failed/429/cooldown/backoff_seconds/pass_cap
 
 
-def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
+def normalize_pending(limit: int = 100, path: Path | None = None) -> dict:
     """Route extracted docs into normalized_events. Does not call LLM."""
+    path = path or DB_PATH
     init_db(path)
     ready = dropped = 0
     ts = now_iso()
@@ -677,7 +692,8 @@ def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
     return {"ready": ready, "dropped": dropped}
 
 
-def ready_items(limit: int = 50, path: Path = DB_PATH) -> list[dict]:
+def ready_items(limit: int = 50, path: Path | None = None) -> list[dict]:
+    path = path or DB_PATH
     init_db(path)
     with connect(path) as conn:
         rows = conn.execute(
@@ -743,12 +759,13 @@ def ready_items(limit: int = 50, path: Path = DB_PATH) -> list[dict]:
 
 
 def recent_mentions(asset: str, *, limit: int = 8, since_iso: str | None = None,
-                    path: Path = DB_PATH) -> list[dict]:
+                    path: Path | None = None) -> list[dict]:
     """Recent buffer mentions of one asset (newest first) for trigger enrichment.
 
     Read-only. Joins normalized_events + raw_items on doc_id, filtered by asset.
     Used to attach corroborating context to a trigger without re-fetching anything.
     """
+    path = path or DB_PATH
     init_db(path)
     sym = str(asset or "").upper().strip()
     if not sym:
@@ -793,7 +810,13 @@ def recent_mentions(asset: str, *, limit: int = 8, since_iso: str | None = None,
     ]
 
 
-def mark_status(doc_id: str, status: str, drop_reason: str | None = None, path: Path = DB_PATH) -> None:
+def mark_status(
+    doc_id: str,
+    status: str,
+    drop_reason: str | None = None,
+    path: Path | None = None,
+) -> None:
+    path = path or DB_PATH
     init_db(path)
     ts = now_iso()
     with connect(path) as conn:
@@ -807,16 +830,25 @@ def mark_status(doc_id: str, status: str, drop_reason: str | None = None, path: 
         )
 
 
-def decode_google_backfill(path: Path = DB_PATH, apply: bool = False,
+def decode_google_backfill(path: Path | None = None, apply: bool = False,
                            reset_low_quality: bool = False) -> dict:
     """Бэкфил google-обёрток: локальный декод URL + опц. сброс низкокачественных доков
     на повторную экстракцию (реальный URL раскроет resolve_pending сетью). Без LLM/сети.
 
     Дефолт = dry-run (только счёт). apply пишет; перед записью — бэкап .sqlite."""
+    path = path or DB_PATH
     init_db(path)
-    c = {"total_google": 0, "decoded": 0, "needs_network": 0, "unchanged": 0,
-         "conflicts": 0, "reset_for_reextract": 0, "skipped_analyzed": 0,
-         "skipped_not_google": 0, "applied": bool(apply)}
+    c: dict[str, Any] = {
+        "total_google": 0,
+        "decoded": 0,
+        "needs_network": 0,
+        "unchanged": 0,
+        "conflicts": 0,
+        "reset_for_reextract": 0,
+        "skipped_analyzed": 0,
+        "skipped_not_google": 0,
+        "applied": bool(apply),
+    }
     samples: list[str] = []
     ts = now_iso()
     if apply:
@@ -877,16 +909,23 @@ def decode_google_backfill(path: Path = DB_PATH, apply: bool = False,
     return c
 
 
-def sec_reextract(limit: int = 20, path: Path = DB_PATH, apply: bool = False,
+def sec_reextract(limit: int = 20, path: Path | None = None, apply: bool = False,
                   fetch=None) -> dict:
     """Пере-экстракция SEC-доков, застрявших title_only (аудит 11.06: 9/9 по 21-43 симв).
 
     Дефолт = dry-run (только счёт + сэмплы); --apply пишет machine_docs. Хорошие доки
     (sec_primary_doc с телом) не трогаем. Статусы raw_items НЕ меняются — уже
     ANALYZED-карточки не пере-кардятся, выигрывает датасет и будущие решения."""
+    path = path or DB_PATH
     init_db(path)
-    c = {"checked": 0, "candidates": 0, "extracted": 0, "failed": 0,
-         "skipped_good": 0, "applied": bool(apply)}
+    c: dict[str, Any] = {
+        "checked": 0,
+        "candidates": 0,
+        "extracted": 0,
+        "failed": 0,
+        "skipped_good": 0,
+        "applied": bool(apply),
+    }
     samples: list[dict] = []
     ts = now_iso()
     with connect(path) as conn:
@@ -937,7 +976,8 @@ def sec_reextract(limit: int = 20, path: Path = DB_PATH, apply: bool = False,
     return c
 
 
-def stats(path: Path = DB_PATH) -> dict:
+def stats(path: Path | None = None) -> dict:
+    path = path or DB_PATH
     init_db(path)
     with connect(path) as conn:
         raw = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) n FROM raw_items GROUP BY status")}
@@ -946,7 +986,8 @@ def stats(path: Path = DB_PATH) -> dict:
     return {"db": str(path), "raw": raw, "normalized": norm, "by_source": by_source}
 
 
-def show(doc_id: str, path: Path = DB_PATH) -> dict | None:
+def show(doc_id: str, path: Path | None = None) -> dict | None:
+    path = path or DB_PATH
     init_db(path)
     with connect(path) as conn:
         row = conn.execute(

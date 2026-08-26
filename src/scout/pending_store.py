@@ -19,9 +19,20 @@ import os
 from pathlib import Path
 from typing import Any
 
-_ROOT = Path(__file__).resolve().parents[2]
-OUT_DIR = _ROOT / "logs" / "scout"
-PENDING = OUT_DIR / "pending_events.jsonl"
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root
+
+OUT_DIR: Path
+PENDING: Path
+
+
+def configure_private_root(root: Path) -> None:
+    """Bind mutable pending-event state to a validated private root."""
+    global OUT_DIR, PENDING
+    OUT_DIR = resolve_private_root(root) / "logs" / "scout"
+    PENDING = OUT_DIR / "pending_events.jsonl"
+
+
+configure_private_root(DEFAULT_PRIVATE_ROOT)
 
 STATUS_OPEN = "open"
 STATUS_MATCHED = "matched"

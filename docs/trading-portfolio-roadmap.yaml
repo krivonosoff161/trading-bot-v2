@@ -1,35 +1,38 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.23"
+version: "2026.08.26"
 status: current
-verified_date: "2026-08-23"
+verified_date: "2026-08-26"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 217a2657e4c5b484975e302b94cc1a15750703a4
+  trading-bot-v2: 169e61a83b73c0f62f5a45c7331239b48ea72823
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/product-progress-initial-sample-repair
+  branch: codex/known-bad-root-contract-repair
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: 217a2657e4c5b484975e302b94cc1a15750703a4
+  baseline_revision: 169e61a83b73c0f62f5a45c7331239b48ea72823
   scope:
-    - product_progress_initial_sample_lifecycle_publication
-    - independent_watchdog_hard_fail_to_graceful_stop_dispatch
-    - canonical_paper_cards_farm_owner_health_mapping
-    - unchanged_t0_ceiling_owner_fence_stop_generation_and_execution_denial_safety
+    - full_writer_sequence_known_bad_digest_verification_before_effective_set_deduplication
+    - fail_closed_tampered_incomplete_corrupt_and_wrong_digest_snapshot_rejection
+    - rcc_public_or_invalid_private_root_refusal_before_state_or_child_side_effect
+    - scanner_private_root_bound_mutable_runtime_paths_and_direct_public_root_refusal
+    - unchanged_t0_ceiling_owner_fence_stop_generation_delivery_and_execution_denial_safety
   evidence:
     - scripts/research_control_center.py
-    - src/research_lab/canary_checkpoint_policy.py
-    - tests/test_canary_checkpoint_policy.py
+    - src/research_lab/setup_outcome_memory_contract.py
+    - src/research_lab/setup_outcome_memory.py
+    - src/research_lab/paper_signals/lane.py
+    - src/scout/scanner_v0.py
+    - tests/test_paper_signals.py
     - tests/test_research_control_center.py
-    - tests/test_compute_pipeline_health.py
-    - tests/test_owner_fencing_v2.py
-  promotion_gate: exact-head review, startup/blocked-probe/watchdog regressions, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+    - tests/test_scanner_runtime.py
+  promotion_gate: exact-head review, known-bad duplicate/tamper/corruption regressions, RCC and scanner root-refusal regressions, lifecycle/fencing regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
   runtime_gate: after green post-merge gate, prepare a separate paper-only canary manifest; runtime still requires a new explicit owner authority
 authority_values:
   - none

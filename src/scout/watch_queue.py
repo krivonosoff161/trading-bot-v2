@@ -13,9 +13,20 @@ import os
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
-LOG_DIR = ROOT / "logs" / "scout"
-WATCH_QUEUE = LOG_DIR / "watch_queue.jsonl"
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root
+
+LOG_DIR: Path
+WATCH_QUEUE: Path
+
+
+def configure_private_root(root: Path) -> None:
+    """Bind mutable scanner-to-farm hand-off state to a private root."""
+    global LOG_DIR, WATCH_QUEUE
+    LOG_DIR = resolve_private_root(root) / "logs" / "scout"
+    WATCH_QUEUE = LOG_DIR / "watch_queue.jsonl"
+
+
+configure_private_root(DEFAULT_PRIVATE_ROOT)
 
 SCHEMA = "ScoutWatch.v1"
 STATUS_OPEN = "open"
@@ -142,7 +153,8 @@ def build_watch_record(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _read_rows(path: Path = WATCH_QUEUE) -> list[dict[str, Any]]:
+def _read_rows(path: Path | None = None) -> list[dict[str, Any]]:
+    path = path or WATCH_QUEUE
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
@@ -158,7 +170,8 @@ def _read_rows(path: Path = WATCH_QUEUE) -> list[dict[str, Any]]:
     return rows
 
 
-def _write_rows(rows: list[dict[str, Any]], path: Path = WATCH_QUEUE) -> None:
+def _write_rows(rows: list[dict[str, Any]], path: Path | None = None) -> None:
+    path = path or WATCH_QUEUE
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as fh:
@@ -181,21 +194,22 @@ def _substantive(record: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in record.items() if k not in _VOLATILE_FIELDS}
 
 
-def upsert_watch(row: dict[str, Any], path: Path = WATCH_QUEUE) -> tuple[str, bool]:
+def upsert_watch(row: dict[str, Any], path: Path | None = None) -> tuple[str, bool]:
     record = build_watch_record(row)
     if record is None:
         return "", False
-    rows = _read_rows(path)
+    active_path = path or WATCH_QUEUE
+    rows = _read_rows(active_path)
     for idx, existing in enumerate(rows):
         if existing.get("watch_id") == record["watch_id"]:
             candidate = {**existing, **record, "created_at": existing.get("created_at") or record["created_at"]}
             if _substantive(candidate) != _substantive(existing):
                 rows[idx] = candidate
-                _write_rows(rows, path)
+                _write_rows(rows, active_path)
                 return str(record["watch_id"]), True
             return str(record["watch_id"]), False
     rows.append(record)
-    _write_rows(rows, path)
+    _write_rows(rows, active_path)
     return str(record["watch_id"]), True
 
 
@@ -204,13 +218,13 @@ def open_watches(
     symbol: str | None = None,
     okx_inst: str | None = None,
     now_utc: dt.datetime | None = None,
-    path: Path = WATCH_QUEUE,
+    path: Path | None = None,
 ) -> list[dict[str, Any]]:
     now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
     out: list[dict[str, Any]] = []
     wanted_symbol = str(symbol or "").upper()
     wanted_inst = str(okx_inst or "").upper()
-    for row in _read_rows(path):
+    for row in _read_rows(path or WATCH_QUEUE):
         if row.get("status") != STATUS_OPEN:
             continue
         expires = parse_ts(row.get("expires_at"))
@@ -227,9 +241,10 @@ def open_watches(
     return out
 
 
-def expire_old(now_utc: dt.datetime | None = None, path: Path = WATCH_QUEUE) -> int:
+def expire_old(now_utc: dt.datetime | None = None, path: Path | None = None) -> int:
     now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
-    rows = _read_rows(path)
+    active_path = path or WATCH_QUEUE
+    rows = _read_rows(active_path)
     changed = 0
     for row in rows:
         if row.get("status") != STATUS_OPEN:
@@ -240,5 +255,5 @@ def expire_old(now_utc: dt.datetime | None = None, path: Path = WATCH_QUEUE) -> 
             row["updated_at"] = now_iso()
             changed += 1
     if changed:
-        _write_rows(rows, path)
+        _write_rows(rows, active_path)
     return changed

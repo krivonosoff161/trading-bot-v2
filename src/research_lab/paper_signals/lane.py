@@ -7,7 +7,6 @@ order, .env, AUTO_TRADE, or a private endpoint.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from dataclasses import dataclass
@@ -15,6 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.paper_signals.contract import PaperActionSignal, validate_signal
+from src.research_lab.setup_outcome_memory_contract import (
+    known_bad_snapshot_digest,
+    known_bad_snapshot_rows,
+)
 from src.research_lab.trade_math import CostAssumptions, capture, gross_pct, net_pct
 from src.research_lab.simulator_contract import (
     build_cost_ledger,
@@ -614,29 +617,12 @@ def _write_chart_png(path: Path, sig: PaperActionSignal, candles: list[dict[str,
 
 def _known_bad_from_records(records: list[object]) -> set[KnownBadSetup]:
     """Extract only exact, fully identified confirmed-bad setup keys."""
-    bad = set()
-    for r in records:
-        if not isinstance(r, dict):
-            continue
-        if (
-            r.get("outcome_class") == "CONFIRMED_BAD"
-            or r.get("tactical_status") == "REJECTED_CONFIRMED_BAD"
-            or r.get("tactical_class") == "REJECTED_CONFIRMED_BAD"
-        ):
-            sym = str(r.get("symbol") or "")
-            tf = str(r.get("timeframe") or "")
-            fam = str(r.get("family") or "")
-            if not (sym and tf and fam):
-                continue
-            bad.add((sym, tf, fam, str(r.get("params_hash") or "")))
-    return bad
+    return set(known_bad_snapshot_rows(records))
 
 
 def _known_bad_digest(items: set[KnownBadSetup]) -> str:
-    payload = [list(item) for item in sorted(items)]
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    """Compatibility helper for unique synthetic fixtures and callers."""
+    return known_bad_snapshot_digest(items)
 
 
 def load_known_bad_authority(private_root: Path) -> KnownBadAuthority:
@@ -665,12 +651,13 @@ def load_known_bad_authority(private_root: Path) -> KnownBadAuthority:
         raise KnownBadAuthorityUnavailable("known-bad snapshot records are invalid")
 
     schema = str(payload.get("schema") or "")
-    setups = _known_bad_from_records(records)
+    known_bad_rows = known_bad_snapshot_rows(records)
+    setups = set(known_bad_rows)
     if schema == "setup_outcome_memory.v2":
         if payload.get("complete") is not True:
             raise KnownBadAuthorityUnavailable("known-bad snapshot is incomplete")
         declared = str(payload.get("known_bad_set_sha256") or "")
-        if declared != _known_bad_digest(setups):
+        if declared != known_bad_snapshot_digest(known_bad_rows):
             raise KnownBadAuthorityUnavailable("known-bad snapshot digest mismatch")
         accelerator = root / "state" / "derived" / "setup_outcome_memory_reject_cache.json"
         if accelerator.is_file():

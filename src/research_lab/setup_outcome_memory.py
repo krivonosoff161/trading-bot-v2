@@ -24,7 +24,6 @@ No money path, no orders, no live, no .env. Everything is read-only and derived.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass, field
@@ -40,6 +39,10 @@ from src.research_lab.runtime_storage_rotation import (
     write_bounded_rebuildable_snapshot,
 )
 from src.research_lab.setup_lifecycle import HARD_FAILED, derive_setup_lifecycle
+from src.research_lab.setup_outcome_memory_contract import (
+    known_bad_snapshot_digest,
+    known_bad_snapshot_rows,
+)
 from src.research_lab.trade_path_diagnostics import (
     IncrementalRefreshDeferred,
     POWER_FLOOR,
@@ -1193,27 +1196,8 @@ def write_memory_snapshot(
     out_dir = Path(private_root) / "state" / "derived"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "setup_outcome_memory.json"
-    known_bad = sorted(
-        (
-            str(row.get("symbol") or ""),
-            str(row.get("timeframe") or ""),
-            str(row.get("family") or ""),
-            str(row.get("params_hash") or ""),
-        )
-        for row in memory_records
-        if isinstance(row, dict)
-        and (
-            row.get("outcome_class") == "CONFIRMED_BAD"
-            or row.get("tactical_status") == "REJECTED_CONFIRMED_BAD"
-            or row.get("tactical_class") == "REJECTED_CONFIRMED_BAD"
-        )
-        and all(
-            str(row.get(key) or "") for key in ("symbol", "timeframe", "family")
-        )
-    )
-    known_bad_digest = hashlib.sha256(
-        json.dumps(known_bad, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    known_bad = known_bad_snapshot_rows(memory_records)
+    known_bad_digest = known_bad_snapshot_digest(known_bad)
     payload = {
         "schema": "setup_outcome_memory.v2",
         "complete": True,

@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-23
-- Verified against: `217a2657e4c5b484975e302b94cc1a15750703a4`
+- Verified: 2026-08-26
+- Verified against: `169e61a83b73c0f62f5a45c7331239b48ea72823`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -118,21 +118,25 @@ tests that causal boundary without using parent bridge scheduling as a lease
 deadline. Owner identity, fencing, renewal failure budgets, canonical stop
 intent and execution denial are unchanged.
 
-## Task-Branch Candidate: Product-Progress Initial Sample And Watchdog
+## Task-Branch Candidate: Known-Bad Digest And Private-Root Contract
 
-The candidate branch `codex/product-progress-initial-sample-repair` is based on
-the current public baseline `217a2657e4c5b484975e302b94cc1a15750703a4`. The
-previous canary reported a hard failure before authoritative T+0, but its
-runtime evidence could not distinguish a stalled product-progress sample from
-an unreported completed sample; a monitor failure also depended on the Tk event
-queue to begin graceful shutdown. This candidate publishes the initial-sample
-lifecycle, routes a monitor hard-fail through an independent graceful-stop
-dispatcher, and maps the canonical `paper_cards` farm owner into the
-compute-health status. It does not mark a non-ready product as ready, relax the
-600-second ceiling, or change Paper Evidence V2, known-bad, owner/fence, stop,
-stale-generation, delivery, or execution-denial contracts. It remains
-non-authoritative until exact-head review, merge, post-merge checks, and a
-separately authorized paper-only canary.
+The candidate branch `codex/known-bad-root-contract-repair` is based on public
+baseline `169e61a83b73c0f62f5a45c7331239b48ea72823`. It repairs a producer and
+reader disagreement in `setup_outcome_memory.v2`: the writer seals the complete
+ordered known-bad row sequence, including duplicate integrity rows, while the
+reader previously deduplicated before checking that digest. The candidate first
+verifies the complete snapshot sequence and only then constructs the exact
+deduplicated effective censorship set. Tampered, incomplete, corrupt, or
+wrong-digest snapshots remain unavailable fail-closed.
+
+The candidate also rejects a public or otherwise invalid configured research
+root before the RCC writes state or starts a child, binds all canonical RCC
+children to the validated private root, and prevents direct scanner invocation
+from falling back to mutable paths in the public repository. It changes neither
+the 600-second ceiling nor Paper Evidence V2, owner/fence, stop,
+stale-generation, delivery, execution-denial, or paper-only contracts. It
+remains non-authoritative until exact-head review, merge, post-merge checks,
+and a separately authorized paper-only canary.
 
 ## Implemented Public Contracts
 

@@ -8,11 +8,72 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.scout import scanner_v0 as S  # noqa: E402
+
+
+def test_scanner_public_root_is_rejected_before_async_run(monkeypatch, capsys):
+    monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", str(_ROOT))
+    monkeypatch.setattr(sys, "argv", ["scanner_v0.py", "--dry-run"])
+    called: list[bool] = []
+
+    def no_async_run(coroutine):
+        coroutine.close()
+        called.append(True)
+
+    monkeypatch.setattr(S.asyncio, "run", no_async_run)
+
+    assert S.main() == 2
+    captured = capsys.readouterr()
+    assert called == []
+    assert "private_root_validated: ValueError" in captured.err
+    assert str(_ROOT) not in captured.err
+
+
+def test_scanner_product_root_rejects_public_environment(monkeypatch):
+    monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", str(_ROOT))
+
+    with pytest.raises(ValueError, match="private Strategy Lab output root"):
+        S._product_root()
+
+
+def test_direct_scanner_run_rejects_public_root_before_pending_store(monkeypatch):
+    monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", str(_ROOT))
+    monkeypatch.setattr(
+        S.J,
+        "ensure_pending_store",
+        lambda: pytest.fail("public root must be rejected before scanner side effects"),
+    )
+
+    with pytest.raises(ValueError, match="private Strategy Lab output root"):
+        asyncio.run(S.run(limit=1, dry=True))
+
+
+def test_scanner_runtime_paths_bind_to_validated_private_root(tmp_path):
+    paths = S._scanner_runtime_paths(tmp_path)
+
+    assert paths["seen"] == tmp_path / "logs" / "scout" / "scanner_seen.json"
+    assert paths["chief_retry"].parent == tmp_path / "logs" / "scout"
+    assert paths["charts"] == tmp_path / "logs" / "scout" / "charts"
+
+
+def test_scanner_runtime_configuration_propagates_private_root(tmp_path):
+    try:
+        S._configure_runtime_paths(tmp_path)
+
+        assert S.SEEN_PATH.parent == tmp_path / "logs" / "scout"
+        assert S.J.OUT_DIR == tmp_path / "logs" / "scout"
+        assert S.R.OUT_DIR == tmp_path / "logs" / "scout"
+        assert S.PS.OUT_DIR == tmp_path / "logs" / "scout"
+        assert S.WQ.LOG_DIR == tmp_path / "logs" / "scout"
+        assert S.NB.DB_PATH == tmp_path / "data" / "scout" / "news_buffer.sqlite"
+    finally:
+        S._configure_runtime_paths(S.DEFAULT_PRIVATE_ROOT)
 
 
 def test_parse_source_ts_rss_pubdate():
