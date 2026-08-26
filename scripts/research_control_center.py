@@ -634,9 +634,12 @@ def _process_started_at(pid: int) -> float | None:
         return None
     if os.name != "nt":
         try:
-            os.kill(pid, 0)
-            return 0.0
-        except OSError:
+            import psutil  # type: ignore[import-untyped]
+
+            return float(psutil.Process(int(pid)).create_time())
+        except (psutil.NoSuchProcess, ProcessLookupError):
+            return None
+        except Exception:
             return None
     process_query_limited_information = 0x1000
     if _WINDLL is None:  # pragma: no cover - guarded by the Windows call path

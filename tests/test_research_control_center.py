@@ -173,14 +173,9 @@ def test_previous_heartbeat_recovers_only_same_live_process(tmp_path):
 
     recovered = MODULE._load_external_contours(heartbeat)
 
-    if os.name == "nt":
-        assert recovered["telegram_bot"]["pid"] == os.getpid()
-        assert "public_news" not in recovered
-    else:
-        # The control center is a Windows operator surface.  On other systems
-        # process liveness is available, but creation-time identity is not, so
-        # heartbeat recovery must fail closed instead of trusting a reused PID.
-        assert recovered == {}
+    assert recovered["telegram_bot"]["pid"] == os.getpid()
+    assert recovered["telegram_bot"]["started_at"] == started_at
+    assert "public_news" not in recovered
 
 
 def test_unbound_legacy_heartbeat_cannot_recover_external_contours(tmp_path):
