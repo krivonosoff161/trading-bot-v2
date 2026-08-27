@@ -772,8 +772,19 @@ class ProductProgressMonitor:
                             f"{component}_product_progress_run_binding_{binding}"
                         )
             effective_age = age
-            if component == "farm" and progress_current:
-                effective_age = max(0.0, now - max(completed_at, progress_at))
+            if component == "farm":
+                effective_progress_at = completed_at
+                if progress_current:
+                    effective_progress_at = max(effective_progress_at, progress_at)
+                if validation_build_progress_fresh:
+                    effective_progress_at = max(
+                        effective_progress_at, validation_progress_at
+                    )
+                effective_age = (
+                    max(0.0, now - effective_progress_at)
+                    if effective_progress_at
+                    else None
+                )
             if current and effective_age is not None and effective_age > limit:
                 hard_fail.append(f"{component}_product_progress_stale")
             metrics = _mapping(row.get("metrics"))
@@ -1002,6 +1013,7 @@ class ProductProgressMonitor:
             "status": str(validation_progress_row.get("status") or "missing"),
             "run_binding": validation_progress_binding,
             "build_liveness_eligible": validation_build_progress_fresh,
+            "farm_liveness_eligible": validation_build_progress_fresh,
             "metrics": validation_progress_metrics,
         }
         return {

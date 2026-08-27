@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-26
-- Verified against: `81f544965b6f6a6f7266b85503ecbb85a602af69`
+- Verified: 2026-08-27
+- Verified against: `10411a6ad714cb8ccb3f4fc49335948e66a26d06`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -58,17 +58,22 @@ cause a false digest mismatch, while malformed or incomplete snapshots still
 fail closed. RCC and scanner reject public/invalid configured roots before
 mutable state side effects.
 
-The current task branch is the causal run-bound lifecycle repair. It propagates
-one public startup identity — exact revision, attempt ID, RCC PID/start — from
-digest-verified startup evidence through heartbeat v4 and canonical child
-checkpoint publication. The product monitor accepts scanner/farm evidence only
-when that exact run envelope, current generation and existing safety gates all
-match. A timestamp-fresh record from a prior run cannot fabricate T+0. The
-repair retains the 600-second ceiling, known-bad censorship, Paper Evidence v2,
-one-writer, owner/fence/stop and delivery-idempotency contracts. It does not
-claim continuous reliability, profitability, or live readiness and remains
-non-authoritative until exact-head review, merge, post-merge checks, and a
-separately authorized canary.
+PRs #291-#294 are integrated through
+`10411a6ad714cb8ccb3f4fc49335948e66a26d06`. They bind product evidence and
+Telegram health to the exact RCC run, provide hash-bound permanent no-replay
+disposition for exact historical outbox debt, and classify canonical
+validation maintenance as active compute without granting execution authority.
+
+The current task branch repairs the next proven liveness gap. During a bounded
+validation-maintenance pass the canonical priority worker publishes fresh,
+exact-run `validation_progress`, but the steady farm monitor used only the last
+farm/farm-progress timestamps and could therefore raise a false stale hard
+failure. The candidate accepts only a current exact-run, named
+`validation_maintenance` milestone inside the existing 60-second freshness
+bound as farm liveness. Wrong-run, wrong-stage, unnamed, stale, or timer-only
+evidence remains fail-closed. The candidate is non-authoritative until review,
+merge, post-merge verification, and a separately authorized canary; it makes no
+profitability or live-readiness claim.
 
 ## Completed
 

@@ -573,6 +573,104 @@ def test_real_farm_milestone_keeps_long_cycle_live(
     assert report["components"]["farm_progress"]["current_run"] is True
 
 
+def test_exact_run_validation_maintenance_milestone_keeps_farm_live(
+    tmp_path: Path,
+) -> None:
+    run = RccRunIdentity(
+        attempt_id="rccstartup_" + "f" * 32,
+        revision="f" * 40,
+        pid=1234,
+        process_started_at=100.0,
+    )
+    _publish_green(tmp_path, completed_at=101.0, rcc_run=run)
+    publish_checkpoint(
+        tmp_path,
+        component="validation_progress",
+        sequence=2,
+        status="progress",
+        metrics={
+            "stage": "validation_maintenance",
+            "milestone": "tasks_claimed",
+            "completed": 64,
+            "total": 64,
+        },
+        completed_at=375.0,
+        rcc_run=run,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        expected_rcc_run=run,
+        slo=ProductProgressSlo(scanner_seconds=900.0, farm_seconds=300.0),
+        wall_clock=lambda: 402.0,
+    ).sample()
+
+    assert "farm_product_progress_stale" not in report["hard_fail_reasons"]
+    assert report["components"]["farm"]["effective_progress_age_seconds"] == 27.0
+    assert report["components"]["validation_progress"][
+        "farm_liveness_eligible"
+    ] is True
+
+
+@pytest.mark.parametrize(
+    ("progress_at", "stage", "milestone", "same_run"),
+    [
+        (375.0, "setup_outcome_memory_refresh", "tasks_claimed", True),
+        (341.0, "validation_maintenance", "tasks_claimed", True),
+        (375.0, "validation_maintenance", "tasks_claimed", False),
+        (375.0, "validation_maintenance", "", True),
+    ],
+)
+def test_validation_progress_cannot_mask_stale_farm_without_exact_bounded_proof(
+    tmp_path: Path,
+    progress_at: float,
+    stage: str,
+    milestone: str,
+    same_run: bool,
+) -> None:
+    run = RccRunIdentity(
+        attempt_id="rccstartup_" + "a" * 32,
+        revision="a" * 40,
+        pid=1234,
+        process_started_at=100.0,
+    )
+    other_run = RccRunIdentity(
+        attempt_id="rccstartup_" + "b" * 32,
+        revision="b" * 40,
+        pid=4321,
+        process_started_at=100.0,
+    )
+    _publish_green(tmp_path, completed_at=101.0, rcc_run=run)
+    publish_checkpoint(
+        tmp_path,
+        component="validation_progress",
+        sequence=2,
+        status="progress",
+        metrics={
+            "stage": stage,
+            "milestone": milestone,
+            "completed": 64,
+            "total": 64,
+        },
+        completed_at=progress_at,
+        rcc_run=run if same_run else other_run,
+    )
+
+    report = ProductProgressMonitor(
+        tmp_path,
+        run_started_at=100.0,
+        expected_rcc_run=run,
+        slo=ProductProgressSlo(scanner_seconds=900.0, farm_seconds=300.0),
+        wall_clock=lambda: 402.0,
+    ).sample()
+
+    assert "farm_product_progress_stale" in report["hard_fail_reasons"]
+    assert report["components"]["validation_progress"][
+        "farm_liveness_eligible"
+    ] is False
+
+
 def test_real_farm_milestone_extends_initial_cycle_inside_bounded_budget(
     tmp_path: Path,
 ) -> None:
