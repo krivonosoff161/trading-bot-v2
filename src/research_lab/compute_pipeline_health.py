@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 _FATAL_PRIORITY_STAGES = {"claim_failed", "worker_failed"}
-_ACTIVE_PRIORITY_STAGES = {"running_slot", "busy"}
+_ACTIVE_PRIORITY_STAGES = {"running_slot", "validation_maintenance", "busy"}
 _IDLE_PRIORITY_STAGES = {"idle"}
 _KNOWN_PRIORITY_STAGES = (
     _FATAL_PRIORITY_STAGES

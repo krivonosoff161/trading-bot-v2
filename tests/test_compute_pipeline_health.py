@@ -103,6 +103,31 @@ def test_priority_worker_reports_working_and_idle_without_false_failure() -> Non
     assert idle["hard_fail"] is False
 
 
+def test_validation_maintenance_is_current_active_compute_work() -> None:
+    health = assess_compute_pipeline(
+        priority_status={
+            "schema": "FarmPriorityWorkerStatus.v1",
+            "stage": "validation_maintenance",
+            "updated_at": 100.0,
+            "details": {
+                "milestone": "validation_candidate_prepared",
+                "completed": 2,
+                "total": 2,
+            },
+        },
+        worker_status={"status": "completed", "updated_at": 100.0},
+        farm_running=True,
+        farm_started_at=90.0,
+        now=101.0,
+    )
+
+    assert health["state"] == "working"
+    assert health["reason"] == "validation_maintenance"
+    assert health["priority_stage"] == "validation_maintenance"
+    assert health["hard_fail"] is False
+    assert health["execution_allowed"] is False
+
+
 def test_missing_priority_status_is_starting_not_healthy() -> None:
     health = assess_compute_pipeline(
         priority_status={},
