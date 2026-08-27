@@ -1,43 +1,34 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.26"
+version: "2026.08.27"
 status: current
-verified_date: "2026-08-26"
+verified_date: "2026-08-27"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 81f544965b6f6a6f7266b85503ecbb85a602af69
+  trading-bot-v2: 10411a6ad714cb8ccb3f4fc49335948e66a26d06
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 task_branch_candidate:
-  branch: codex/e2e-lifecycle-repair
+  branch: codex/farm-validation-progress-liveness
   state: implementation_in_task_branch
   authoritative: false
   merged: false
   baseline_repository: trading-bot-v2
-  baseline_revision: 81f544965b6f6a6f7266b85503ecbb85a602af69
+  baseline_revision: 10411a6ad714cb8ccb3f4fc49335948e66a26d06
   scope:
-    - revision_bound_rcc_startup_attempt_identity_propagated_to_canonical_children
-    - heartbeat_v4_requires_exact_attempt_revision_process_identity_and_freshness
-    - scanner_farm_and_progress_checkpoints_bind_to_exact_rcc_run_before_t0
-    - stale_or_unbound_heartbeat_marker_claim_outbox_or_checkpoint_cannot_establish_new_run_readiness
-    - unchanged_t0_ceiling_known_bad_censorship_owner_fence_stop_generation_delivery_and_execution_denial_safety
-    - isolated_synthetic_e2e_and_chaos_proof_without_real_provider_telegram_ollama_or_runtime_db
+    - exact_run_validation_maintenance_progress_participates_in_steady_farm_liveness
+    - existing_sixty_second_progress_freshness_bound_is_unchanged
+    - wrong_run_wrong_stage_missing_milestone_and_stale_progress_remain_fail_closed
+    - completed_farm_cycle_and_thirty_minute_cycle_timeout_contracts_are_unchanged
+    - synthetic_non_live_regression_without_provider_telegram_ollama_or_runtime_db
   evidence:
-    - scripts/research_control_center.py
-    - src/research_lab/rcc_startup_evidence.py
-    - src/research_lab/rcc_runtime_safety.py
     - src/research_lab/product_progress.py
-    - scripts/strategy_lab/farm_loop.py
-    - src/scout/scanner_v0.py
     - docs/startup-liveness-contract.md
-    - tests/test_lifecycle_run_envelope_e2e.py
     - tests/test_product_progress.py
-    - tests/test_rcc_runtime_safety.py
-    - tests/test_research_control_center.py
-  promotion_gate: exact-head review, run-identity stale/mismatch/cold-start regressions, lifecycle/fencing and full synthetic E2E/chaos proof, full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: after green post-merge gate, prepare a separate paper-only canary manifest; runtime still requires a new explicit owner authority
+  promotion_gate: exact-head review, positive and fail-closed liveness regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
+  runtime_gate: after green post-merge gate, prepare a separate exact-revision paper-only canary manifest; runtime still requires a new explicit owner authority
 authority_values:
   - none
   - advisory

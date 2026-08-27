@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-26
-- Verified against: `81f544965b6f6a6f7266b85503ecbb85a602af69`
+- Verified: 2026-08-27
+- Verified against: `10411a6ad714cb8ccb3f4fc49335948e66a26d06`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -128,27 +128,36 @@ otherwise invalid configured research root before RCC state writes or child
 starts, and binds canonical RCC children and scanner mutable paths to the
 validated private root.
 
-## Task-Branch Candidate: Run-Bound Product Lifecycle
+## Integrated Run And Delivery Boundaries
 
-The candidate branch `codex/e2e-lifecycle-repair` is based on public baseline
-`81f544965b6f6a6f7266b85503ecbb85a602af69`. It closes one proven gap between
-startup evidence and product readiness: a startup `attempt_id` previously did
-not bind the RCC heartbeat or scanner/farm completed checkpoints. A
-timestamp-fresh file from an earlier run could therefore be considered current
-by a new monitor. The candidate introduces a public, non-secret `RccRunIdentity`
-containing only exact revision, startup attempt ID, RCC PID/start identity; it
-is not an authority token.
+PR #291 is integrated at `2c01c68286c2546adaeb278474c3618ba9a298f9`.
+It binds RCC heartbeat v4 and scanner/farm product checkpoints to one public,
+non-secret `RccRunIdentity`, so timestamp-fresh records from another startup
+attempt cannot establish T+0. PR #292 is integrated at
+`53da876538dc4b23e619e819d7a549d5f6a68b3c`; its hash-bound operator
+disposition makes exact historical ambiguous/pending Telegram records
+permanently non-replayable without claiming delivery. PR #293 is integrated at
+`334466a05c8c2c27f4b9b1ef03b31c30e3e7f722`; Telegram health now binds to the
+identity-verified RCC-owned interpreter. PR #294 is integrated at
+`10411a6ad714cb8ccb3f4fc49335948e66a26d06`; canonical compute health
+classifies validation maintenance as active bounded work.
 
-RCC heartbeat v4, every canonical child environment, scanner/farm progress and
-completed product checkpoints carry that identity. The RCC product monitor
-requires an exact envelope match in addition to its existing generation,
-freshness, known-bad, Paper Evidence v2, owner/fence/stop, one-writer and
-delivery checks. Missing or mismatched records cannot establish T+0; they stay
-within the unchanged bounded startup window and then produce a named hard
-failure. Synthetic E2E/chaos tests cover cold start, stale state/heartbeat,
-missing LLM fallback, no-candidate cycle, delivery ambiguity, fence loss, and
-stop races. The candidate remains non-authoritative until exact-head review,
-merge, post-merge checks, and a separately authorized paper-only canary.
+## Task-Branch Candidate: Farm Validation-Progress Liveness
+
+The candidate branch `codex/farm-validation-progress-liveness` is based on
+`10411a6ad714cb8ccb3f4fc49335948e66a26d06`. A paper-only canary proved that
+steady-state farm freshness used only the completed farm checkpoint and generic
+farm-progress checkpoint. Fresh exact-run `validation_progress` emitted by the
+canonical priority worker during `validation_maintenance` was visible but did
+not participate in the farm liveness timestamp, causing a false
+`farm_product_progress_stale` hard failure while bounded work was progressing.
+
+The candidate admits that checkpoint only when its schema, run envelope,
+status, stage, named milestone and existing 60-second freshness bound all
+match. A stale checkpoint, another run, another stage, a missing milestone, or
+heartbeat-only activity cannot mask the unchanged farm staleness failure. It
+remains non-authoritative until exact-head review, merge, post-merge checks and
+a separately authorized paper-only canary.
 
 ## Implemented Public Contracts
 
