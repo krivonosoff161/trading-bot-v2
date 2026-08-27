@@ -1959,6 +1959,108 @@ def test_runtime_probe_waits_for_real_telegram_poll_before_t0(
     assert events == []
 
 
+def test_runtime_probe_accepts_identity_verified_venv_python_child_poll(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    launcher_pid = center.contours["telegram_bot"].process.pid
+    interpreter_pid = launcher_pid + 10_000
+    health_started_at = MODULE.time.time() - 1.0
+    original_read = center._read_cached_json
+
+    def child_health(path):
+        if Path(path).name != "telegram_bot_health.json":
+            return original_read(path)
+        now = MODULE.time.time()
+        return {
+            "schema": "TelegramBotHealth.v1",
+            "pid": interpreter_pid,
+            "state": "ready",
+            "started_at": health_started_at,
+            "updated_at": now,
+            "last_success_at": now,
+            "consecutive_failures": 0,
+            "failure_type": "",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    center._read_cached_json = child_health
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
+    monkeypatch.setattr(
+        MODULE,
+        "_same_live_process",
+        lambda pid, started_at: pid == interpreter_pid
+        and started_at == health_started_at,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_process_descends_from",
+        lambda pid, ancestor_pid: (pid, ancestor_pid)
+        == (interpreter_pid, launcher_pid),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    status = center._status_runtime_safety_probe()
+
+    assert status["ready"] is True
+    assert status["state"] == "ready"
+    assert status["telegram_poll_state"] == "ready"
+
+
+def test_runtime_probe_rejects_foreign_health_publisher_after_startup_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    launcher_pid = center.contours["telegram_bot"].process.pid
+    foreign_pid = launcher_pid + 20_000
+    health_started_at = MODULE.time.time() - 1.0
+    original_read = center._read_cached_json
+
+    def foreign_health(path):
+        if Path(path).name != "telegram_bot_health.json":
+            return original_read(path)
+        now = MODULE.time.time()
+        return {
+            "schema": "TelegramBotHealth.v1",
+            "pid": foreign_pid,
+            "state": "ready",
+            "started_at": health_started_at,
+            "updated_at": now,
+            "last_success_at": now,
+            "consecutive_failures": 0,
+            "failure_type": "",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    center._read_cached_json = foreign_health
+    monkeypatch.setattr(
+        MODULE.time,
+        "monotonic",
+        lambda: 100.0 + MODULE.RUNTIME_STARTUP_BUDGET_SECONDS + 1.0,
+    )
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: False)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    with pytest.raises(
+        MODULE.CanaryMonitorHardFailure,
+        match="telegram_bot_poll_unready",
+    ):
+        center._status_runtime_safety_probe()
+
+
 def test_runtime_probe_fails_closed_when_telegram_never_polls(
     monkeypatch,
     tmp_path: Path,

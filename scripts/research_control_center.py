@@ -741,6 +741,41 @@ def _process_descends_from(pid: int, ancestor_pid: int) -> bool:
     return False
 
 
+def _owned_health_process_pid(
+    contour: ManagedContour,
+    payload: Mapping[str, object],
+) -> int:
+    """Resolve a health publisher to the exact owned contour process tree.
+
+    On Windows a virtual-environment ``python.exe`` redirector can remain as
+    the ``Popen`` handle while the real interpreter child publishes health.
+    Equality with the launcher PID remains valid.  A different PID is accepted
+    only when both its live process generation and ancestry under that exact
+    launcher are independently proven; every probe failure keeps the launcher
+    PID as the fail-closed expectation.
+    """
+
+    process = contour.process
+    launcher_pid = int(process.pid) if process is not None else 0
+    if launcher_pid <= 0:
+        return 0
+    try:
+        publisher_pid = int(str(payload.get("pid") or 0))
+        publisher_started_at = float(str(payload.get("started_at") or 0.0))
+    except (TypeError, ValueError, OverflowError):
+        return launcher_pid
+    if publisher_pid == launcher_pid:
+        return launcher_pid
+    if (
+        publisher_pid > 0
+        and publisher_started_at > 0.0
+        and _same_live_process(publisher_pid, publisher_started_at)
+        and _process_descends_from(publisher_pid, launcher_pid)
+    ):
+        return publisher_pid
+    return launcher_pid
+
+
 def _external_process_descriptor(
     *,
     key: str,
@@ -1769,9 +1804,10 @@ class ControlCenter(tk.Tk):
             "runtime_status", "telegram_health", "started", started_at=probe_started_at
         )
         telegram = self.contours["telegram_bot"]
+        telegram_status = self._read_cached_json(status_path(PRIVATE_ROOT))
         telegram_assessment = assess_health(
-            self._read_cached_json(status_path(PRIVATE_ROOT)),
-            expected_pid=telegram.process.pid if telegram.process is not None else 0,
+            telegram_status,
+            expected_pid=_owned_health_process_pid(telegram, telegram_status),
             run_started_at=wall_started_at,
             now=time.time(),
             startup_budget_seconds=RUNTIME_STARTUP_BUDGET_SECONDS,
