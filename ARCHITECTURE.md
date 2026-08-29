@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `7831592cda5e204db2de37da4404f0ee7aac64cd`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: active component ownership, information flow, and authority boundaries
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml),
   [project map](docs/project-map.md), and linked production tests

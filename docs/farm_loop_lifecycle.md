@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: canonical calculation-farm lifecycle, claims, fencing, and idempotency
 - Evidence: [lifecycle tests](../tests/test_farm_lifecycle_core.py)
 - Residual risks: long-duration interruption behavior needs operational evidence.

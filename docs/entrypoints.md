@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-09
-- Verified against: `6cd736139904ed5f3180d39d8b2a25a111933b3d`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: supported paper/research entrypoints, effects, and incompatible owners
 - Evidence: [public documentation guard](../scripts/ci/check_public_docs.py) and
   [Research Control Center tests](../tests/test_research_control_center.py)

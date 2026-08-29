@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-27
-- Verified against: `10411a6ad714cb8ccb3f4fc49335948e66a26d06`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -14,7 +14,7 @@ Status: **CURRENT**
 The project is a paper/research workbench. This sequence is ordered by evidence
 dependency, not by a route to live trading.
 
-## Current Baseline And Task-Branch Candidate
+## Current Baseline
 
 PR #283 integrated the cold setup-memory startup boundary at
 `ce592269dc4f4d4c1360f0fca68c35de2eaf55b3`. It keeps complete known-bad and
@@ -64,16 +64,15 @@ Telegram health to the exact RCC run, provide hash-bound permanent no-replay
 disposition for exact historical outbox debt, and classify canonical
 validation maintenance as active compute without granting execution authority.
 
-The current task branch repairs the next proven liveness gap. During a bounded
+PR #295 is integrated at `2eeb6a646040ea23cead64cb36c83de974adb2bd`. During a bounded
 validation-maintenance pass the canonical priority worker publishes fresh,
 exact-run `validation_progress`, but the steady farm monitor used only the last
 farm/farm-progress timestamps and could therefore raise a false stale hard
-failure. The candidate accepts only a current exact-run, named
+failure. The integrated classifier accepts only a current exact-run, named
 `validation_maintenance` milestone inside the existing 60-second freshness
 bound as farm liveness. Wrong-run, wrong-stage, unnamed, stale, or timer-only
-evidence remains fail-closed. The candidate is non-authoritative until review,
-merge, post-merge verification, and a separately authorized canary; it makes no
-profitability or live-readiness claim.
+evidence remains fail-closed. A separately authorized canary remains required;
+this makes no profitability or live-readiness claim.
 
 ## Completed
 

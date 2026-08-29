@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-27
-- Verified against: `10411a6ad714cb8ccb3f4fc49335948e66a26d06`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -142,22 +142,21 @@ identity-verified RCC-owned interpreter. PR #294 is integrated at
 `10411a6ad714cb8ccb3f4fc49335948e66a26d06`; canonical compute health
 classifies validation maintenance as active bounded work.
 
-## Task-Branch Candidate: Farm Validation-Progress Liveness
+## Integrated Farm Validation-Progress Liveness
 
-The candidate branch `codex/farm-validation-progress-liveness` is based on
-`10411a6ad714cb8ccb3f4fc49335948e66a26d06`. A paper-only canary proved that
+PR #295 is integrated at `2eeb6a646040ea23cead64cb36c83de974adb2bd`. A
+paper-only canary observed that
 steady-state farm freshness used only the completed farm checkpoint and generic
 farm-progress checkpoint. Fresh exact-run `validation_progress` emitted by the
 canonical priority worker during `validation_maintenance` was visible but did
 not participate in the farm liveness timestamp, causing a false
 `farm_product_progress_stale` hard failure while bounded work was progressing.
 
-The candidate admits that checkpoint only when its schema, run envelope,
+The integrated classifier admits that checkpoint only when its schema, run envelope,
 status, stage, named milestone and existing 60-second freshness bound all
 match. A stale checkpoint, another run, another stage, a missing milestone, or
-heartbeat-only activity cannot mask the unchanged farm staleness failure. It
-remains non-authoritative until exact-head review, merge, post-merge checks and
-a separately authorized paper-only canary.
+heartbeat-only activity cannot mask the unchanged farm staleness failure. A
+separately authorized paper-only canary is still required for operational proof.
 
 ## Implemented Public Contracts
 
@@ -205,9 +204,8 @@ row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-road
 
 ## Open Evidence Gates
 
-1. **Startup product-progress and hard-fail path:** independently verify the
-   non-authoritative initial-sample/watchdog candidate, then prove an actual
-   cold or incremental setup-memory backfill cannot be misreported as current
+1. **Startup product-progress and hard-fail path:** prove an actual cold or
+   incremental setup-memory backfill cannot be misreported as current
    product readiness or hide a hard failure. A complete known-bad snapshot is
    still mandatory current-product authority; missing or corrupt authority must
    block rather than be inferred empty. Earlier Package06 storage-capacity

@@ -1,8 +1,9 @@
 # Storage boundaries
 
-Portfolio-level documentation and storage authority is defined in the
-[Documentation Contract](https://github.com/krivonosoff161/krivonosoff161/blob/main/docs/documentation-contract.md).
-This page narrows that contract for the public trading workbench.
+Portfolio-level documentation authority belongs to `trading-bot-v2` under
+[AGENTS.md](../AGENTS.md) and the [documentation guide](README.md). The public
+profile is only a post-merge Portfolio Integrator. This page narrows that
+authority for the public trading workbench.
 
 This repository is the trading application and research backbone. Keep Git for
 source code, public-safe documentation, configuration templates, tests, and

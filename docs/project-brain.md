@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: advisory project graph, bounded memory retrieval, routing, and hook boundaries
 - Evidence: `tests/test_project_brain.py` and a bounded `SessionStart` resume manifest
 - Residual risks: static call resolution and retrieved memory can be stale; neither grants authority.

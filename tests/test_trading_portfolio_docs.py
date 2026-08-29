@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.ci.check_trading_portfolio_docs import (
     REQUIRED_GOVERNANCE,
     ROOT,
+    _uncontrolled_implementation_paths,
     load_contract,
     validate_contract,
 )
@@ -81,3 +82,17 @@ def test_uncontrolled_current_document_is_rejected(tmp_path: Path) -> None:
 
 def test_validator_root_is_repository_root() -> None:
     assert (ROOT / "docs" / "trading-portfolio-roadmap.yaml").is_file()
+
+
+def test_only_documentation_control_paths_are_allowed_after_baseline() -> None:
+    assert _uncontrolled_implementation_paths(
+        [
+            "docs/README.md",
+            "CURRENT_STATE.md",
+            "scripts/ci/check_trading_portfolio_docs.py",
+            "tests/test_trading_portfolio_docs.py",
+        ]
+    ) == []
+    assert _uncontrolled_implementation_paths(
+        ["src/research_lab/product_progress.py", "docs/README.md"]
+    ) == ["src/research_lab/product_progress.py"]

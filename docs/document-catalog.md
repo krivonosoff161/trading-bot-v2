@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: current, reference, historical, and local-only document classification
 - Evidence: [documentation contract validator](../scripts/ci/check_trading_portfolio_docs.py)
 - Residual risks: newly added documents need explicit classification.
@@ -23,7 +23,7 @@ instruction. When documents conflict, use the authority order in
 | Development sequence | [../ROADMAP.md](../ROADMAP.md) |
 | Machine-readable Trading Portfolio map | [trading-portfolio-roadmap.yaml](trading-portfolio-roadmap.yaml) |
 | Human Trading Portfolio projection | [trading-portfolio-roadmap.md](trading-portfolio-roadmap.md) |
-| Agent operating rules | [../CLAUDE.md](../CLAUDE.md) |
+| Agent operating rules | [../AGENTS.md](../AGENTS.md) |
 | Module ownership | [project-map.md](project-map.md) |
 | Reproducible code/process/data/authority graph and dialogue-memory contract | [project-brain.md](project-brain.md) |
 | Windows launch ownership | [entrypoints.md](entrypoints.md) |
@@ -84,6 +84,21 @@ The only public exception is a page explicitly written under
 `docs/legacy-evidence/`; it must be a sanitized derived narrative and meet the
 public-artifact policy.
 
+## Freshness And Cross-Repository Rule
+
+`docs/trading-portfolio-roadmap.yaml` is the canonical machine record for the
+current Trading Portfolio. Every document marked **CURRENT** carries the same
+reviewed implementation baseline as that record. A documentation-only commit
+may point to the immediately preceding implementation commit; it must never
+claim to verify itself.
+
+`honest-backtest` owns only its validator documentation and a pinned public
+projection. It may update that projection only from an exact canonical roadmap
+revision and UTF-8/LF content hash supplied by this repository. It cannot edit
+Trading Portfolio claims, promote a validation pass, or grant authority. The
+`krivonosoff161` profile is a post-merge public integrator, not a documentation
+owner.
+
 ## Local-Only Rule
 
 Raw runtime outputs, journals, individual trade paths, raw model conversations,
@@ -91,6 +106,11 @@ media downloads, screenshots, prompt packs, private calculations, and generated
 charts are **LOCAL ONLY** even where an archived document mentions them. Public
 documents may state a method or an aggregated limitation, but not reproduce the
 underlying data.
+
+Ignored local Markdown below `docs/` is not part of this catalog, is not public
+documentation, and must not be read, moved, or promoted by the documentation
+workflow. A separate private-storage authority is required to classify or
+migrate it.
 
 Historical Git heads were rewritten on 2026-07-10 after an encrypted private
 backup was verified. Current public heads and fresh clones do not include the

@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: documentation authority, classification, and reading order
 - Evidence: [documentation contract validator](../scripts/ci/check_trading_portfolio_docs.py)
 - Residual risks: reference documents can age between audits.
@@ -41,6 +41,12 @@ Read in this order:
 | Operator instructions | `farm_runbook.md` | Preflight, start, stop, health checks. |
 | Storage policy | `storage_boundaries.md` | What may be public, private, or only local. |
 
+`trading-bot-v2` is the sole owner of factual Trading Portfolio documentation.
+`honest-backtest` contributes a pinned validator projection only; the public
+profile may export a sanitized manifest after merge but cannot redefine the
+portfolio. A current document names a reviewed implementation baseline, and a
+documentation-only commit must point to the preceding implementation revision.
+
 When documents disagree, follow this table. Dated reports, prior plans, and
 session handoffs are local history; they do not override the current
 architecture.
@@ -59,6 +65,11 @@ The Ruff gate is repository-wide. The mypy gate deliberately covers the 327-file
 active research surface above; legacy, archive, and unrelated diagnostic
 surfaces are not represented as type-clean. Full non-live pytest and the public
 safety guards remain mandatory.
+
+The documentation guard also rejects a current document whose baseline is not a
+reachable commit or whose repository has unreviewed implementation changes
+after that baseline. Cross-repository projection freshness is checked against
+the exact canonical roadmap hash, never by copying runtime data.
 
 ## Active System Documents
 
