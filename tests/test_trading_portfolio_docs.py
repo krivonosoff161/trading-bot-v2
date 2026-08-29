@@ -87,6 +87,7 @@ def test_validator_root_is_repository_root() -> None:
 def test_only_documentation_control_paths_are_allowed_after_baseline() -> None:
     assert _uncontrolled_implementation_paths(
         [
+            ".github/workflows/ci.yml",
             "docs/README.md",
             "CURRENT_STATE.md",
             "scripts/ci/check_trading_portfolio_docs.py",

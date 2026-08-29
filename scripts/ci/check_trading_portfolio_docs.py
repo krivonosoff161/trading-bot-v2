@@ -61,6 +61,7 @@ REQUIRED_GOVERNANCE = {
     "hash_canonicalization": "utf8_lf",
 }
 DOCUMENTATION_CONTROLLED_PATHS = {
+    ".github/workflows/ci.yml",
     "AGENTS.md",
     "ARCHITECTURE.md",
     "CLAUDE.md",
