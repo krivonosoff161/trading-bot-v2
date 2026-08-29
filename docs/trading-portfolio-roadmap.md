@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-10
-- Verified against: `ee927237e6ba0f1e49261cdf6030bb4f5401401e`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Trading repository SHA: `ee927237e6ba0f1e49261cdf6030bb4f5401401e`
 - Validator repository SHA: `0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6`
 - Scope: public-safe ownership, capability, evidence, and authority map

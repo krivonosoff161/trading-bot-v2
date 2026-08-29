@@ -2,20 +2,20 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-26
-- Verified against: `81f544965b6f6a6f7266b85503ecbb85a602af69`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: canonical paper-only startup from RCC launch through authoritative green
   T+0; no process authority is granted by this document.
 - Evidence: `tests/test_product_progress.py`,
   `tests/test_farm_loop_stage_visibility.py`,
   `tests/test_paper_generation_cutover.py`, and the synthetic lifecycle suites.
-- Residual risks: the run-bound lifecycle implementation described below is a
-  task-branch candidate. It has not been merged or operationally proven.
-- Next gate: exact-head review, full non-live checks, merge, post-merge
-  gate, then a separately owner-authorized runtime preflight and canary.
+- Residual risks: the current implementation has not been operationally proven
+  by a long paper-only canary.
+- Next gate: a separately owner-authorized runtime preflight and canary.
 
-The current document is a dependency specification. Its repair proposal remains
-**TASK-BRANCH CANDIDATE — NON-AUTHORITATIVE** until those gates complete.
+The current document is a dependency specification for the integrated source
+baseline. It remains non-operational: code and synthetic tests cannot authorize
+or prove a runtime launch.
 
 This contract describes code dependencies, not a live workstation. It neither
 changes a timeout nor treats a process, heartbeat, external `product_ready`

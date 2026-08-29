@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: canonical process authority, nested resources, and legacy separation
 - Evidence: [owner cardinality tests](../tests/test_owner_authority_cardinality.py)
 - Residual risks: public docs cannot prove the identity of a private live process.

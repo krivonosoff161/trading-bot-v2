@@ -19,6 +19,7 @@ GIT = shutil.which("git")
 ROADMAP = ROOT / "docs" / "trading-portfolio-roadmap.yaml"
 SHA256 = re.compile(r"[0-9a-f]{40}")
 CURRENT_STATUS = re.compile(r"(?m)^Status:\s*\*\*CURRENT\*\*\s*$")
+VERIFIED_AGAINST = re.compile(r"(?m)^- Verified against:\s*`([0-9a-f]{40})`\s*$")
 CONTROL_FIELDS = (
     re.compile(r"(?m)^- Verified:\s*\d{4}-\d{2}-\d{2}\s*$"),
     re.compile(r"(?m)^- Verified against:\s*`[0-9a-f]{40}`\s*$"),
@@ -59,6 +60,17 @@ REQUIRED_GOVERNANCE = {
     "public_projection": "sanitized_manifest_only",
     "hash_canonicalization": "utf8_lf",
 }
+DOCUMENTATION_CONTROLLED_PATHS = {
+    ".github/workflows/ci.yml",
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "CLAUDE.md",
+    "CURRENT_STATE.md",
+    "README.md",
+    "ROADMAP.md",
+    "scripts/ci/check_trading_portfolio_docs.py",
+    "tests/test_trading_portfolio_docs.py",
+}
 
 
 def tracked_markdown(root: Path) -> list[Path]:
@@ -94,6 +106,66 @@ def load_contract(path: Path = ROADMAP) -> dict[str, Any]:
     return value
 
 
+def _is_documentation_controlled_path(path: str) -> bool:
+    return path in DOCUMENTATION_CONTROLLED_PATHS or path.startswith("docs/")
+
+
+def _git_output(root: Path, *args: str) -> str | None:
+    if GIT is None or not (root / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            [GIT, *args],  # nosec B603
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    return result.stdout
+
+
+def _uncontrolled_implementation_paths(paths: Iterable[str]) -> list[str]:
+    return sorted(path for path in paths if not _is_documentation_controlled_path(path))
+
+
+def _validate_baseline_freshness(
+    root: Path, baseline: str,
+) -> list[str]:
+    """Reject public docs that lag unclassified implementation changes.
+
+    A documentation commit points at the reviewed implementation commit before
+    it; it cannot point at the commit that contains the document itself.
+    """
+    head = _git_output(root, "rev-parse", "HEAD")
+    if head is None:
+        return []
+    if not head:
+        return ["documentation baseline could not be resolved"]
+    exists = _git_output(root, "rev-parse", "--verify", f"{baseline}^{{commit}}")
+    if not exists:
+        return ["documentation baseline is not a local commit"]
+    try:
+        ancestor = subprocess.run(
+            [GIT, "merge-base", "--is-ancestor", baseline, head.strip()],  # nosec B603
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return ["documentation baseline could not be resolved"]
+    if ancestor.returncode != 0:
+        return ["documentation baseline is not reachable from HEAD"]
+    changed = _git_output(root, "diff", "--name-only", f"{baseline}..{head.strip()}")
+    if changed is None:
+        return []
+    uncontrolled = _uncontrolled_implementation_paths(changed.splitlines())
+    if uncontrolled:
+        return ["documentation baseline has unreviewed implementation changes"]
+    return []
+
+
 def _local_evidence_path(root: Path, value: str) -> Path | None:
     if value.startswith("honest-backtest:") or "://" in value:
         return None
@@ -115,6 +187,10 @@ def validate_contract(contract: Mapping[str, Any], root: Path = ROOT) -> list[st
         for repo in ("trading-bot-v2", "honest-backtest")
     ):
         failures.append("missing verified repository SHA")
+        trading_baseline = ""
+    else:
+        trading_baseline = str(verified["trading-bot-v2"])
+        failures.extend(_validate_baseline_freshness(root, trading_baseline))
 
     documents = contract.get("current_documents")
     if not isinstance(documents, list):
@@ -143,6 +219,10 @@ def validate_contract(contract: Mapping[str, Any], root: Path = ROOT) -> list[st
             if not pattern.search(text):
                 failures.append(f"current document lacks control field: {path_value}")
                 break
+        else:
+            declared_baseline = VERIFIED_AGAINST.search(text)
+            if declared_baseline and declared_baseline.group(1) != trading_baseline:
+                failures.append(f"current document baseline mismatch: {path_value}")
 
     for path in tracked_markdown(root):
         text = path.read_text(encoding="utf-8", errors="replace")

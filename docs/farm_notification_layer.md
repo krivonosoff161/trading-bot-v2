@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-10
-- Verified against: `db816737bf610f58b0e1d7243647049061ee6e75`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: visibility, preview, paper delivery, ACK, and duplicate boundaries
 - Evidence: [paper delivery tests](../tests/test_paper_telegram_sender.py)
 - Residual risks: external delivery acknowledgement can remain ambiguous.

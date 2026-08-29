@@ -1,34 +1,15 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.27"
+version: "2026.08.29"
 status: current
-verified_date: "2026-08-27"
+verified_date: "2026-08-29"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 10411a6ad714cb8ccb3f4fc49335948e66a26d06
-  honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
-task_branch_candidate:
-  branch: codex/farm-validation-progress-liveness
-  state: implementation_in_task_branch
-  authoritative: false
-  merged: false
-  baseline_repository: trading-bot-v2
-  baseline_revision: 10411a6ad714cb8ccb3f4fc49335948e66a26d06
-  scope:
-    - exact_run_validation_maintenance_progress_participates_in_steady_farm_liveness
-    - existing_sixty_second_progress_freshness_bound_is_unchanged
-    - wrong_run_wrong_stage_missing_milestone_and_stale_progress_remain_fail_closed
-    - completed_farm_cycle_and_thirty_minute_cycle_timeout_contracts_are_unchanged
-    - synthetic_non_live_regression_without_provider_telegram_ollama_or_runtime_db
-  evidence:
-    - src/research_lab/product_progress.py
-    - docs/startup-liveness-contract.md
-    - tests/test_product_progress.py
-  promotion_gate: exact-head review, positive and fail-closed liveness regressions, full non-live tests, repository guards, synchronized documentation, and separate merge authority
-  runtime_gate: after green post-merge gate, prepare a separate exact-revision paper-only canary manifest; runtime still requires a new explicit owner authority
+  trading-bot-v2: 2eeb6a646040ea23cead64cb36c83de974adb2bd
+  honest-backtest: a23588c8696989cba0e0283454cfd175a9ab1e03
 authority_values:
   - none
   - advisory
@@ -92,8 +73,8 @@ current_documents:
   - path: docs/startup-liveness-contract.md
     scope: authoritative RCC-to-T+0 dependency classification and startup-cycle boundary
     evidence: tests/test_product_progress.py and tests/test_farm_loop_stage_visibility.py
-    residual_risk: the task-branch contract remains non-authoritative until merge and operational proof
-    next_gate: require exact-head review, post-merge gate, and a separately authorized canary
+    residual_risk: code remains non-operational until a separately authorized canary proves the contract on the private runtime
+    next_gate: require a separately authorized preflight and paper-only canary
   - path: docs/farm_notification_layer.md
     scope: visibility, preview, delivery, and acknowledgement boundaries
     evidence: tests/test_paper_telegram_sender.py

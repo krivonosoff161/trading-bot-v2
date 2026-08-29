@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c4c3607f788996ce655cb4c650e0667dcb5c701e`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: supported paper-only preflight, start, monitor, and graceful stop
 - Evidence: [RCC tests](../tests/test_research_control_center.py),
   [pre-heartbeat tests](../tests/test_rcc_preheartbeat_startup.py), and

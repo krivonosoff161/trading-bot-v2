@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: public/private artifact and publication boundary
 - Evidence: [tracked-artifact guard](../scripts/ci/check_tracked_artifacts.py)
 - Residual risks: scanners cannot prove absence of every sensitive value.

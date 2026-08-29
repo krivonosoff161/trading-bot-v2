@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-09
-- Verified against: `5c9ee576c3625955764da042e81c117b4ef43d3f`
+- Verified: 2026-08-29
+- Verified against: `2eeb6a646040ea23cead64cb36c83de974adb2bd`
 - Scope: immutable paper-evidence authority, canonical integration, and gated cutover
 - Evidence: [paper evidence tests](../tests/test_paper_evidence_store_v2.py)
   and [cutover tests](../tests/test_paper_generation_cutover.py)
